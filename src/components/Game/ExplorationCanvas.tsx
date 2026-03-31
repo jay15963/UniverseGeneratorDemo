@@ -126,39 +126,42 @@ export function ExplorationCanvas({ onBackToMenu }: ExplorationCanvasProps) {
   return (
     <div className="relative w-full h-full flex flex-col">
       {/* ===== TOP HUD BAR ===== */}
-      <div className="absolute top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-2 bg-gradient-to-b from-black/90 via-black/60 to-transparent pointer-events-none" style={{ minHeight: '48px' }}>
-        <div className="flex items-center gap-3 pointer-events-auto">
+      <div className="absolute top-0 left-0 right-0 z-40 flex items-center justify-between px-2 sm:px-4 py-2 bg-gradient-to-b from-black/95 via-black/80 to-transparent pointer-events-none min-h-[56px] sm:min-h-[48px]">
+        <div className="flex items-center gap-2 sm:gap-3 pointer-events-auto flex-1 overflow-hidden">
           {/* Back button */}
           {currentLevel !== 'universe' && !isTransitioning && (
             <button
               onClick={goBack}
-              className="flex items-center gap-1.5 text-neutral-400 hover:text-white transition-colors bg-white/5 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-white/10 hover:border-white/20 text-sm"
+              className="flex items-center justify-center sm:gap-1.5 text-neutral-400 hover:text-white transition-colors bg-white/5 backdrop-blur-sm p-2 sm:px-3 sm:py-1.5 rounded-lg border border-white/10 hover:border-white/20 text-xs sm:text-sm shrink-0"
+              title="Voltar"
             >
               <ChevronLeft className="w-4 h-4" />
-              Voltar
+              <span className="hidden sm:inline">Voltar</span>
             </button>
           )}
 
           {/* Menu button */}
           <button
             onClick={() => { resetGame(); onBackToMenu(); }}
-            className="flex items-center gap-1.5 text-neutral-500 hover:text-white transition-colors bg-white/5 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-white/10 hover:border-white/20 text-sm"
+            className="flex items-center justify-center sm:gap-1.5 text-neutral-500 hover:text-white transition-colors bg-white/5 backdrop-blur-sm p-2 sm:px-3 sm:py-1.5 rounded-lg border border-white/10 hover:border-white/20 text-xs sm:text-sm shrink-0"
+            title="Menu"
           >
             <Home className="w-3.5 h-3.5" />
-            Menu
+            <span className="hidden sm:inline text-xs sm:text-sm">Menu</span>
           </button>
 
           {/* Breadcrumb */}
-          <div className="flex items-center gap-1 ml-3 text-xs font-mono">
+          <div className="flex items-center gap-1 ml-1 sm:ml-3 text-[10px] sm:text-xs font-mono overflow-hidden">
             {breadcrumbs.map((c, i) => (
               <React.Fragment key={i}>
-                {i > 0 && <span className="text-neutral-600 mx-1">›</span>}
+                {i > 0 && <span className="text-neutral-600 shrink-0">›</span>}
+                {/* On mobile, only show the last crumb or truncated ones */}
                 <button
                   onClick={c.onClick}
-                  className={`transition-colors ${
+                  className={`transition-colors truncate max-w-[80px] sm:max-w-[150px] ${
                     i === breadcrumbs.length - 1
                       ? 'text-white font-bold'
-                      : 'text-neutral-500 hover:text-neutral-300'
+                      : 'text-neutral-500 hover:text-neutral-300 hidden sm:block'
                   }`}
                 >
                   {c.label}
@@ -169,9 +172,9 @@ export function ExplorationCanvas({ onBackToMenu }: ExplorationCanvasProps) {
         </div>
 
         {/* Level indicator */}
-        <div className="pointer-events-none">
-          <span className="text-[10px] font-bold tracking-[0.25em] text-fuchsia-400/70 bg-fuchsia-500/10 px-3 py-1 rounded-full border border-fuchsia-500/20">
-            {levelLabels[currentLevel] || currentLevel.toUpperCase()}
+        <div className="pointer-events-none ml-2 shrink-0">
+          <span className="text-[8px] sm:text-[10px] font-bold tracking-[0.15em] sm:tracking-[0.25em] text-fuchsia-400/90 bg-fuchsia-500/15 px-2 sm:px-3 py-1 rounded-full border border-fuchsia-500/30 backdrop-blur-sm uppercase">
+            {levelLabels[currentLevel]?.replace('VISÃO ', '') || currentLevel.toUpperCase()}
           </span>
         </div>
       </div>

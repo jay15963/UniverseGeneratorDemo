@@ -8,13 +8,13 @@ export const AU_TO_PX = 400;
 
 // Habitable zones widened so 3+ planets can comfortably fit inside
 export const STAR_DATA: Record<StarClass, { r: number, hzIn: number, hzOut: number, color: string }> = {
-  O: { r: 15.0, hzIn: 30.0, hzOut: 70.0, color: '#9bb0ff' }, // Blue Giant
-  B: { r: 7.0,  hzIn: 8.0,  hzOut: 20.0, color: '#aabfff' }, // Blue-White
-  A: { r: 2.5,  hzIn: 2.0,  hzOut: 5.5,  color: '#cad7ff' }, // White
-  F: { r: 1.4,  hzIn: 1.0,  hzOut: 3.0,  color: '#f8f7ff' }, // Yellow-White
-  G: { r: 1.0,  hzIn: 0.7,  hzOut: 1.8,  color: '#fffbdf' }, // Yellow (Sun-like)
-  K: { r: 0.8,  hzIn: 0.3,  hzOut: 1.2,  color: '#ffd2a1' }, // Orange
-  M: { r: 0.3,  hzIn: 0.08, hzOut: 0.4,  color: '#ff6644' }, // Red Dwarf
+  O: { r: 15.0, hzIn: 40.0, hzOut: 60.0, color: '#9bb0ff' }, // Blue Giant (Narrow & Deadly)
+  B: { r: 7.0,  hzIn: 12.0, hzOut: 25.0, color: '#aabfff' }, 
+  A: { r: 2.5,  hzIn: 4.0,  hzOut: 8.0,  color: '#cad7ff' }, 
+  F: { r: 1.4,  hzIn: 1.2,  hzOut: 2.4,  color: '#f8f7ff' }, 
+  G: { r: 1.0,  hzIn: 0.85, hzOut: 1.4,  color: '#fffbdf' }, // Yellow (Sun-like) - Tightened
+  K: { r: 0.8,  hzIn: 0.45, hzOut: 0.9,  color: '#ffd2a1' }, // Orange - Tightened
+  M: { r: 0.3,  hzIn: 0.12, hzOut: 0.3,  color: '#ff6644' }, // Red Dwarf - Tightened
 };
 
 const PLANET_NAME_PREFIXES = ["Kepler", "Gliese", "TRAPPIST", "Alpha", "HD", "K2", "Proxima", "LHS", "Tau", "Eridani"];
@@ -211,10 +211,16 @@ export class SolarSystemGenerator {
         // === AGE-BASED LIFE CHANCE (already computed above as effectiveLifeChance) ===
         // For young systems, further reduce
         let localLifeChance = effectiveLifeChance;
+
+        // STAR-CLASS PENALTY
+        if (['O', 'B', 'A'].includes(starClass)) localLifeChance *= 0.05; // Radiation/Short life
+        else if (starClass === 'F') localLifeChance *= 0.4;
+        else if (starClass === 'M') localLifeChance *= 0.3; // Flares/Tidally locked
+        
         if (systemAge <= 0.20) {
             localLifeChance = 0; // No life in very young systems
         } else if (systemAge <= 0.30) {
-            localLifeChance = effectiveLifeChance * 0.1; // Very unlikely
+            localLifeChance = localLifeChance * 0.1; // Very unlikely
         }
 
         // === IS THIS BODY STILL FORMING? ===
@@ -252,17 +258,21 @@ export class SolarSystemGenerator {
                     else specificType = PlanetType.ARID;
                 }
             } else if (isHabitableZone) {
-            // Chance of life (age-adjusted)
+            // Chance of life (age-adjusted) - Extra check for life robustness
                 if (this.rng() < localLifeChance) {
                     isHabitable = true;
-                    // Earth-like is more common than Alien-life
-                    specificType = this.rng() < 0.7 ? PlanetType.EARTH_LIKE : PlanetType.ALIEN_LIFE;
+                    // Lower Earth-like occurrence, favor variety
+                    const lifeRoll = this.rng();
+                    if (lifeRoll < 0.4) specificType = PlanetType.EARTH_LIKE;
+                    else if (lifeRoll < 0.8) specificType = PlanetType.ALIEN_LIFE;
+                    else specificType = PlanetType.OCEAN_WORLD; // Habitable but strictly oceanic
                 } else {
                     const rnd = this.rng();
-                    if (rnd < 0.4) specificType = PlanetType.ARID; // Desert
-                    else if (rnd < 0.6) specificType = PlanetType.SWAMP_WORLD; // Wet but not life (or alien pre-life)
-                    else if (rnd < 0.8) specificType = PlanetType.OCEAN_WORLD;
-                    else specificType = PlanetType.ROCKY_AIRLESS; // Dead rock in HZ (e.g., Mars)
+                    if (rnd < 0.3) specificType = PlanetType.ARID; 
+                    else if (rnd < 0.5) specificType = PlanetType.SWAMP_WORLD; 
+                    else if (rnd < 0.7) specificType = PlanetType.OCEAN_WORLD;
+                    else if (rnd < 0.85) specificType = PlanetType.TOXIC_ATMOSPHERE;
+                    else specificType = PlanetType.ROCKY_AIRLESS; 
                 }
             } else {
                 // Cold Zone

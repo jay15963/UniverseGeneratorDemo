@@ -16,7 +16,10 @@ export function SolarSystemViewer({ bodies, showZones, systemAge = 1 }: ViewerPr
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const pointerDownPos = useRef({ x: 0, y: 0 });
   const lastMouseRef = useRef({ x: 0, y: 0 });
+  const activePointers = useRef<Map<number, { x: number, y: number }>>(new Map());
+  const lastPinchDistance = useRef<number | null>(null);
   const [focusedBodyId, setFocusedBodyId] = useState<string | null>(null);
   const [hoveredBodyId, setHoveredBodyId] = useState<string | null>(null);
   const [localMouse, setLocalMouse] = useState({ x: 0, y: 0 });
@@ -369,42 +372,71 @@ export function SolarSystemViewer({ bodies, showZones, systemAge = 1 }: ViewerPr
   }, []);
 
   // Interaction handlers
+  const applyZoom = (newScale: number, centerX: number, centerY: number) => {
+    // World coordinates of center
+    const worldX = (centerX - offset.x) / scale;
+    const worldY = (centerY - offset.y) / scale;
+
+    setScale(newScale);
+    if (!focusedBodyId) {
+        setOffset({
+            x: centerX - worldX * newScale,
+            y: centerY - worldY * newScale
+        });
+    }
+  };
+
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     const zoomFactor = 1.1;
     const direction = e.deltaY > 0 ? -1 : 1;
     let newScale = scale * (direction > 0 ? zoomFactor : 1 / zoomFactor);
-    newScale = Math.max(0.0005, Math.min(newScale, 50)); // near-infinite zoom range
+    newScale = Math.max(0.0005, Math.min(newScale, 50));
 
-    // Zoom towards mouse
     const rect = canvasRef.current!.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    // World coordinates of mouse
-    const worldX = (mouseX - offset.x) / scale;
-    const worldY = (mouseY - offset.y) / scale;
+    applyZoom(newScale, mouseX, mouseY);
+  };
 
-    setScale(newScale);
-    if (!focusedBodyId) {
-        setOffset({
-            x: mouseX - worldX * newScale,
-            y: mouseY - worldY * newScale
-        });
+  const handlePointerDown = (e: React.PointerEvent) => {
+    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (activePointers.current.size === 1) {
+        setIsDragging(true);
+        lastMouseRef.current = { x: e.clientX, y: e.clientY };
+        pointerDownPos.current = { x: e.clientX, y: e.clientY };
+    } else if (activePointers.current.size === 2) {
+        setIsDragging(false);
+        const points = Array.from(activePointers.current.values()) as { x: number, y: number }[];
+        lastPinchDistance.current = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
     }
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    setIsDragging(true);
-    lastMouseRef.current = { x: e.clientX, y: e.clientY };
-  };
+  const handlePointerMove = (e: React.PointerEvent) => {
+    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-  const handleMouseMove = (e: React.MouseEvent) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
+
+    if (activePointers.current.size === 2 && lastPinchDistance.current !== null) {
+        const points = Array.from(activePointers.current.values()) as { x: number, y: number }[];
+        const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+        const delta = distance / lastPinchDistance.current;
+        
+        // Midpoint of pinch for zooming target
+        const midX = (points[0].x + points[1].x) / 2 - rect.left;
+        const midY = (points[0].y + points[1].y) / 2 - rect.top;
+
+        const newScale = Math.max(0.0005, Math.min(scale * delta, 50));
+        applyZoom(newScale, midX, midY);
+        lastPinchDistance.current = distance;
+        return;
+    }
 
     if (!isDragging) {
         setLocalMouse({ x: mouseX, y: mouseY });
@@ -424,7 +456,7 @@ export function SolarSystemViewer({ bodies, showZones, systemAge = 1 }: ViewerPr
             const dy = p.y - worldY;
             const dist = Math.sqrt(dx*dx + dy*dy);
 
-            const hitRadius = Math.max(p.r, 10 / scale);
+            const hitRadius = Math.max(p.r, 15 / scale); // Slightly larger hit target for mobile
             if (dist <= hitRadius && dist < hoverDist) {
                 hoverId = body.id;
                 hoverDist = dist;
@@ -438,16 +470,16 @@ export function SolarSystemViewer({ bodies, showZones, systemAge = 1 }: ViewerPr
     const dx = e.clientX - lastMouseRef.current.x;
     const dy = e.clientY - lastMouseRef.current.y;
     
-    // Break focus on drag
-    if (focusedBodyId && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
-        let currentOffsetX = offset.x;
-        let currentOffsetY = offset.y;
+    // Break focus on drag - use a slightly higher threshold for mobile to avoid accidental breaks
+    const breakThreshold = activePointers.current.size > 1 ? 50 : 3;
+    if (focusedBodyId && (Math.abs(dx) > breakThreshold || Math.abs(dy) > breakThreshold)) {
         const p = bodyPositionsRef.current.get(focusedBodyId);
-        if (p && canvasRef.current) {
-            currentOffsetX = canvasRef.current.width/2 - p.x * scale;
-            currentOffsetY = canvasRef.current.height/2 - p.y * scale;
+        if (p && canvas) {
+            // Re-calculate the absolute offset BEFORE applying dx to avoid jumps
+            const currentX = canvas.width/2 - p.x * scale;
+            const currentY = canvas.height/2 - p.y * scale;
+            setOffset({ x: currentX + dx, y: currentY + dy });
         }
-        setOffset({ x: currentOffsetX + dx, y: currentOffsetY + dy });
         setFocusedBodyId(null);
     } else if (!focusedBodyId) {
         setOffset(prev => ({
@@ -459,11 +491,20 @@ export function SolarSystemViewer({ bodies, showZones, systemAge = 1 }: ViewerPr
     lastMouseRef.current = { x: e.clientX, y: e.clientY };
   };
 
-  const handleMouseUp = () => setIsDragging(false);
+  const handlePointerUp = (e: React.PointerEvent) => {
+    activePointers.current.delete(e.pointerId);
+    if (activePointers.current.size < 2) {
+        lastPinchDistance.current = null;
+    }
+    setIsDragging(false);
+  };
 
-  const handleClick = (e: React.MouseEvent) => {
-    // If we just finished a drag, don't click
-    if (isDragging) return;
+  const handleClick = (e: React.PointerEvent) => {
+    // If we just finished a drag or were pinching, don't click
+    const dx = e.clientX - pointerDownPos.current.x;
+    const dy = e.clientY - pointerDownPos.current.y;
+    const moveDist = Math.sqrt(dx * dx + dy * dy);
+    if (moveDist > 5) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -488,7 +529,7 @@ export function SolarSystemViewer({ bodies, showZones, systemAge = 1 }: ViewerPr
         const dist = Math.sqrt(dx*dx + dy*dy);
 
         // Make hit target slightly larger for ease of clicking small bodies
-        const hitRadius = Math.max(p.r, 10 / scale);
+        const hitRadius = Math.max(p.r, 15 / scale);
         
         if (dist <= hitRadius && dist < clickDist) {
             clickedBodyId = body.id;
@@ -502,16 +543,17 @@ export function SolarSystemViewer({ bodies, showZones, systemAge = 1 }: ViewerPr
   };
 
   return (
-    <div className="lg:col-span-3 bg-neutral-900 rounded-xl border border-neutral-700 overflow-hidden relative" style={{ height: '100%', minHeight: 'calc(100vh - 4rem)' }}>
+    <div className="w-full h-full bg-neutral-900 overflow-hidden relative">
       <canvas
         ref={canvasRef}
         onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={() => { handleMouseUp(); setHoveredBodyId(null); }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onPointerLeave={() => { handlePointerUp({ pointerId: -1, clientX: 0, clientY: 0 } as any); setHoveredBodyId(null); }}
         onClick={handleClick}
-        className={`w-full h-full ${hoveredBodyId ? 'cursor-pointer' : (isDragging ? 'cursor-grabbing' : 'cursor-grab')}`}
+        className={`w-full h-full touch-none ${hoveredBodyId ? 'cursor-pointer' : (isDragging ? 'cursor-grabbing' : 'cursor-grab')}`}
       />
 
       {/* Basic HUD */}
@@ -599,7 +641,7 @@ export function SolarSystemViewer({ bodies, showZones, systemAge = 1 }: ViewerPr
           );
 
           return (
-             <div className="absolute top-4 right-4 w-80 max-h-[calc(100vh-14rem)] overflow-y-auto bg-neutral-900/95 backdrop-blur-xl border border-neutral-700/80 rounded-xl shadow-2xl pointer-events-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#444 transparent' }}>
+             <div className="absolute top-4 right-4 sm:top-14 sm:right-4 left-4 sm:left-auto bottom-24 sm:bottom-auto max-h-[80vh] overflow-y-auto bg-neutral-900/95 backdrop-blur-xl border border-neutral-700/80 rounded-xl shadow-2xl pointer-events-auto z-30 animate-in fade-in slide-in-from-right-4 duration-300 sm:w-80" style={{ scrollbarWidth: 'thin', scrollbarColor: '#444 transparent' }}>
                  {/* Header */}
                  <div className="sticky top-0 bg-neutral-900/95 backdrop-blur-xl p-4 pb-3 border-b border-neutral-700/50 z-10">
                      <div className="flex justify-between items-start">
@@ -740,7 +782,7 @@ export function SolarSystemViewer({ bodies, showZones, systemAge = 1 }: ViewerPr
       )}
 
       {/* Body List at Bottom */}
-      <div className="absolute bottom-0 left-0 w-full bg-neutral-900/90 backdrop-blur-md border-t border-neutral-700/50 p-3 flex gap-3 overflow-x-auto select-none" style={{ maxHeight: '160px' }}>
+      <div className="absolute bottom-0 left-0 w-full bg-neutral-900/90 backdrop-blur-md border-t border-neutral-700/50 p-2 sm:p-3 flex gap-2 sm:gap-3 overflow-x-auto select-none no-scrollbar z-20" style={{ maxHeight: '160px' }}>
         
         {/* Stars */}
         {bodies.filter(b => b.type === 'star').map(star => (

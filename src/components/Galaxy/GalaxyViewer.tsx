@@ -43,6 +43,9 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
    const [offset, setOffset] = useState({ x: 0, y: 0 });
    const [isDragging, setIsDragging] = useState(false);
    const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+   const pointerDownPos = useRef({ x: 0, y: 0 });
+   const activePointers = useRef<Map<number, { x: number, y: number }>>(new Map());
+   const lastPinchDistance = useRef<number | null>(null);
    const [hoveredStar, setHoveredStar] = useState<StellarSystemMetadata | null>(null);
    const [selectedStar, setSelectedStar] = useState<StellarSystemMetadata | null>(null);
    const [dimensions, setDimensions] = useState({ w: 1200, h: 800 });
@@ -343,24 +346,52 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
       ctx.restore();
    };
 
-   // -- Interaction Handlers --
    const handleWheel = (e: React.WheelEvent) => {
-      e.preventDefault(); // Need to attach passive:false to wheel event in a real app, React does this automatically sometimes
+      e.preventDefault();
       const zoomSensitivity = 0.001;
       const newScale = Math.max(0.2, Math.min(20, scale - e.deltaY * zoomSensitivity));
-      setScale(newScale);
+      applyZoom(newScale);
    };
 
-   // Track the pointer-down position so we can distinguish clicks from drags
-   const pointerDownPos = useRef({ x: 0, y: 0 });
+   const applyZoom = (newScale: number) => {
+      setScale(newScale);
+      if (selectedStar) {
+         const ratio = (Math.min(canvasRef.current?.width || 1200, canvasRef.current?.height || 800) / 2) / LOGICAL_RADIUS;
+         setOffset({
+            x: -(selectedStar.x * ratio) * newScale,
+            y: -(selectedStar.y * ratio) * newScale
+         });
+      }
+   };
 
    const handlePointerDown = (e: React.PointerEvent) => {
-      setIsDragging(true);
-      setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
-      pointerDownPos.current = { x: e.clientX, y: e.clientY };
+      activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (activePointers.current.size === 1) {
+         setIsDragging(true);
+         setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
+         pointerDownPos.current = { x: e.clientX, y: e.clientY };
+      } else if (activePointers.current.size === 2) {
+         setIsDragging(false);
+         const points = Array.from(activePointers.current.values()) as { x: number, y: number }[];
+         lastPinchDistance.current = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+      }
    };
 
    const handlePointerMove = (e: React.PointerEvent) => {
+      activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (activePointers.current.size === 2 && lastPinchDistance.current !== null) {
+         const points = Array.from(activePointers.current.values()) as { x: number, y: number }[];
+         const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+         const delta = distance / lastPinchDistance.current;
+         
+         const newScale = Math.max(0.2, Math.min(20, scale * delta));
+         applyZoom(newScale);
+         lastPinchDistance.current = distance;
+         return;
+      }
+
       if (isDragging) {
          setOffset({
             x: e.clientX - dragStart.x,
@@ -417,6 +448,11 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
    };
 
    const handlePointerUp = (e: React.PointerEvent) => {
+      activePointers.current.delete(e.pointerId);
+      if (activePointers.current.size < 2) {
+         lastPinchDistance.current = null;
+      }
+
       // Detect if this was a click (not a drag) using distance threshold
       const dx = e.clientX - pointerDownPos.current.x;
       const dy = e.clientY - pointerDownPos.current.y;
@@ -539,8 +575,8 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
 
          {/* HUD overlays */}
          <div className="absolute top-4 left-4 z-10 flex gap-2">
-            <button className="bg-neutral-800/80 p-2 rounded text-neutral-300 hover:text-white" onClick={() => setScale(s => Math.min(20, s * 1.2))}><ZoomIn className="w-5 h-5" /></button>
-            <button className="bg-neutral-800/80 p-2 rounded text-neutral-300 hover:text-white" onClick={() => setScale(s => Math.max(0.2, s / 1.2))}><ZoomOut className="w-5 h-5" /></button>
+            <button className="bg-neutral-800/80 p-2 rounded text-neutral-300 hover:text-white" onClick={() => applyZoom(Math.min(20, scale * 1.2))}><ZoomIn className="w-5 h-5" /></button>
+            <button className="bg-neutral-800/80 p-2 rounded text-neutral-300 hover:text-white" onClick={() => applyZoom(Math.max(0.2, scale / 1.2))}><ZoomOut className="w-5 h-5" /></button>
             <button className="bg-neutral-800/80 p-2 rounded text-neutral-300 hover:text-white" onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }); }} title="Recenter"><Crosshair className="w-5 h-5" /></button>
          </div>
 
@@ -579,7 +615,7 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
             const info = getCelestialInfo(selectedStar);
             const isBHtype = ['BH', 'NS', 'P'].includes(selectedStar.starClass);
             return (
-            <div className="absolute top-4 right-4 bottom-4 bg-neutral-900/95 border border-fuchsia-500/40 rounded-xl shadow-2xl backdrop-blur-sm w-96 z-20 flex flex-col overflow-hidden">
+            <div className="absolute top-4 right-4 sm:top-14 sm:right-4 left-4 sm:left-auto bottom-4 sm:bottom-4 bg-neutral-900/95 border border-fuchsia-500/40 rounded-xl shadow-2xl backdrop-blur-sm sm:w-96 z-20 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-right-4 duration-300">
                {/* Header */}
                <div className="p-5 pb-3 border-b border-neutral-700/50">
                   <div className="flex items-start justify-between mb-1">

@@ -21,12 +21,12 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
       {/* Overlays / Gradients for better text readability */}
       <div className="absolute inset-0 bg-black/40 bg-gradient-to-r from-black/80 via-black/40 to-transparent"></div>
       
-      <div className="relative z-10 px-12 md:px-24 max-w-2xl">
-        <h1 className="text-5xl md:text-6xl font-black mb-16 tracking-widest text-white drop-shadow-xl" style={{ textShadow: '0 0 20px rgba(255,255,255,0.4)' }}>
+      <div className="relative z-10 px-6 sm:px-12 md:px-24 max-w-2xl">
+        <h1 className="text-4xl sm:text-5xl md:text-6xl font-black mb-10 md:mb-16 tracking-widest text-white drop-shadow-xl" style={{ textShadow: '0 0 20px rgba(255,255,255,0.4)' }}>
           SPACE ENGINE
         </h1>
         
-        <div className="flex flex-col gap-6 w-80">
+        <div className="flex flex-col gap-4 md:gap-6 w-full max-w-[20rem]">
           <MenuButton label="Jogar" onClick={onPlay} />
           <MenuButton label="Gerador de Planeta" onClick={onStart} />
           <MenuButton label="Gerador de Sistema Solar" onClick={onSolarSystemStart} />
@@ -36,11 +36,11 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
         </div>
       </div>
 
-      <div className="absolute bottom-6 left-12 text-sm text-white/50 tracking-widest">
+      <div className="absolute bottom-6 left-6 sm:left-12 text-[10px] sm:text-sm text-white/50 tracking-widest">
         0 | 9 | 9 | 0 BETA
       </div>
       
-      <div className="absolute bottom-6 right-12 text-sm text-white/80 font-bold tracking-widest cursor-pointer hover:text-white transition-colors">
+      <div className="absolute bottom-6 right-6 sm:right-12 text-[10px] sm:text-sm text-white/80 font-bold tracking-widest cursor-pointer hover:text-white transition-colors">
         DONATE
       </div>
     </div>

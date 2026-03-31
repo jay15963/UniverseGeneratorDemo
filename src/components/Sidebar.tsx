@@ -82,8 +82,8 @@ export function Sidebar({ config, setConfig, layer, setLayer, isGenerating, hand
   const isGas = pt === PlanetType.GAS_GIANT;
 
   return (
-    <div className="lg:col-span-1 space-y-6">
-      <div className="bg-neutral-800 p-6 rounded-xl border border-neutral-700 shadow-xl">
+    <div className="space-y-6 flex flex-col h-full">
+      <div className="bg-neutral-800 p-6 rounded-xl border border-neutral-700 shadow-xl flex-1 overflow-y-auto custom-scrollbar">
         <button 
           onClick={onBackToMenu}
           className="text-sm font-semibold text-neutral-400 hover:text-white transition-colors flex items-center gap-1 mb-4"
@@ -95,6 +95,7 @@ export function Sidebar({ config, setConfig, layer, setLayer, isGenerating, hand
         </h1>
         
         <div className="space-y-4">
+          {/* ... existing content ... */}
           {/* Seed */}
           <div>
             <label className="block text-sm font-medium text-neutral-400 mb-1">Seed</label>
@@ -335,14 +336,14 @@ export function Sidebar({ config, setConfig, layer, setLayer, isGenerating, hand
           </>)}
 
           <button onClick={handleGenerate} disabled={isGenerating}
-            className="w-full py-3 mt-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-neutral-700 disabled:text-neutral-500 text-white font-semibold rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all">
+            className="w-full py-3 mt-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-neutral-700 disabled:text-neutral-500 text-white font-semibold rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all shrink-0">
             {isGenerating ? (<><RefreshCw className="w-5 h-5 animate-spin" /> Generating...</>)
               : (<><Settings className="w-5 h-5" /> Generate Planet</>)}
           </button>
         </div>
       </div>
 
-      <div className="bg-neutral-800 p-6 rounded-xl border border-neutral-700 shadow-xl">
+      <div className="bg-neutral-800 p-6 rounded-xl border border-neutral-700 shadow-xl shrink-0">
         <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-neutral-200">
           <Layers className="w-5 h-5" /> Map Layers
         </h2>

@@ -304,7 +304,7 @@ export class GalaxyGenerator {
 
     let numPlanets = Math.floor(this.prng() * 12) + 1; // 1 to 12
     let rockyPct = this.prng();
-    let lifeChance = this.prng() * 0.2; // base 20%
+    let lifeChance = this.prng() * 0.05; // base 5% (ultra rare)
     let numAsteroidBelts = this.prng() > 0.5 ? 1 : 0;
 
     // Life chance is ZERO if galaxy is too young or too old for biology
@@ -317,22 +317,18 @@ export class GalaxyGenerator {
       numPlanets = Math.floor(this.prng() * 3); // Max 2
       lifeChance = 0;
       numAsteroidBelts = 2 + Math.floor(this.prng() * 3); // Lots of debris
-    } else if (normalizedDistance < 0.3) {
-      // Core: High radiation, low water/life chance
-      lifeChance = this.prng() * 0.05; // 5% max
-      numPlanets = Math.floor(this.prng() * 5); // Tighter orbits, fewer planets
-    } else if (normalizedDistance > 0.7) {
-      // Edges: Low metallicity, low planets
-      rockyPct = this.prng() * 0.3; // Mostly gas or frozen
+    } else if (normalizedDistance > 0.75) {
+      // Edges: Low metallicity
+      rockyPct = this.prng() * 0.3; // Mostly gas
     } else {
       // Sweet Spot (spatially) — only boost life if galaxy age also allows it
-      if (habitability > 0.5 && galAge >= 0.30 && galAge < 0.70) {
-         lifeChance = 0.3 + (this.prng() * 0.7); // 30% to 100%
-         numPlanets = 5 + Math.floor(this.prng() * 8); // Rich dense systems
-         rockyPct = 0.5 + (this.prng() * 0.5); // High metals
+      if (habitability > 0.6 && galAge >= 0.35 && galAge < 0.65) {
+         // Significantly reduced sweet spot: Max 25% chance of life from here
+         lifeChance = 0.05 + (this.prng() * 0.20); 
+         numPlanets = 5 + Math.floor(this.prng() * 8); 
+         rockyPct = 0.6 + (this.prng() * 0.4); 
       }
     }
-
     // Generate the unique name for this celestial body
     let bodyName: string;
     if (['BH'].includes(starClassRaw)) {

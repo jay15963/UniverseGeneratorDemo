@@ -46,8 +46,8 @@ export function SolarSystemSidebar({ config, setConfig, isGenerating, handleGene
   const set = (partial: Partial<SolarSystemConfig>) => setConfig(prev => ({ ...prev, ...partial }));
 
   return (
-    <div className="lg:col-span-1 space-y-6">
-      <div className="bg-neutral-800 p-6 rounded-xl border border-neutral-700 shadow-xl overflow-y-auto max-h-[90vh]">
+    <div className="space-y-6 flex flex-col h-full">
+      <div className="bg-neutral-800 p-6 rounded-xl border border-neutral-700 shadow-xl flex-1 overflow-y-auto custom-scrollbar">
         <button 
           onClick={onBackToMenu}
           className="text-sm font-semibold text-neutral-400 hover:text-white transition-colors flex items-center gap-1 mb-4"

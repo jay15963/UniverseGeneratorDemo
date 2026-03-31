@@ -23,7 +23,7 @@ export function UniverseSidebar({
   };
 
   return (
-    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 flex flex-col gap-6 h-full shadow-2xl">
+    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 flex flex-col gap-6 h-full">
       {/* Header */}
       <div className="flex items-center gap-3 pb-4 border-b border-neutral-800">
         <button 

@@ -47,8 +47,8 @@ export function GalaxySidebar({ config, setConfig, layer, setLayer, isGenerating
   const set = (partial: Partial<GalaxyConfig>) => setConfig(prev => ({ ...prev, ...partial }));
 
   return (
-    <div className="lg:col-span-1 space-y-6">
-      <div className="bg-neutral-800 p-6 rounded-xl border border-neutral-700 shadow-xl">
+    <div className="space-y-6 flex flex-col h-full">
+      <div className="bg-neutral-800 p-6 rounded-xl border border-neutral-700 shadow-xl flex-1 overflow-y-auto custom-scrollbar">
         <button 
           onClick={onBackToMenu}
           className="text-sm font-semibold text-neutral-400 hover:text-white transition-colors flex items-center gap-1 mb-4"
@@ -98,7 +98,7 @@ export function GalaxySidebar({ config, setConfig, layer, setLayer, isGenerating
             onChange={(v) => set({ anomalyFactor: v })} suffix="%" />
 
           <button onClick={handleGenerate} disabled={isGenerating}
-            className="w-full py-3 mt-4 bg-fuchsia-600 hover:bg-fuchsia-500 disabled:bg-neutral-700 disabled:text-neutral-500 text-white font-semibold rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all">
+            className="w-full py-3 mt-4 bg-fuchsia-600 hover:bg-fuchsia-500 disabled:bg-neutral-700 disabled:text-neutral-500 text-white font-semibold rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all shrink-0">
             {isGenerating ? (<><RefreshCw className="w-5 h-5 animate-spin" /> Generating...</>)
               : (<><Settings className="w-5 h-5" /> Generate Galaxy</>)}
           </button>
@@ -106,7 +106,7 @@ export function GalaxySidebar({ config, setConfig, layer, setLayer, isGenerating
       </div>
 
       {/* Map Layers */}
-      <div className="bg-neutral-800 p-6 rounded-xl border border-neutral-700 shadow-xl">
+      <div className="bg-neutral-800 p-6 rounded-xl border border-neutral-700 shadow-xl shrink-0">
         <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-neutral-200">
           <Layers className="w-5 h-5" /> View Layers
         </h2>

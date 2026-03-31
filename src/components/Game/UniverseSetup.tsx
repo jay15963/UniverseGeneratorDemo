@@ -177,29 +177,29 @@ export function UniverseSetup({ onBackToMenu }: UniverseSetupProps) {
       {/* Back Button */}
       <button
         onClick={onBackToMenu}
-        className="absolute top-6 left-6 z-20 flex items-center gap-2 text-neutral-400 hover:text-white transition-colors bg-black/40 backdrop-blur-sm px-3 py-2 rounded-lg border border-white/10 hover:border-white/20"
+        className="absolute top-4 left-4 sm:top-6 sm:left-6 z-20 flex items-center gap-2 text-neutral-400 hover:text-white transition-colors bg-black/40 backdrop-blur-sm px-3 py-2 rounded-lg border border-white/10 hover:border-white/20"
       >
         <ChevronLeft className="w-4 h-4" />
         <span className="text-sm font-medium">Menu</span>
       </button>
 
       {/* Title */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-20 text-center">
-        <h1 className="text-2xl font-black tracking-[0.3em] text-white/90 drop-shadow-lg">
+      <div className="absolute top-16 sm:top-6 left-1/2 -translate-x-1/2 z-20 text-center w-full px-4">
+        <h1 className="text-lg sm:text-2xl font-black tracking-[0.2em] sm:tracking-[0.3em] text-white/90 drop-shadow-lg">
           CRIAÇÃO DO UNIVERSO
         </h1>
-        <p className="text-xs text-neutral-400 tracking-widest mt-1 font-mono">
-          CONFIGURE OS PARÂMETROS CÓSMICOS
+        <p className="text-[10px] sm:text-xs text-neutral-400 tracking-widest mt-1 font-mono uppercase">
+          Configure os parâmetros cósmicos
         </p>
       </div>
 
       {/* Controls Panel */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 p-8 pt-16 bg-gradient-to-t from-black/90 via-black/60 to-transparent">
-        <div className="max-w-3xl mx-auto space-y-6">
+      <div className="absolute bottom-0 left-0 right-0 z-20 p-4 sm:p-8 pt-16 bg-gradient-to-t from-black/95 via-black/70 to-transparent">
+        <div className="max-w-3xl mx-auto space-y-4 sm:space-y-6">
           
           {/* Seed */}
-          <div className="flex items-center gap-3">
-            <label className="text-xs font-bold text-neutral-500 uppercase tracking-wider w-32 text-right shrink-0">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            <label className="text-[10px] sm:text-xs font-bold text-neutral-500 uppercase tracking-wider sm:w-32 sm:text-right shrink-0">
               Semente
             </label>
             <div className="flex gap-2 flex-1">
@@ -207,12 +207,12 @@ export function UniverseSetup({ onBackToMenu }: UniverseSetupProps) {
                 type="text"
                 value={rootSeed}
                 onChange={(e) => setRootSeed(e.target.value)}
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-fuchsia-500/50 transition-colors backdrop-blur-sm"
+                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm text-white font-mono focus:outline-none focus:border-fuchsia-500/50 transition-colors backdrop-blur-sm"
                 placeholder="Enter seed..."
               />
               <button
                 onClick={randomizeSeed}
-                className="p-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-neutral-400 hover:text-white transition-colors"
+                className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-neutral-400 hover:text-white transition-colors"
                 title="Randomizar"
               >
                 <RefreshCw className="w-4 h-4" />
@@ -221,8 +221,8 @@ export function UniverseSetup({ onBackToMenu }: UniverseSetupProps) {
           </div>
 
           {/* Age Slider */}
-          <div className="flex items-center gap-3">
-            <label className="text-xs font-bold text-neutral-500 uppercase tracking-wider w-32 text-right shrink-0">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            <label className="text-[10px] sm:text-xs font-bold text-neutral-500 uppercase tracking-wider sm:w-32 sm:text-right shrink-0">
               Idade
             </label>
             <div className="flex-1 space-y-1">
@@ -239,19 +239,19 @@ export function UniverseSetup({ onBackToMenu }: UniverseSetupProps) {
                 step="0.01"
                 value={universeAge}
                 onChange={(e) => setUniverseAge(parseFloat(e.target.value))}
-                className="w-full accent-fuchsia-500 h-2"
+                className="w-full accent-fuchsia-500 h-1.5 sm:h-2"
               />
-              <div className="flex justify-between text-[10px] text-neutral-600 font-medium">
+              <div className="flex justify-between text-[8px] sm:text-[10px] text-neutral-600 font-medium">
                 <span>Singularidade</span>
-                <span>Expansão</span>
+                <span>Exploração</span>
                 <span>Morte Térmica</span>
               </div>
             </div>
           </div>
 
           {/* Galaxy Count Slider */}
-          <div className="flex items-center gap-3">
-            <label className="text-xs font-bold text-neutral-500 uppercase tracking-wider w-32 text-right shrink-0">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            <label className="text-[10px] sm:text-xs font-bold text-neutral-500 uppercase tracking-wider sm:w-32 sm:text-right shrink-0">
               Galáxias
             </label>
             <div className="flex-1 space-y-1">
@@ -270,9 +270,9 @@ export function UniverseSetup({ onBackToMenu }: UniverseSetupProps) {
                 step="100"
                 value={numGalaxies}
                 onChange={(e) => setNumGalaxies(parseInt(e.target.value))}
-                className="w-full accent-cyan-500 h-2"
+                className="w-full accent-cyan-500 h-1.5 sm:h-2"
               />
-              <div className="flex justify-between text-[10px] text-neutral-600 font-medium">
+              <div className="flex justify-between text-[8px] sm:text-[10px] text-neutral-600 font-medium">
                 <span>1.000</span>
                 <span>3.000</span>
                 <span>5.000</span>
@@ -281,17 +281,17 @@ export function UniverseSetup({ onBackToMenu }: UniverseSetupProps) {
           </div>
 
           {/* Stats Bar */}
-          <div className="flex items-center justify-between pt-2 border-t border-white/5">
-            <div className="flex gap-6 text-xs text-neutral-500 font-mono">
-              <span>Galáxias Visíveis: <span className="text-white font-bold">{generatedGalaxies.length.toLocaleString()}</span></span>
-              <span>Estrelas Estimadas: <span className="text-white font-bold">{(generatedGalaxies.reduce((a, g) => a + g.starCount, 0)).toLocaleString()}k</span></span>
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-white/5">
+            <div className="flex gap-4 sm:gap-6 text-[10px] sm:text-xs text-neutral-500 font-mono">
+              <span>Galáxias: <span className="text-white font-bold">{generatedGalaxies.length.toLocaleString()}</span></span>
+              <span>Estrelas: <span className="text-white font-bold">{(generatedGalaxies.reduce((a, g) => a + g.starCount, 0)).toLocaleString()}k</span></span>
             </div>
 
             {/* EXPLORE Button */}
             <button
               onClick={handleExplore}
               disabled={generatedGalaxies.length === 0}
-              className="group flex items-center gap-3 bg-fuchsia-600 hover:bg-fuchsia-500 disabled:bg-neutral-800 disabled:text-neutral-600 text-white font-bold py-3 px-8 rounded-xl transition-all shadow-lg shadow-fuchsia-900/30 hover:shadow-fuchsia-900/50 hover:-translate-y-0.5 active:translate-y-0"
+              className="w-full sm:w-auto group flex items-center justify-center gap-3 bg-fuchsia-600 hover:bg-fuchsia-500 disabled:bg-neutral-800 disabled:text-neutral-600 text-white font-bold py-3 sm:py-4 px-10 rounded-xl transition-all shadow-lg shadow-fuchsia-900/30 hover:shadow-fuchsia-900/50 hover:-translate-y-0.5 active:translate-y-0"
             >
               <Play className="w-5 h-5 group-hover:scale-110 transition-transform" />
               EXPLORAR UNIVERSO

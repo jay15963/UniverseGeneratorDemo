@@ -35,6 +35,9 @@ export function MapViewer({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [baseOffset, setBaseOffset] = useState({ x: 0, y: 0 });
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
+  const activePointers = useRef<Map<number, { x: number, y: number }>>(new Map());
+  const lastPinchDistance = useRef<number | null>(null);
+  const pointerDownPos = useRef({ x: 0, y: 0 });
   
   const containerRef = useRef<HTMLDivElement>(null);
   const leftRef = useRef<HTMLCanvasElement>(null);
@@ -71,36 +74,43 @@ export function MapViewer({
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
 
-      setViewTransform(prev => {
-        const zoomFactor = e.deltaY * -0.002;
-        const newScale = Math.min(Math.max(1, prev.scale * (1 + zoomFactor)), 6); // Max scale 6x, Min scale 1x
-
-        if (newScale === prev.scale) return prev;
-
-        // Coordinate of mouse on the unscaled map (relative to current origin)
-        const mapX = (mouseX - prev.x) / prev.scale;
-        const mapY = (mouseY - prev.y) / prev.scale;
-        
-        // Expected new offset to keep pointer exactly on the same map pixel
-        let newX = mouseX - mapX * newScale;
-        let newY = mouseY - mapY * newScale;
-
-        // Restrict Y panning to map edges
-        const minY = rect.height - rect.height * newScale;
-        newY = Math.max(minY, Math.min(0, newY));
-
-        // Infinite Horizontal Wrap-around: keep offset.x in (-scaledWidth, 0]
-        const scaledWidth = rect.width * newScale;
-        newX = newX % scaledWidth;
-        if (newX > 0) newX -= scaledWidth;
-        
-        return { x: newX, y: newY, scale: newScale };
-      });
+      const zoomFactor = e.deltaY * -0.002;
+      const newScale = Math.min(Math.max(1, viewTransform.scale * (1 + zoomFactor)), 6);
+      applyZoom(newScale, mouseX, mouseY);
     };
 
     container.addEventListener('wheel', handleWheelNative, { passive: false });
     return () => container.removeEventListener('wheel', handleWheelNative);
-  }, []);
+  }, [viewTransform]);
+
+  const applyZoom = (newScale: number, centerX: number, centerY: number) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+
+    setViewTransform(prev => {
+      if (newScale === prev.scale) return prev;
+
+      // Coordinate of point on the unscaled map (relative to current origin)
+      const mapX = (centerX - prev.x) / prev.scale;
+      const mapY = (centerY - prev.y) / prev.scale;
+      
+      // Expected new offset to keep pointer exactly on the same map pixel
+      let newX = centerX - mapX * newScale;
+      let newY = centerY - mapY * newScale;
+
+      // Restrict Y panning to map edges
+      const minY = rect.height - rect.height * newScale;
+      newY = Math.max(minY, Math.min(0, newY));
+
+      // Infinite Horizontal Wrap-around: keep offset.x in (-scaledWidth, 0]
+      const scaledWidth = rect.width * newScale;
+      newX = newX % scaledWidth;
+      if (newX > 0) newX -= scaledWidth;
+      
+      return { x: newX, y: newY, scale: newScale };
+    });
+  };
 
   const handleExport = () => {
     if (canvasRef.current) {
@@ -111,11 +121,19 @@ export function MapViewer({
     }
   };
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(true);
-    setDragStart({ x: e.clientX, y: e.clientY });
-    setBaseOffset({ x: viewTransform.x, y: viewTransform.y });
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (activePointers.current.size === 1) {
+        setIsDragging(true);
+        setDragStart({ x: e.clientX, y: e.clientY });
+        pointerDownPos.current = { x: e.clientX, y: e.clientY };
+        setBaseOffset({ x: viewTransform.x, y: viewTransform.y });
+    } else if (activePointers.current.size === 2) {
+        setIsDragging(false);
+        const points = Array.from(activePointers.current.values()) as { x: number, y: number }[];
+        lastPinchDistance.current = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+    }
   };
 
   const getMapPixel = useCallback((clientX: number, clientY: number): { px: number; py: number } | null => {
@@ -142,31 +160,43 @@ export function MapViewer({
     return { px, py };
   }, [viewTransform, config.width, config.height]);
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+
+    if (activePointers.current.size === 2 && lastPinchDistance.current !== null) {
+      const points = Array.from(activePointers.current.values()) as { x: number, y: number }[];
+      const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+      const delta = distance / lastPinchDistance.current;
+
+      const midX = (points[0].x + points[1].x) / 2 - rect.left;
+      const midY = (points[0].y + points[1].y) / 2 - rect.top;
+
+      const newScale = Math.min(Math.max(1, viewTransform.scale * delta), 6);
+      applyZoom(newScale, midX, midY);
+      lastPinchDistance.current = distance;
+      return;
+    }
+
     // Hover inspector
     if (!isDragging && layer !== LayerType.FINAL) {
       const pixel = getMapPixel(e.clientX, e.clientY);
       if (pixel) {
-        const container = containerRef.current;
-        if (container) {
-          const rect = container.getBoundingClientRect();
-          setHoverInfo({
-            x: pixel.px,
-            y: pixel.py,
-            screenX: e.clientX - rect.left,
-            screenY: e.clientY - rect.top,
-          });
-        }
+        setHoverInfo({
+          x: pixel.px,
+          y: pixel.py,
+          screenX: e.clientX - rect.left,
+          screenY: e.clientY - rect.top,
+        });
       } else {
         setHoverInfo(null);
       }
     }
 
     if (isDragging) {
-      const container = containerRef.current;
-      if (!container) return;
-      const rect = container.getBoundingClientRect();
-      
       const dx = e.clientX - dragStart.x;
       const dy = e.clientY - dragStart.y;
       
@@ -186,8 +216,16 @@ export function MapViewer({
     }
   };
 
-  const handleMouseUp = () => setIsDragging(false);
-  const handleMouseLeave = () => { setIsDragging(false); setHoverInfo(null); };
+  const handlePointerUp = (e: React.PointerEvent) => {
+    activePointers.current.delete(e.pointerId);
+    if (activePointers.current.size < 2) lastPinchDistance.current = null;
+    setIsDragging(false);
+  };
+  const handlePointerLeave = (e: React.PointerEvent) => {
+    activePointers.current.delete(e.pointerId);
+    setIsDragging(false);
+    setHoverInfo(null);
+  };
 
   const resetView = () => {
     setViewTransform({ x: 0, y: 0, scale: 1 });
@@ -307,10 +345,11 @@ export function MapViewer({
       <div 
         ref={containerRef}
         className={`relative w-full aspect-[2/1] bg-neutral-950 rounded-lg overflow-hidden border border-neutral-700 select-none touch-none ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onPointerLeave={handlePointerLeave}
       >
         {isGenerating && (
           <div className="absolute inset-0 z-20 bg-neutral-900/80 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-none">

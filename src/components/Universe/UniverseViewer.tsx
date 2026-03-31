@@ -62,6 +62,8 @@ export function UniverseViewer({ galaxies, config, onEnterGalaxy }: UniverseView
    const [isDragging, setIsDragging] = useState(false);
    const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
    const pointerDownPos = useRef({ x: 0, y: 0 });
+   const activePointers = useRef<Map<number, { x: number, y: number }>>(new Map());
+   const lastPinchDistance = useRef<number | null>(null);
 
    const [hoveredGalaxy, setHoveredGalaxy] = useState<UniverseGalaxyMetadata | null>(null);
    const [selectedGalaxy, setSelectedGalaxy] = useState<UniverseGalaxyMetadata | null>(null);
@@ -264,39 +266,62 @@ export function UniverseViewer({ galaxies, config, onEnterGalaxy }: UniverseView
    }, [hoveredGalaxy, selectedGalaxy, scale, offset, dimensions]);
 
    // Interactions
-   const handleWheel = (e: React.WheelEvent) => {
-       const zoomSensitivity = 0.002;
-       // Bounded zoom between 2x and 15x
-       const newScale = Math.max(2.0, Math.min(15.0, scale - (e.deltaY * zoomSensitivity * scale)));
-       setScale(newScale);
+    const handleWheel = (e: React.WheelEvent) => {
+        const zoomSensitivity = 0.002;
+        // Bounded zoom between 2x and 15x
+        const newScale = Math.max(2.0, Math.min(15.0, scale - (e.deltaY * zoomSensitivity * scale)));
+        applyZoom(newScale);
+    };
 
-       // Lock camera target to selected galaxy when zooming
-       if (selectedGalaxy) {
-           const ratio = (Math.min(canvasRef.current?.width || 1200, canvasRef.current?.height || 800) / 2) / LOGICAL_RADIUS;
-           setOffset({
-               x: -(selectedGalaxy.x * ratio) * newScale,
-               y: -(selectedGalaxy.y * ratio) * newScale
-           });
-       }
-   };
+    const applyZoom = (newScale: number) => {
+        setScale(newScale);
+        // Lock camera target to selected galaxy when zooming
+        if (selectedGalaxy) {
+            const ratio = (Math.min(canvasRef.current?.width || 1200, canvasRef.current?.height || 800) / 2) / LOGICAL_RADIUS;
+            setOffset({
+                x: -(selectedGalaxy.x * ratio) * newScale,
+                y: -(selectedGalaxy.y * ratio) * newScale
+            });
+        }
+    };
 
-   const handlePointerDown = (e: React.PointerEvent) => {
-       setIsDragging(true);
-       setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
-       pointerDownPos.current = { x: e.clientX, y: e.clientY };
-       
-       // Frees the camera lock-on the moment user drags screen manually
-       if (selectedGalaxy) {
-           setSelectedGalaxy(null);
-       }
-   };
+    const handlePointerDown = (e: React.PointerEvent) => {
+        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-   const handlePointerMove = (e: React.PointerEvent) => {
-       if (isDragging) {
-           setOffset({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
-           setHoveredGalaxy(null);
-           return;
-       }
+        if (activePointers.current.size === 1) {
+            setIsDragging(true);
+            setDragStart({ x: e.clientX - offset.x, y: e.clientY - offset.y });
+            pointerDownPos.current = { x: e.clientX, y: e.clientY };
+            
+            if (selectedGalaxy) {
+                setSelectedGalaxy(null);
+            }
+        } else if (activePointers.current.size === 2) {
+            setIsDragging(false); // Stop dragging if pinching
+            const points = Array.from(activePointers.current.values()) as { x: number, y: number }[];
+            lastPinchDistance.current = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+        }
+    };
+
+    const handlePointerMove = (e: React.PointerEvent) => {
+        activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        if (activePointers.current.size === 2 && lastPinchDistance.current !== null) {
+            const points = Array.from(activePointers.current.values()) as { x: number, y: number }[];
+            const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+            const delta = distance / lastPinchDistance.current;
+            
+            const newScale = Math.max(2.0, Math.min(15.0, scale * delta));
+            applyZoom(newScale);
+            lastPinchDistance.current = distance;
+            return;
+        }
+
+        if (isDragging) {
+            setOffset({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+            setHoveredGalaxy(null);
+            return;
+        }
 
        if (galaxies.length === 0) return;
        const canvas = canvasRef.current;
@@ -331,12 +356,17 @@ export function UniverseViewer({ galaxies, config, onEnterGalaxy }: UniverseView
        setHoveredGalaxy(closest);
    };
 
-   const handlePointerUp = (e: React.PointerEvent) => {
-       const dx = e.clientX - pointerDownPos.current.x;
-       const dy = e.clientY - pointerDownPos.current.y;
-       const wasClick = Math.sqrt(dx * dx + dy * dy) < 5;
+    const handlePointerUp = (e: React.PointerEvent) => {
+        activePointers.current.delete(e.pointerId);
+        if (activePointers.current.size < 2) {
+            lastPinchDistance.current = null;
+        }
 
-       setIsDragging(false);
+        const dx = e.clientX - pointerDownPos.current.x;
+        const dy = e.clientY - pointerDownPos.current.y;
+        const wasClick = Math.sqrt(dx * dx + dy * dy) < 5;
+
+        setIsDragging(false);
        if (wasClick && hoveredGalaxy) {
            setSelectedGalaxy(hoveredGalaxy);
            
@@ -399,7 +429,7 @@ export function UniverseViewer({ galaxies, config, onEnterGalaxy }: UniverseView
 
           {/* Modal Overlay for Selected Galaxy */}
           {selectedGalaxy && (
-            <div className="absolute top-4 right-4 bg-neutral-900/95 border border-fuchsia-500/40 rounded-xl shadow-2xl backdrop-blur-sm w-80 z-20 flex flex-col overflow-hidden">
+            <div className="absolute top-4 right-4 sm:top-14 sm:right-4 left-4 sm:left-auto bottom-4 sm:bottom-auto bg-neutral-900/95 border border-fuchsia-500/40 rounded-xl shadow-2xl backdrop-blur-sm sm:w-80 z-20 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-right-4 duration-300">
                <div className="p-4 pb-3 border-b border-neutral-700/50 flex justify-between items-start">
                    <div>
                        <h3 className="text-xl font-bold text-white mb-1">{selectedGalaxy.name}</h3>
