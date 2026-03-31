@@ -1,0 +1,5 @@
+{
+  "name": "PlanetGen",
+  "description": "Procedural planet generator creating realistic world maps with tectonic plates, climate, and biomes.",
+  "requestFramePermissions": []
+}
