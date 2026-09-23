@@ -125,7 +125,9 @@ export default function App() {
               setShowZones={setShowZones}
             />
           </SidebarContainer>
-          <SolarSystemViewer bodies={bodies} showZones={showZones} systemAge={config.systemAge} />
+          <div className="lg:col-span-3 h-[78vh] lg:h-[calc(100vh-5rem)] rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
+            <SolarSystemViewer bodies={bodies} showZones={showZones} systemAge={config.systemAge} />
+          </div>
         </div>
       </div>
     );
@@ -192,8 +194,7 @@ export default function App() {
               isGenerating={planetCtrl.isGenerating}
               progress={planetCtrl.progress}
               status={planetCtrl.status}
-              canvasRef={planetCtrl.canvasRef}
-              generatorRef={planetCtrl.generatorRef}
+              session={planetCtrl.session}
             />
           </div>
           <PlanetStats config={planetCtrl.config} />

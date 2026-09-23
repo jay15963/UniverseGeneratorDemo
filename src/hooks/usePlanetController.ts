@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { PlanetGenerator, PlanetConfig, PlanetType, LayerType } from '../lib/planet-generator/generator';
+import { PlanetConfig, PlanetType, LayerType } from '../lib/planet-generator/generator';
+import { openPlanetSession, PlanetSession } from '../lib/planet-generator/planetClient';
 
 export function usePlanetController() {
   const [config, setConfig] = useState<PlanetConfig>({
@@ -41,45 +42,26 @@ export function usePlanetController() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
-  
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const generatorRef = useRef<PlanetGenerator | null>(null);
+  const [session, setSession] = useState<PlanetSession | null>(null);
+  const cancelRef = useRef<(() => void) | null>(null);
 
-  const handleGenerate = async () => {
+  const handleGenerate = () => {
+    cancelRef.current?.();
     setIsGenerating(true);
     setProgress(0);
-    setStatus('Initializing...');
-    
-    // Use setTimeout to allow UI to update
-    setTimeout(async () => {
-      const generator = new PlanetGenerator(config);
-      generatorRef.current = generator;
-      
-      await generator.generate((p, s) => {
-        setProgress(p);
-        setStatus(s);
-      });
-      
-      renderLayer(layer);
+    setStatus('Inicializando...');
+    const job = openPlanetSession(config, (p, s) => { setProgress(p); setStatus(s); });
+    cancelRef.current = job.cancel;
+    job.ready.then(sess => {
+      setSession(sess);
       setIsGenerating(false);
-    }, 50);
+    }).catch(() => {});
   };
 
-  const renderLayer = (l: LayerType) => {
-    if (!generatorRef.current || !canvasRef.current) return;
-    const ctx = canvasRef.current.getContext('2d');
-    if (!ctx) return;
-    
-    generatorRef.current.render(ctx, l);
-  };
-
-  useEffect(() => {
-    renderLayer(layer);
-  }, [layer]);
-
-  // Initial generation
+  // Initial generation + cleanup
   useEffect(() => {
     handleGenerate();
+    return () => cancelRef.current?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -91,8 +73,7 @@ export function usePlanetController() {
     isGenerating,
     progress,
     status,
-    canvasRef,
+    session,
     handleGenerate,
-    generatorRef,
   };
 }

@@ -2041,9 +2041,16 @@ export class PlanetGenerator {
   }
 
   render(ctx: CanvasRenderingContext2D, layer: LayerType) {
-    const { width, height, seaLevel } = this.config;
+    const { width, height } = this.config;
     const imageData = ctx.createImageData(width, height);
-    const data = imageData.data;
+    imageData.data.set(this.renderToBuffer(layer));
+    ctx.putImageData(imageData, 0, 0);
+  }
+
+  /** Renders a layer to a raw RGBA buffer. Canvas-free, so it can run inside a Web Worker. */
+  renderToBuffer(layer: LayerType): Uint8ClampedArray {
+    const { width, height, seaLevel } = this.config;
+    const data = new Uint8ClampedArray(width * height * 4);
     
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -2356,8 +2363,8 @@ export class PlanetGenerator {
         data[pixelIndex + 3] = 255;
       }
     }
-    
-    ctx.putImageData(imageData, 0, 0);
+
+    return data;
   }
 }
 
