@@ -632,7 +632,7 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
 
             {stars.length === 0 && (
                <div className="absolute inset-0 flex items-center justify-center text-neutral-500 font-medium">
-                  Configure parameters and Generate Galaxy
+                  Configure os parâmetros e gere a galáxia
                </div>
             )}
 
@@ -668,29 +668,29 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                   {/* Stats Grid */}
                   <div className="grid grid-cols-2 gap-2 text-sm">
                      <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                        <span className="block text-neutral-500 text-xs mb-0.5">Classification</span>
+                        <span className="block text-neutral-500 text-xs mb-0.5">Classificação</span>
                         <span className="font-semibold text-neutral-200">{selectedStar.starClass}</span>
                      </div>
                      <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                        <span className="block text-neutral-500 text-xs mb-0.5">System Age</span>
+                        <span className="block text-neutral-500 text-xs mb-0.5">Idade do Sistema</span>
                         <span className="font-semibold text-neutral-200">{Math.round(selectedStar.config.systemAge * 100)}%</span>
                      </div>
                      {!isBHtype && (
                         <>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Planets</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">Planetas</span>
                            <span className="font-semibold text-neutral-200">{selectedStar.config.numPlanets}</span>
                         </div>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Moons</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">Luas</span>
                            <span className="font-semibold text-neutral-200">{selectedStar.config.numMoons}</span>
                         </div>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Rocky %</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">% Rochosos</span>
                            <span className="font-semibold text-neutral-200">{Math.round(selectedStar.config.rockyPercentage * 100)}%</span>
                         </div>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Life Chance</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">Chance de Vida</span>
                            <span className="font-semibold text-neutral-200">{Math.round(selectedStar.config.lifeChance * 100)}%</span>
                         </div>
                         </>
@@ -698,11 +698,11 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                      {isBHtype && (
                         <>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Debris Belts</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">Cinturões de Detritos</span>
                            <span className="font-semibold text-neutral-200">{selectedStar.config.numAsteroidBelts}</span>
                         </div>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Habitability</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">Habitabilidade</span>
                            <span className="font-semibold text-red-400">0%</span>
                         </div>
                         </>
@@ -713,7 +713,7 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                   {!isBHtype && (
                      <div>
                         <div className="flex justify-between text-xs mb-1">
-                           <span className="text-neutral-500">Habitability Index</span>
+                           <span className="text-neutral-500">Índice de Habitabilidade</span>
                            <span className="font-semibold" style={{ color: selectedStar.habitability > 0.6 ? '#4ade80' : selectedStar.habitability > 0.3 ? '#facc15' : '#f87171' }}>
                               {Math.round(selectedStar.habitability * 100)}%
                            </span>
@@ -732,8 +732,8 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                      <div className="bg-red-950/40 text-red-400 p-3 rounded-lg text-xs flex items-start gap-2 border border-red-500/20">
                         <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                         <div>
-                           <span className="font-semibold block mb-0.5">⚠ Supernova Dead Zone</span>
-                           This region was devastated by a cataclysmic supernova blast. Surviving matter has been irradiated beyond recovery. No biological systems can exist here.
+                           <span className="font-semibold block mb-0.5">⚠ Zona Morta de Supernova</span>
+                           Esta região foi devastada por uma supernova cataclísmica. A matéria restante foi irradiada além de qualquer recuperação — nenhum sistema biológico pode existir aqui.
                         </div>
                      </div>
                   )}
@@ -741,15 +741,15 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                      <div className="bg-emerald-950/40 text-emerald-400 p-3 rounded-lg text-xs flex items-start gap-2 border border-emerald-500/20">
                         <span className="text-base">🌱</span>
                         <div>
-                           <span className="font-semibold block mb-0.5">Galactic Sweet Spot</span>
-                           This system resides in the optimal habitability zone of the galaxy — far enough from the lethal radiation of the core, yet close enough to benefit from high metallicity for rocky planet formation.
+                           <span className="font-semibold block mb-0.5">Zona Galáctica Ideal</span>
+                           Este sistema está na zona de habitabilidade ideal da galáxia — longe da radiação letal do núcleo, mas perto o bastante para ter a metalicidade necessária à formação de planetas rochosos.
                         </div>
                      </div>
                   )}
 
                   {/* Coordinates */}
                   <div className="text-xs text-neutral-600 pt-2 border-t border-neutral-800">
-                     Position: ({selectedStar.x.toFixed(1)}, {selectedStar.y.toFixed(1)}) · Seed: {selectedStar.config.seed}
+                     Posição: ({selectedStar.x.toFixed(1)}, {selectedStar.y.toFixed(1)}) · Seed: {selectedStar.config.seed}
                   </div>
                </div>
 
@@ -760,7 +760,7 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                         onClick={() => onEnterSystem(selectedStar.config)}
                         className="w-full bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 shadow-lg shadow-fuchsia-900/30"
                      >
-                        Enter System <ChevronRight className="w-4 h-4" />
+                        Entrar no Sistema <ChevronRight className="w-4 h-4" />
                      </button>
                   </div>
                )}

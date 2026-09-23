@@ -167,9 +167,9 @@ export function SolarSystemViewer({ bodies, showZones = false, systemAge = 1 }: 
     const starFrames = new Map(stars.map(s => [s.id, starSurfaceFrames(hexToRgb(s.baseColor), s.id + s.name, 192)]));
 
     const frame = (now: number) => {
-      const dt = Math.min(0.1, (now - last) / 1000);
+      const dt = Math.max(0, Math.min(0.1, (now - last) / 1000));
       last = now;
-      const time = (now - t0) / 1000;
+      const time = Math.max(0, (now - t0) / 1000);
       const U = ui.current;
       if (!U.paused) {
         sim.current.ticks += dt * 60 * U.speed;
@@ -254,8 +254,8 @@ export function SolarSystemViewer({ bodies, showZones = false, systemAge = 1 }: 
 
       // --- Screen radius helpers ---
       // Exaggerate sizes when zoomed out (stylised map) and converge to true scale at zoom 1
-      const visZ = Math.max(Z, Math.pow(Z, 0.4));
-      const planetR = (b: CelestialBody) => Math.max(b.radius * (b.type === 'moon' ? Z : visZ), b.type === 'moon' ? 1.3 : 2.4);
+      const visZ = Math.max(Z, Math.pow(Z, 0.33));
+      const planetR = (b: CelestialBody) => Math.max(b.radius * (b.type === 'moon' ? Z : visZ), b.type === 'moon' ? 1.3 : 3);
       const moonVisible = (m: CelestialBody) => {
         const parent = byId.get(m.parentId!);
         return !!parent && m.orbit.semiMajorAxis * Z > planetR(parent) + 3;
@@ -342,7 +342,7 @@ export function SolarSystemViewer({ bodies, showZones = false, systemAge = 1 }: 
         // Photosphere with cross-faded granulation frames
         const frames = starFrames.get(s.id)!;
         const ft = time * 2.5;
-        const f0 = Math.floor(ft) % frames.length, f1 = (f0 + 1) % frames.length, fa = ft - Math.floor(ft);
+        const f0 = ((Math.floor(ft) % frames.length) + frames.length) % frames.length, f1 = (f0 + 1) % frames.length, fa = ft - Math.floor(ft);
         ctx.save();
         ctx.drawImage(frames[f0], X - r, Y - r, r * 2, r * 2);
         ctx.globalAlpha = fa;
@@ -444,12 +444,24 @@ export function SolarSystemViewer({ bodies, showZones = false, systemAge = 1 }: 
       ctx.textBaseline = 'top';
       if (U.labelsOn) {
         ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
-        for (const b of [...stars, ...planets, ...moons]) {
+        // Simple collision avoidance: focused body first, then stars, planets, moons
+        const placed: [number, number, number, number][] = [];
+        const order = [...stars, ...planets, ...moons];
+        if (U.focusedId) { const fb = byId.get(U.focusedId); if (fb) order.unshift(fb); }
+        const seen = new Set<string>();
+        for (const b of order) {
+          if (seen.has(b.id)) continue;
+          seen.add(b.id);
           const sb = S.get(b.id);
           if (!sb || !sb.visible) continue;
           if (b.type === 'moon' && !(U.focusedId === b.parentId || U.focusedId === b.id || sb.r > 5)) continue;
           if (b.type === 'star' && b.id !== 'star-1' && sb.r < 6) continue;
           const label = b.type === 'moon' ? b.name.split(' ').pop()! : b.name;
+          const ly = sb.y + sb.r * (b.hasRings ? 1.6 : 1) + 6;
+          const lw = ctx.measureText(label).width;
+          const rect: [number, number, number, number] = [sb.x - lw / 2 - 2, ly - 1, lw + 4, 14];
+          if (placed.some(q => rect[0] < q[0] + q[2] && q[0] < rect[0] + rect[2] && rect[1] < q[1] + q[3] && q[1] < rect[1] + rect[3])) continue;
+          placed.push(rect);
           ctx.fillStyle = 'rgba(0,0,0,0.6)';
           ctx.fillText(label, sb.x + 1, sb.y + sb.r * (b.hasRings ? 1.6 : 1) + 7);
           ctx.fillStyle = b.isHabitable ? 'rgba(140,255,190,0.95)' : b.type === 'moon' ? 'rgba(200,205,220,0.75)' : 'rgba(235,240,255,0.9)';
@@ -664,7 +676,7 @@ export function SolarSystemViewer({ bodies, showZones = false, systemAge = 1 }: 
       />
 
       {/* Time & view controls */}
-      <div className="absolute left-1/2 -translate-x-1/2 bottom-[118px] sm:bottom-[128px] z-20 flex items-center gap-1 bg-black/55 backdrop-blur-md border border-white/10 rounded-full px-2 py-1.5 shadow-2xl">
+      <div className="absolute left-1/2 -translate-x-1/2 bottom-[118px] sm:bottom-[128px] z-20 flex items-center gap-1 bg-black/55 backdrop-blur-md border border-white/10 rounded-full px-2 py-1.5 shadow-2xl max-w-[calc(100%-16px)] overflow-x-auto no-scrollbar">
         <HudButton onClick={() => setPaused(p => !p)} title="Pausar (Espaço)" active={paused}>
           {paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
         </HudButton>
@@ -682,9 +694,9 @@ export function SolarSystemViewer({ bodies, showZones = false, systemAge = 1 }: 
         <HudButton onClick={() => setLabelsOn(v => !v)} title="Nomes (L)" active={labelsOn}><Tag className="w-4 h-4" /></HudButton>
         <HudButton onClick={() => setZonesOn(v => !v)} title="Zonas térmicas (Z)" active={zonesOn}><Thermometer className="w-4 h-4" /></HudButton>
         <div className="w-px h-5 bg-white/10 mx-1" />
-        <HudButton onClick={() => zoomAt(0.75, size.current.w / 2, size.current.h / 2)} title="Afastar (-)"><ZoomOut className="w-4 h-4" /></HudButton>
+        <span className="hidden sm:contents"><HudButton onClick={() => zoomAt(0.75, size.current.w / 2, size.current.h / 2)} title="Afastar (-)"><ZoomOut className="w-4 h-4" /></HudButton></span>
         <span className="hidden sm:inline text-[10px] font-mono text-neutral-500 w-10 text-center tabular-nums">{zoomLabel < 10 ? zoomLabel.toFixed(1) : Math.round(zoomLabel)}×</span>
-        <HudButton onClick={() => zoomAt(1.33, size.current.w / 2, size.current.h / 2)} title="Aproximar (+)"><ZoomIn className="w-4 h-4" /></HudButton>
+        <span className="hidden sm:contents"><HudButton onClick={() => zoomAt(1.33, size.current.w / 2, size.current.h / 2)} title="Aproximar (+)"><ZoomIn className="w-4 h-4" /></HudButton></span>
         <HudButton onClick={() => { setFocusedId(null); ui.current.focusedId = null; fitSystem(); }} title="Visão geral (F)"><Maximize2 className="w-4 h-4" /></HudButton>
       </div>
 

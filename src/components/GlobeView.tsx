@@ -28,7 +28,7 @@ export function GlobeView({ texture, clouds, cloudsOn, rim, seed }: GlobeViewPro
     let raf = 0, last = performance.now();
     const t0 = last;
     const frame = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = wrap.clientWidth, h = wrap.clientHeight;
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {

@@ -43,6 +43,31 @@ Além do modo exploração, cada gerador pode ser usado separadamente pela tela 
 
 ---
 
+## ✨ Novidades (v1.0 alpha)
+
+- **Planetas de verdade no mapa do sistema** — cada planeta e lua usa a textura gerada pelo próprio gerador de superfície, projetada numa esfera que gira, iluminada pela estrela (terminador dia/noite), com halo atmosférico, nuvens em movimento, brilho de magma no lado noturno e anéis procedurais.
+- **Estrelas animadas** — fotosfera com granulação, raios e coroa; cometas com cauda de poeira e cauda iônica sempre apontando para longe da estrela; cinturões de asteroides com rochas pixel-art.
+- **Globo 3D** — no mapa de superfície, alterne entre *Mapa* e *Globo 3D* (arraste para girar/inclinar, roda/pinça para zoom, nuvens opcionais).
+- **Scanner planetário** — gravidade, temperatura em °C, pressão, composição atmosférica, duração do dia, biosfera e índice de similaridade com a Terra, todos determinísticos pela seed.
+- **Controles de tempo** — pausar, 1×/4×/16×/64×, calendário (ano/dia), toggles de órbitas, nomes e zonas térmicas, atalhos de teclado.
+- **Galáxias fotográficas** — braços espirais azulados, bojo amarelado, regiões HII rosadas e poeira, calculados a partir das estrelas geradas.
+- **Universo em campo profundo** — cada galáxia distante é um sprite procedural do seu formato (espiral, barrada, elíptica, anel, irregular) com inclinação aleatória.
+- **Menu vivo** — cena procedural animada com um mundo diferente do gerador a cada visita.
+- **Sem travamentos** — toda geração de planeta roda em **Web Workers** (pool para texturas + worker dedicado para a superfície em 2048×1024), com cache LRU de texturas.
+
+### ⌨️ Atalhos no Sistema Solar
+
+| Tecla | Ação |
+|-------|------|
+| `Espaço` | Pausar / continuar |
+| `1`–`9` | Focar no planeta N |
+| `+` / `-` | Zoom |
+| `F` | Visão geral do sistema |
+| `O` / `L` / `Z` | Órbitas / nomes / zonas térmicas |
+| `Esc` | Soltar o foco |
+
+---
+
 ## 🧬 Geração Procedural Determinística
 
 O coração do projeto é um sistema de **propagação de sementes em cascata**:
@@ -68,6 +93,9 @@ Cada nível deriva sua semente do nível pai, garantindo que:
 
 ### Renderização
 - **Canvas 2D API** para renderização de alta performance
+- **Rasterizador de esferas em software** (tabelas pré-computadas por tamanho, re-render apenas quando rotação/luz mudam)
+- **Web Workers** para toda geração pesada de planetas
+- **Fundo espacial procedural** com nebulosa “tileável” (ruído 4D em toro) e camadas de estrelas com parallax
 - **Frustum Culling** — apenas objetos visíveis são desenhados
 - **Batch Rendering** — galáxias renderizadas via texturas pré-computadas ("puffs")
 - **LOD dinâmico** — nebulosas desaparecem ao dar zoom, estrelas individuais aparecem
@@ -119,7 +147,7 @@ npm install
 npm run dev
 ```
 
-O app estará disponível em `http://localhost:5173/`
+O app estará disponível em `http://localhost:3000/UniverseGeneratorDemo/`
 
 ---
 
@@ -135,7 +163,7 @@ src/
 │   │   └── HyperspaceTransition.tsx # Efeito visual de hiperespaço
 │   ├── Universe/                # Visualizador de Universo
 │   ├── Galaxy/                  # Visualizador de Galáxia
-│   ├── SolarSystem/             # Visualizador de Sistema Solar + Superfície
+│   ├── SolarSystem/             # Visualizador de Sistema Solar + Superfície + Globo 3D
 │   └── MainMenu.tsx             # Menu principal
 ├── stores/
 │   └── useGameEngine.ts         # Estado global Zustand (LOD, navegação, seeds)
@@ -143,7 +171,8 @@ src/
 │   ├── universe/                # Gerador de universo
 │   ├── galaxy/                  # Gerador de galáxia
 │   ├── solar-system/            # Gerador de sistema solar
-│   └── planet-generator/        # Gerador de superfície planetária
+│   ├── planet-generator/        # Gerador de superfície + Web Worker + perfis visuais
+│   └── render/                  # Esferas planetárias, estrelas, anéis, galáxias, fundo espacial
 └── hooks/                       # Controllers dos geradores individuais
 ```
 

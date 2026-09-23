@@ -66,8 +66,8 @@ export function MenuScene({ seed }: { seed: string }) {
     const t0 = last;
 
     const frame = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000); last = now;
-      const t = (now - t0) / 1000;
+      const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
+      const t = Math.max(0, (now - t0) / 1000);
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth, h = canvas.clientHeight;
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
