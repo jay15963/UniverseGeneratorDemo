@@ -125,17 +125,17 @@ const pool = new TexturePool();
 export const SPRITE_TEX_W = 256;
 export const SPRITE_TEX_H = 128;
 
-export function textureKey(config: PlanetConfig) {
-  return `${config.seed}|${config.planetType}|${SPRITE_TEX_W}`;
+export function textureKey(config: PlanetConfig, width = SPRITE_TEX_W) {
+  return `${config.seed}|${config.planetType}|${width}`;
 }
 
 export function peekPlanetTexture(config: PlanetConfig) {
   return pool.peek(textureKey(config));
 }
 
-export function requestPlanetTexture(config: PlanetConfig, priority = 0): Promise<PlanetTexture> {
-  const small: PlanetConfig = { ...config, width: SPRITE_TEX_W, height: SPRITE_TEX_H };
-  return pool.request(textureKey(config), small, priority);
+export function requestPlanetTexture(config: PlanetConfig, priority = 0, width = SPRITE_TEX_W): Promise<PlanetTexture> {
+  const sized: PlanetConfig = { ...config, width, height: width / 2 };
+  return pool.request(textureKey(config, width), sized, priority);
 }
 
 export function cancelPlanetTexturesExcept(configs: PlanetConfig[]) {

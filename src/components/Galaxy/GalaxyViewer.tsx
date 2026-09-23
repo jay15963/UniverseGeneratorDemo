@@ -1,4 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { bakeGalaxyGlow } from '../../lib/render/galaxyGlow';
+import { SpaceBackdrop } from '../../lib/render/spaceBackdrop';
 import { StellarSystemMetadata, GalaxyLayer, GalaxyConfig } from '../../lib/galaxy/types';
 import { ZoomIn, ZoomOut, Crosshair, Map as MapIcon, Info, ChevronRight, AlertTriangle } from 'lucide-react';
 import { GalaxyLegend } from './GalaxyLegend';
@@ -53,6 +55,14 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
    // Logical space based on the generator radius. We add padding so the edges aren't touching canvas borders.
    const LOGICAL_RADIUS = config.radius * 1.5;
 
+   // Photographic integrated-light image of the galaxy (baked once per generation)
+   const glow = useMemo(
+      () => (stars.length ? bakeGalaxyGlow(stars, LOGICAL_RADIUS, config.radius, config.age, config.seed) : null),
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [stars],
+   );
+   const backdrop = useMemo(() => new SpaceBackdrop({ seed: config.seed + '_intergalactic', nebula: 0.22, density: 0.7 }), [config.seed]);
+
    // Track parent container resize to dynamically resize canvas and eliminate black bars
    useEffect(() => {
       if (!containerRef.current) return;
@@ -80,9 +90,8 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      // Background clearing
-      ctx.fillStyle = '#050505';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Deep-space backdrop with gentle parallax
+      backdrop.draw(ctx, canvas.width, canvas.height, -offset.x * 2, -offset.y * 2, 0, scale);
 
       ctx.save();
 
@@ -92,6 +101,18 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
 
       // Calcular o Ratio o mais cedo possível, pois as Nebulosas também usam coordenadas mapeadas agora
       const ratio = (Math.min(canvas.width, canvas.height) / 2) / LOGICAL_RADIUS;
+
+      // Integrated light (arms, bulge, HII regions, dust lanes) under the resolved stars
+      if (glow) {
+         ctx.save();
+         ctx.globalCompositeOperation = 'lighter';
+         ctx.imageSmoothingEnabled = true;
+         ctx.imageSmoothingQuality = 'high';
+         ctx.globalAlpha = layer === GalaxyLayer.SYSTEM ? Math.max(0.22, 1 - (scale - 1) / 6) : 0.18;
+         const E = LOGICAL_RADIUS * ratio;
+         ctx.drawImage(glow, -E, -E, E * 2, E * 2);
+         ctx.restore();
+      }
 
       // Render Stars
 
@@ -238,12 +259,10 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
       });
 
       // Render "Smoky" Background Nebula ON TOP of stars & BHs (hides them with gas until zoomed in)
-      if (layer === GalaxyLayer.SYSTEM && stars.length > 0) {
-         renderNebulaBackground(ctx, ratio);
-      }
+
 
       ctx.restore();
-   }, [stars, layer, scale, offset, config.radius, dimensions.w, dimensions.h]);
+   }, [stars, layer, scale, offset, config.radius, dimensions.w, dimensions.h, glow, backdrop]);
 
    // -- HUD Render Loop (Extremely Fast, only runs for hovered/selected) --
    useEffect(() => {
