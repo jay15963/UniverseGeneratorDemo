@@ -365,12 +365,22 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
       ctx.restore();
    };
 
-   const handleWheel = (e: React.WheelEvent) => {
-      e.preventDefault();
+   const handleWheel = (e: { deltaY: number }) => {
       const zoomSensitivity = 0.001;
       const newScale = Math.max(0.2, Math.min(20, scale - e.deltaY * zoomSensitivity));
       applyZoom(newScale);
    };
+
+   // Native non-passive wheel listener so the page doesn't scroll while zooming
+   const wheelRef = useRef(handleWheel);
+   wheelRef.current = handleWheel;
+   useEffect(() => {
+      const el = containerRef.current;
+      if (!el) return;
+      const fn = (e: WheelEvent) => { e.preventDefault(); wheelRef.current(e); };
+      el.addEventListener('wheel', fn, { passive: false });
+      return () => el.removeEventListener('wheel', fn);
+   }, []);
 
    const applyZoom = (newScale: number) => {
       setScale(newScale);
@@ -602,8 +612,7 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
          <div
             ref={containerRef}
             className="flex-1 bg-black rounded-xl border border-neutral-700 overflow-hidden relative"
-            onWheel={handleWheel}
-            onPointerDown={handlePointerDown}
+                        onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerLeave={() => { setIsDragging(false); setHoveredStar(null); }}
