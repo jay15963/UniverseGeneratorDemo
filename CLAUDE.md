@@ -37,3 +37,10 @@ These were set by the project owner — keep them:
   tribal era.
 - Everything is a deterministic function of `(seed, params, mode)`; random numbers are drawn up-front in a fixed order so
   sliders morph the same species instead of reshuffling it.
+
+## Demo reel (`src/components/Demo/`)
+- Menu → "Assistir demo": a self-running film of the living worlds, no editors and no HUD - only the engine FPS
+  (`frameMeter`: 1000 / CPU ms per frame, i.e. uncapped by the monitor). Esc or the auto-hiding X leaves it.
+- `DemoReel` plays space shots (gas-giant flyby, planet approach + dive) and mounts `SurvivalView` with a `cinematic`
+  director (`director.ts`): shots are specs (coast / wild / peaks / cold / rise, hours, weather, zoom); spots are scouted
+  on the planet map and refined on the loaded tiles. Add worlds or shots in the `PLANETS` list. `#demo=N` starts at world N.

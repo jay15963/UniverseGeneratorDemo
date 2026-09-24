@@ -16,6 +16,8 @@ import { SpriteStore } from '../../lib/fauna/spriteStore';
 import { Fauna, World, AnimalDraw } from './fauna';
 import { Genome, Stage as CStage } from '../../lib/creature/genome';
 import { LayerType } from '../../lib/planet-generator/generator';
+import { frameMeter } from '../../lib/render/frameMeter';
+import type { Cinematic, CineApi } from '../Demo/cinema';
 
 interface Props {
   session: PlanetSession;
@@ -27,6 +29,8 @@ interface Props {
   spectator?: boolean;
   /** the player's own species (drawn in its tribal era); falls back to the painted tribal hunter */
   playerCreature?: { genome: Genome; citizen: number } | null;
+  /** Scripted camera (demo reel): no HUD, no input, nothing saved; implies the spectator camera. */
+  cinematic?: Cinematic | null;
 }
 
 /** A drawable image: a GPU texture region (WebGL path) or a canvas (Canvas2D fallback). */
@@ -142,7 +146,9 @@ const PLAYER_K = 0.4;
 const REACH = 26;
 const SPEED = 74;
 
-export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = false, playerCreature = null }: Props) {
+export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null }: Props) {
+  const cine = cinematic;
+  const spectator = spectatorProp || !!cine;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const miniRef = useRef<HTMLCanvasElement>(null);
   const cfg = session.config;
@@ -193,6 +199,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
   // Save / load (inventory & gathered resources persist per planet)
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    if (cine) return;
     try {
       const raw = localStorage.getItem(saveKey);
       if (raw) {
@@ -216,8 +223,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
         }));
       } catch { /* ignore */ }
     };
+    if (cine) return;
     const id = setInterval(save, 4000);
     return () => { clearInterval(id); save(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saveKey]);
 
   // ---------------------------------------------------------------------------
@@ -419,6 +428,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); if (bagOpen) setBagOpen(false); else onExit(); return; }
+      if (cine) return;
       const k = e.key.toLowerCase();
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k)) { e.preventDefault(); G.current.keys.add(k); }
       if (k === 'e' || k === ' ') { e.preventDefault(); interact(G.current.target); }
@@ -452,6 +462,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
     let acc = 0;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (cine) return;
       acc += e.deltaY;
       if (Math.abs(acc) < 40 && Math.abs(e.deltaY) < 40) return; // trackpads: accumulate small deltas
       zoomStep(acc > 0 ? 1 : -1);
@@ -767,6 +778,30 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
       }
     };
 
+    // --- demo reel: the director drives camera, clock and weather ---
+    fx.lantern = !cine;
+    let cineFade = cine ? 1 : 0, cineZoom = 3, cineWeather = '';
+    const cineApi: CineApi = {
+      loaded: (x, y, zoom) => {
+        if (lodOf(zoom) !== 'local') return !!mapImg;
+        const hw = canvas.clientWidth / zoom / 2 + 8, hh = canvas.clientHeight / zoom / 2 + 8;
+        const g = G.current;
+        for (let cy = Math.floor((y - hh) / CHUNK_PX); cy <= Math.floor((y + hh + MAX_LEVEL * LIFT) / CHUNK_PX); cy++)
+          for (let cx = Math.floor((x - hw) / CHUNK_PX); cx <= Math.floor((x + hw) / CHUNK_PX); cx++) if (!g.chunks.has(`${cx},${cy}`)) return false;
+        return true;
+      },
+      get viewW() { return canvas.clientWidth; },
+      get viewH() { return canvas.clientHeight; },
+      tile: (x, y) => {
+        const q = cellAt(x, y);
+        return q ? { water: !!GROUND_INFO[q.c.data.ground[q.k] as Ground].water, lava: !!q.c.data.lava[q.k], level: q.c.data.level[q.k] } : null;
+      },
+      animals: () => fauna.all,
+      get worldZoom() {
+        return Math.min(canvas.clientWidth / WORLD_PX, canvas.clientHeight / (WORLD_PX * (session.height / session.width))) * 0.92;
+      },
+    };
+
     let fpsFrames = 0, fpsT = performance.now(), cpuAcc = 0, last0 = 0;
     const frame = (now: number) => {
       const cpu0 = performance.now();
@@ -790,6 +825,14 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
       if (!g.ready) {
         const c = chunkAt(g.x, g.y);
         if (c && g.x) { g.ready = true; setLoading(''); g.level = levelAt(g.x, g.y) ?? 0; g.lift = liftAt(g.x, g.y); }
+      }
+
+      if (cine && (g.x || g.y)) {
+        const cam = cine.update(dt, cineApi);
+        g.x = cam.x; g.y = cam.y; cineZoom = cam.zoom; cineFade = cam.fade;
+        if (cam.hour !== undefined) g.time = ((((cam.hour / 24) % 1) + 1) % 1) * DAY_SECONDS;
+        if (cam.weather && cam.weather !== cineWeather) { cineWeather = cam.weather; fx.force(cam.weather, cineFade > 0.9); }
+        if (g.ready && !mapImg) loadMap();
       }
 
       // --- spectator camera: free flight, faster the further the zoom is pulled out ---
@@ -850,13 +893,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
       }
 
       // --- zoom (smooth, in log space) & level of detail ---
-      const zt = zoomTarget();
+      const zt = cine ? cineZoom : zoomTarget();
       g.zoom = zt;
       const lz = Math.log(g.zoomView), lt = Math.log(zt);
-      g.zoomView = Math.abs(lt - lz) < 0.004 ? zt : Math.exp(lz + (lt - lz) * Math.min(1, dt * 11));
+      g.zoomView = cine || Math.abs(lt - lz) < 0.004 ? zt : Math.exp(lz + (lt - lz) * Math.min(1, dt * 11));
       const Z = g.zoomView;
       const lod = lodOf(Z);
-      if (lod !== lodShown || zt !== zoomShown) { lodShown = lod; zoomShown = zt; setLodLabel({ lod, zoom: zt }); }
+      if (lod !== lodShown || (!cine && zt !== zoomShown)) { lodShown = lod; zoomShown = zt; setLodLabel({ lod, zoom: zt }); }
       const local = lod === 'local';
 
       // --- interaction target (same terrace only; hand-gatherables win over tool-only things) ---
@@ -1049,7 +1092,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
         }
         if (sun > -0.2 && sun < 0.25) { octx.fillStyle = `rgba(255,120,40,${(1 - Math.abs(sun - 0.02) / 0.23) * 0.12})`; octx.fillRect(0, 0, DW, DH); }
         fx.drawScreen(octx, DW, DH, S, fxc, toScreen);
-      } else if (g.ready) {
+      } else if (g.ready && !cine) {
         // zoomed-out views: a clear "you are here" marker (drawn at every horizontal wrap of the planet)
         const [px, py] = toScreen(g.x, g.y - g.lift);
         for (let k = -1; k <= 1; k++) {
@@ -1068,6 +1111,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
           }
           octx.stroke();
         }
+      }
+
+      if (cineFade > 0.002) {
+        octx.setTransform(1, 0, 0, 1, 0, 0);
+        octx.fillStyle = `rgba(0,0,0,${Math.min(1, cineFade)})`;
+        octx.fillRect(0, 0, DW, DH);
       }
 
       // minimap
@@ -1114,7 +1163,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
         } else setPrompt(null);
       }
 
-      cpuAcc += performance.now() - cpu0;
+      const cpuMs = performance.now() - cpu0;
+      cpuAcc += cpuMs;
+      frameMeter.add(cpuMs, now);
       fpsFrames++;
       if (now - fpsT >= 500) {
         const pool = poolRef.current;
@@ -1144,7 +1195,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
 
   const itemIcon = (it: ItemDef) => <ItemIcon def={it} bank={bank} />;
 
-  const ui = (
+  const ui = cine ? (
+    <div className="fixed inset-0 z-[300] bg-black select-none pointer-events-none">
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" style={{ imageRendering: 'pixelated' }} />
+      <canvas ref={overlayRef} className="absolute inset-0 w-full h-full" />
+      {loading && <div className="absolute inset-0 bg-black" />}
+    </div>
+  ) : (
     <div className="fixed inset-0 z-[300] bg-black select-none">
       <canvas
         ref={canvasRef}
