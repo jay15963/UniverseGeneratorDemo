@@ -119,7 +119,7 @@ export function drawBackdrop(ctx: Ctx, W: number, H: number, stage: Stage, g: Ge
     for (let k = 0; k < 4; k++) ctx.fillRect(Math.round(x + k * 6), Math.round(y - (k % 2) * 2), 14, 4);
   }
 
-  if (stage === Stage.AMPHIBIAN) {
+  if (stage === Stage.AMPHIBIAN || stage === Stage.AMPHIBIAN_GIANT) {
     const sea = hsl(0.53, 0.5, 0.38);
     ctx.fillStyle = css(sea); ctx.fillRect(0, gy - 26, W, 26);
     ctx.fillStyle = css(mix(sea, [255, 255, 255], 0.35));
