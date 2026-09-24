@@ -68,3 +68,21 @@ These were set by the project owner — keep them:
 - Cosmos renderers (`cosmos.ts`) reuse the game's generators/sprites with a scripted camera; `creatures.ts` renders
   sheets through `SpriteStore` workers. `#trailer=S` starts at second S; `#trailer=S,0.0333` runs a silent fixed-step
   clock (for slow test machines).
+
+## Structure generator (`src/lib/structure/`, `src/components/Structure/`)
+Owner's rules - keep them:
+- **Pure 2D pixel art, exactly like the creatures - never 3D.** No meshes, no z-buffer, no faceted volumes. Every piece
+  is a 2D polygon, ellipse or tapered capsule painted by the creatures' rasterizer (`creature/raster.ts`, which also
+  holds the building textures: brick, stone, plank, thatch, tile, panel...). `draft.ts` only places pieces for a facing
+  and orders the painting, like `pose.ts`; round volumes are single 2D silhouettes, walls/roof slopes single polygons
+  lit by the way they face. 8 facings: E, SE, S, NE, N drawn, W/SW/NW mirrored. 8 animation frames.
+- **Animate what makes sense**: smoke from chimneys/stacks, fire, windmill sails, turbines, water wheels, flags,
+  pumpjacks, cranes, headframe wheels, blinking beacons, force fields.
+- **Earth-like is only the palette** (natural/real materials); forms stay free (pods, hexagons, mushrooms, spires,
+  stilts). Alien-like frees the hues. A culture (`genome.ts`, seed + world sliders) fixes the forms for all eras;
+  `kit.ts` gives the era's materials.
+- Categories: Residential, Industrial, Extraction, Commercial, Military; sizes small / medium / large / giant; every type
+  draws all 8 civilisation eras. **New types** = one builder + one entry in `cat/<category>.ts` (the registry is
+  `registry.ts`); the owner will ask for more (target: 100+ types), so keep builders self-contained and reuse
+  `parts.ts` / `core.ts` (`house()` is the generic storeyed body with the culture's plan, windows, door and roof).
+- Menu → "Gerador de Estruturas" (`#estruturas` opens it directly).

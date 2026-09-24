@@ -11,7 +11,10 @@ import { hash3, vnoise, bayer } from '../terrain/noise';
 export type RGB = [number, number, number];
 export type Tex =
   | 'smooth' | 'scales' | 'fur' | 'feathers' | 'chitin' | 'plates' | 'skin' | 'fin' | 'cloth' | 'denim' | 'leather'
-  | 'metal' | 'glass' | 'gel' | 'bone' | 'wood' | 'compound' | 'glow' | 'hair' | 'wool' | 'knit' | 'silk';
+  | 'metal' | 'glass' | 'gel' | 'bone' | 'wood' | 'compound' | 'glow' | 'hair' | 'wool' | 'knit' | 'silk'
+  // architecture (structures): u runs along the wall, v up it when a part carries a `uv` mapping
+  | 'brick' | 'stone' | 'ashlar' | 'plank' | 'log' | 'thatch' | 'shingle' | 'tile' | 'adobe' | 'concrete' | 'panel'
+  | 'corrugated' | 'glazing' | 'hex' | 'leafy' | 'crop' | 'soil' | 'snow' | 'paving' | 'grid' | 'water' | 'hide';
 
 export interface Mat {
   ramp: RGB[];                  // 6 colours, dark -> light
@@ -39,6 +42,7 @@ export interface Part {
   dark?: number;     // shading multiplier (far-side limbs sit in shadow)
   noLine?: boolean;  // never casts inner lines on the parts behind it
   flat?: number;     // 0..1: flattens the normal (membranes, cloth panels)
+  uv?: number[];     // polygons: texture coords u = a*x + b*y + c, v = d*x + e*y + f (default: the pixel position)
 }
 
 const L = (() => { const x = -0.45, y = -0.7, z = 0.56, n = Math.hypot(x, y, z); return [x / n, y / n, z / n]; })();
@@ -109,6 +113,73 @@ function texDelta(m: Mat, x: number, y: number, u: number, v: number, nz: number
     case 'compound': return ((x + (y & 1)) % 2 === 0 && (y & 1) === 0) ? 0.18 : -0.05;
     case 'gel': return (vnoise(x / 2.5, y / 2.5, 18) - 0.5) * 0.18;
     case 'glass': return nz > 0.9 ? -0.1 : 0;
+    case 'brick': {
+      const bh = 2.4 * s, bw = 5 * s, row = Math.floor(v / bh), uu = u + (row & 1) * bw * 0.5;
+      if (frac(v / bh) < 0.3 || frac(uu / bw) < 0.12) return -0.22;
+      return (h01(Math.floor(uu / bw), row, 31) - 0.5) * 0.12;
+    }
+    case 'stone': {
+      const bh = 3.6 * s, row = Math.floor(v / bh), bw = (4.5 + h01(row, 0, 32) * 3) * s, uu = u + h01(row, 1, 33) * 9;
+      if (frac(v / bh) < 0.2 || frac(uu / bw) < 0.1) return -0.24;
+      return (h01(Math.floor(uu / bw), row, 34) - 0.5) * 0.16 + (frac(v / bh) > 0.8 ? 0.05 : 0);
+    }
+    case 'ashlar': {
+      const bh = 4 * s, bw = 8 * s, row = Math.floor(v / bh), uu = u + (row & 1) * bw * 0.5;
+      if (frac(v / bh) < 0.12 || frac(uu / bw) < 0.06) return -0.16;
+      return (h01(Math.floor(uu / bw), row, 35) - 0.5) * 0.06;
+    }
+    case 'plank': {
+      const pw = 2.6 * s;
+      if (frac(u / pw) < 0.18) return -0.2;
+      return (h01(Math.floor(u / pw), 0, 36) - 0.5) * 0.1 + Math.sin(v * 1.3 + Math.floor(u / pw) * 2) * 0.03;
+    }
+    case 'log': {
+      const lh = 2.8 * s, f = frac(v / lh);
+      if (f < 0.14) return -0.24;
+      return (0.5 - Math.abs(f - 0.55)) * 0.28 - 0.06;
+    }
+    case 'thatch': {
+      const row = Math.floor(v / (3.2 * s));
+      return (h01(Math.floor(u * 1.2), row, 38) - 0.5) * 0.26 + (frac(v / (3.2 * s)) < 0.2 ? -0.14 : 0);
+    }
+    case 'shingle': {
+      const rh = 2.6 * s, sw = 3.2 * s, row = Math.floor(v / rh), uu = u + (row & 1) * sw * 0.5;
+      const fu = frac(uu / sw), fv = frac(v / rh);
+      if (fv < 0.22 + (fu - 0.5) * (fu - 0.5) * 0.9) return -0.2;
+      return (h01(Math.floor(uu / sw), row, 40) - 0.5) * 0.1;
+    }
+    case 'tile': return Math.sin(frac(u / (2.6 * s)) * Math.PI) * 0.2 - 0.1 + (frac(v / (4 * s)) < 0.16 ? -0.14 : 0);
+    case 'adobe': return (vnoise(u / 3, v / 3, 41) - 0.5) * 0.16 - (h01(Math.floor(u), Math.floor(v), 42) > 0.985 ? 0.12 : 0);
+    case 'concrete':
+      if (frac(u / (12 * s)) < 0.05 || frac(v / (9 * s)) < 0.06) return -0.12;
+      return (h01(x, y, 43) - 0.5) * 0.05 + (vnoise(u / 5, v / 5, 44) - 0.5) * 0.06;
+    case 'panel': {
+      const fu = frac(u / (8 * s)), fv = frac(v / (6 * s));
+      if (fu < 0.08 || fv < 0.1) return -0.18;
+      return fu > 0.14 && fu < 0.22 && fv > 0.16 && fv < 0.3 ? 0.14 : 0;
+    }
+    case 'corrugated': return frac(u / (1.7 * s)) < 0.5 ? 0.08 : -0.07;
+    case 'glazing':
+      if (frac(u / (6 * s)) < 0.12 || frac(v / (5 * s)) < 0.14) return -0.3;
+      return frac((u + v) * 0.09) < 0.14 ? 0.24 : 0;
+    case 'hex': {
+      const k = 4 * s, row = Math.floor(v / (k * 0.86)), uu = u / k + (row & 1) * 0.5;
+      const fu = frac(uu), fv = frac(v / (k * 0.86));
+      if (fv < 0.14 || Math.abs(fu - 0.5) > 0.42) return -0.2;
+      return (h01(Math.floor(uu), row, 47) - 0.5) * 0.08;
+    }
+    case 'leafy': return (h01(x >> 1, y >> 1, 50) - 0.5) * 0.3 + (h01(x, y, 51) > 0.9 ? 0.12 : 0);
+    case 'crop': return frac(u / (3 * s)) < 0.45 ? 0.12 + (h01(x, y, 52) - 0.5) * 0.1 : -0.12;
+    case 'soil': return (h01(x, y, 53) - 0.5) * 0.12 + (frac(u / (3 * s)) < 0.3 ? -0.08 : 0);
+    case 'snow': return (h01(x, y, 54) > 0.93 ? 0.06 : 0) + (vnoise(u / 8, v / 8, 55) - 0.5) * 0.05;
+    case 'paving': {
+      const k = 4 * s, row = Math.floor(v / k), uu = u + (row & 1) * k * 0.5;
+      if (frac(v / k) < 0.15 || frac(uu / k) < 0.15) return -0.14;
+      return (h01(Math.floor(uu / k), row, 58) - 0.5) * 0.08;
+    }
+    case 'grid': return frac(u / (3 * s)) < 0.18 || frac(v / (3 * s)) < 0.18 ? 0.16 : -0.04;
+    case 'water': return Math.sin(u * 0.8 + Math.sin(v * 0.5) * 2) > 0.85 ? 0.2 : 0;
+    case 'hide': return (vnoise(u / 4, v / 4, 46) - 0.5) * 0.2 + (Math.abs(frac(u / (9 * s)) - 0.5) < 0.03 ? -0.14 : 0);
     default: return 0;
   }
 }
@@ -157,6 +228,7 @@ export function rasterize(parts: Part[], w: number, h: number): Raster {
       } else {
         if (!inPoly(s.pts, px, py)) continue;
         nx = ((px - pcx) / phw) * 0.62; ny = ((py - pcy) / phh) * 0.62; nz = Math.sqrt(Math.max(0.05, 1 - nx * nx - ny * ny));
+        if (pt.uv) { const q = pt.uv; u = q[0] * px + q[1] * py + q[2]; v = q[3] * px + q[4] * py + q[5]; }
       }
       const i = y * w + x;
       if (pt.m.alpha !== undefined && pt.m.alpha < 1 && own[i] >= 0) {
