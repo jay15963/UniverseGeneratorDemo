@@ -266,11 +266,14 @@ export function makeDeath(g: Genome, kind: Death, skin: Mat): DeathHooks {
       case 'burst_top': case 'burst_bottom': {
         const top = kind === 'burst_top', pb = 0.1;
         const jitter: Xf = p < pb ? { R: I3, t: [rn() * U * 0.03, rn() * U * 0.02, rn() * U * 0.03] } : ID;
-        const fallDir: V3 = r() < 0.5 ? [1, 0, 0] : [-1, 0, 0];
+        // what is left always slumps forward - nothing is launched by the blast
+        const fallDir: V3 = [1, 0, 0];
         if (top) {
           const lower = (q: number) => then(q < pb ? jitter : ID, topple(B, q, 0.55, fallDir, 0.32));
           const lo = withClip(lower(p), [0, -1, 0], [0, yc, 0]);
-          place = n => (p < pb ? [jitter] : n === 'torso' || n === 'back' || n === 'misc' ? [lo] : n.startsWith('leg') || n === 'tail' || n === 'aux:belt' ? [lower(p)] : n.startsWith('item') || n === 'aux:back' ? null : []);
+          // the back gear is torn off and thrown with the gibs (it never stays hanging in the air)
+          const pack = flight(p, pb, [C[0] - B.rC * 1.3, C[1], 0], [-80 - r() * 40, 150 + r() * 60, rn() * 60], [0, 0, 1], 2.2, B.rC * 0.6);
+          place = n => (p < pb ? [jitter] : n === 'torso' || n === 'back' || n === 'misc' ? [lo] : n.startsWith('leg') || n === 'tail' || n === 'aux:belt' ? [lower(p)] : n === 'aux:back' ? [pack] : n.startsWith('item') ? null : []);
           faces.push({ name: 'torso', i: 0, draw: S => { if (p < pb) return; const pts: V3[] = []; for (let i = 0; i < 14; i++) { const t = (i / 14) * Math.PI * 2; pts.push([Math.cos(t) * rc * (0.9 + (i % 3) * 0.12), yc + (i % 2) * 2, Math.sin(t) * rc]); } if (S.facing([0, 1, 0]) > 0.04) { S.poly(pts, G.meat, { bias: 0.4, flat: 0.5 }); S.ball([-rc * 0.55, yc + 2, 0], rc * 0.24, G.bone, { bias: 0.42 }); S.limb([-rc * 0.55, yc, 0], [-rc * 0.6, yc + U * 0.25, 0], U * 0.04, U * 0.03, G.bone, { bias: 0.43 }); } } });
           drops.push({ o: q => apply(lower(q), [0, yc, 0]), dir: q => mv(lower(q).R, [0, 1, 0]), p0: pb, p1: 0.62, n: 70, speed: 260, spread: 50, size: 1.3, pulse: true });
           for (let i = 0; i < 4; i++) drops.push({ o: () => [0, C[1], 0], dir: () => [rn(), 0.6 + r(), rn()], p0: pb, p1: pb + 0.03, n: 26, speed: 210, spread: 90, size: 1.5 });
@@ -287,7 +290,8 @@ export function makeDeath(g: Genome, kind: Death, skin: Mat): DeathHooks {
             const T = Math.max(0, (q - pb) * DUR), fallH = yc - rc * 0.95, y = Math.min(fallH, 0.5 * GRAV * T * T);
             const u = seg(q, 0.42, 0.72), a = (Math.PI / 2) * easeIn(u);
             const d: Xf = { R: I3, t: [0, -y, 0] };
-            const tip = about(rot(cross([0, 1, 0], fallDir), a), [fallDir[0] * rc, rc * 0.95, 0], [0, B.rC * 0.6 * easeIn(u), 0]);
+            // the torso falls straight down onto its stump, then slumps over its front edge
+            const tip = about(rot(cross([0, 1, 0], fallDir), a), [fallDir[0] * rc, rc * 0.95, 0], [0, B.rC * 0.25 * easeIn(u), 0]);
             return then(then(q < pb ? jitter : ID, d), tip);
           };
           const up = withClip(drop(p), [0, 1, 0], [0, yc, 0]);
