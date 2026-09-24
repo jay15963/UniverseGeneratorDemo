@@ -6,12 +6,12 @@ import { rasterize, shapeBounds, Part, Tex } from './raster';
 import { Sketch, Dir8, DIRS, DIR_SRC, FACINGS, Anim } from './pose';
 import { buildCell, Rig } from './cell';
 import { buildLarva, buildSwimmer, buildAmphibian, buildLand } from './bodies';
-import { buildCiv } from './civ';
+import { buildCiv, LoadHooks } from './civ';
 
 export const FRAMES = 8;
 export type { Anim };
 
-export const ANIM_PT: Record<Anim, string> = { idle: 'Parado', walk: 'Andando', run: 'Correndo', fly: 'Voando', swim: 'Nadando' };
+export const ANIM_PT: Record<Anim, string> = { idle: 'Parado', walk: 'Andando', run: 'Correndo', fly: 'Voando', swim: 'Nadando', use: 'Usando' };
 
 /** Animations that make sense for a creature at a stage (first = default). */
 export function animsFor(g: Genome, stage: Stage): Anim[] {
@@ -24,11 +24,11 @@ export function animsFor(g: Genome, stage: Stage): Anim[] {
   return flies ? ['idle', 'walk', 'fly'] : ['idle', 'walk', 'run'];
 }
 
-const SMALL_TEX: Partial<Record<Tex, Tex>> = { scales: 'skin', feathers: 'skin', plates: 'skin', chitin: 'smooth', fin: 'smooth', knit: 'cloth', wool: 'cloth', denim: 'cloth', compound: 'smooth' };
+const SMALL_TEX: Partial<Record<Tex, Tex>> = { mail: 'metal', quilt: 'cloth', scales: 'skin', feathers: 'skin', plates: 'skin', chitin: 'smooth', fin: 'smooth', knit: 'cloth', wool: 'cloth', denim: 'cloth', compound: 'smooth' };
 
-export function buildParts(g: Genome, stage: Stage, frame: number, dir: Dir8 = 'E', citizen = 0, frames = FRAMES, anim: Anim = 'walk', k = 1): Part[] {
+export function buildParts(g: Genome, stage: Stage, frame: number, dir: Dir8 = 'E', citizen = 0, frames = FRAMES, anim: Anim = 'walk', k = 1, load?: LoadHooks): Part[] {
   const ph = (frame / frames) * Math.PI * 2;
-  const blink = frame === frames - 2 && g.r[3] > 0.2;
+  const blink = frame === frames - 2 && g.r[3] > 0.2 && anim !== 'use';
   const kit = makeKit(g, stage);
   let parts: Part[];
   if (stage === Stage.CELL) {
@@ -41,7 +41,7 @@ export function buildParts(g: Genome, stage: Stage, frame: number, dir: Dir8 = '
       case Stage.AQUA: case Stage.AQUA_GIANT: buildSwimmer(S, kit, g, ph, blink, stage === Stage.AQUA_GIANT); break;
       case Stage.AMPHIBIAN: case Stage.AMPHIBIAN_GIANT: buildAmphibian(S, kit, g, ph, blink, stage === Stage.AMPHIBIAN_GIANT); break;
       case Stage.LAND: case Stage.LAND_GIANT: buildLand(S, kit, g, ph, blink, stage === Stage.LAND_GIANT); break;
-      default: buildCiv(S, kit, g, stage, ph, blink, citizen); break;
+      default: buildCiv(S, kit, g, stage, ph, blink, citizen, load); break;
     }
     parts = S.parts();
   }
@@ -60,14 +60,14 @@ function scalePart(p: Part, k: number) {
 export interface SpriteData { frames: Uint8ClampedArray[]; w: number; h: number; ax: number; ay: number; grounded: boolean }
 
 /** DOM-free render of one facing (mirrored facings are flipped copies). */
-export function spriteData(g: Genome, stage: Stage, dir: Dir8 = 'E', citizen = 0, frames = FRAMES, anim: Anim = 'walk', k = 1): SpriteData {
+export function spriteData(g: Genome, stage: Stage, dir: Dir8 = 'E', citizen = 0, frames = FRAMES, anim: Anim = 'walk', k = 1, load?: LoadHooks): SpriteData {
   const d: Dir8 = stage === Stage.CELL ? 'E' : dir;
   const [src, mirror] = DIR_SRC[d];
   if (mirror) {
-    const b = spriteData(g, stage, src as Dir8, citizen, frames, anim, k);
+    const b = spriteData(g, stage, src as Dir8, citizen, frames, anim, k, load);
     return { ...b, ax: b.w - b.ax, frames: b.frames.map(f => flip(f, b.w, b.h)) };
   }
-  const all = Array.from({ length: frames }, (_, f) => buildParts(g, stage, f, d, citizen, frames, anim, k));
+  const all = Array.from({ length: frames }, (_, f) => buildParts(g, stage, f, d, citizen, frames, anim, k, load));
   let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
   for (const parts of all) for (const p of parts) {
     const [a, b, c2, e] = shapeBounds(p.s);

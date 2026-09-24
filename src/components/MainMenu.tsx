@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Rocket, Globe2, Sun, Sparkles, Orbit, Settings, Dna, Clapperboard, Film, Download, Castle } from 'lucide-react';
+import { Rocket, Globe2, Sun, Sparkles, Orbit, Settings, Dna, Clapperboard, Film, Download, Castle, Swords } from 'lucide-react';
 import { MenuScene } from './MenuScene';
 import { LOCAL_SOUNDTRACK } from './Trailer/Trailer';
 
@@ -11,13 +11,14 @@ interface MainMenuProps {
   onPlay: () => void;
   onCreatureStart: () => void;
   onStructureStart: () => void;
+  onEquipmentStart: () => void;
   onDemo: () => void;
   onTrailer: () => void;
   /** record the trailer into a video file, with this soundtrack URL */
   onTrailerDownload: (soundtrack: string) => void;
 }
 
-export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onCreatureStart, onStructureStart, onDemo, onTrailer, onTrailerDownload }: MainMenuProps) {
+export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onCreatureStart, onStructureStart, onEquipmentStart, onDemo, onTrailer, onTrailerDownload }: MainMenuProps) {
   // the recording needs the music as a file: the one served with the site, or one the viewer picks
   const [localTrack, setLocalTrack] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -62,7 +63,8 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
           </div>
           <MenuButton label="Assistir demo" icon={<Clapperboard className="w-4 h-4" />} onClick={onDemo} />
           <MenuButton label="Gerador de Criaturas" icon={<Dna className="w-4 h-4" />} onClick={onCreatureStart} />
-          <MenuButton label="Gerador de Estruturas" icon={<Castle className="w-4 h-4" />} onClick={onStructureStart} badge="NOVO" />
+          <MenuButton label="Gerador de Estruturas" icon={<Castle className="w-4 h-4" />} onClick={onStructureStart} />
+          <MenuButton label="Gerador de Equipamentos" icon={<Swords className="w-4 h-4" />} onClick={onEquipmentStart} badge="NOVO" />
           <MenuButton label="Gerador de Planeta" icon={<Globe2 className="w-4 h-4" />} onClick={onStart} />
           <MenuButton label="Gerador de Sistema Solar" icon={<Sun className="w-4 h-4" />} onClick={onSolarSystemStart} />
           <MenuButton label="Gerador de Galáxia" icon={<Orbit className="w-4 h-4" />} onClick={onGalaxyStart} />

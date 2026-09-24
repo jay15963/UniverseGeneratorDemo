@@ -28,8 +28,9 @@ These were set by the project owner — keep them:
 - **Civilisations keep the species' anatomy**; only clothes and small personal objects change per era. Clothes are
   **civilian** — no armour, weapons, uniforms or work/profession gear (no knights, soldiers or astronauts). Each era has
   several options per slot and a citizen index picks the combination.
-- **No equipment at all** for civilisations: hands stay free - no tools, weapons, bags, baskets, canes or held objects.
-  Only civilian clothes, hats, shoes and jewellery.
+- **No equipment at all** for civilisations in the creature generator / fauna: hands stay free - no tools, weapons,
+  bags, baskets, canes or held objects. Only civilian clothes, hats, shoes and jewellery. (Equipment lives in the
+  equipment generator, which passes `LoadHooks` to `buildCiv`.)
 - Animations: idle, walk, run, fly (fliers; landed = wings folded), swim. Fliers take off, fly and land in-game; swimmers
   surface for ~5 s (random) and dive again with splashes/ripples tinted by the planet's own water colour.
 - Living planets carry **200+ species** (`src/lib/fauna/species.ts`), animal stages only (no civilisations yet), spawned
@@ -103,3 +104,24 @@ Owner's rules - keep them:
 - **Walls**: in gameplay, walls/towers will be a modular system (small segments, corners, gates and towers joined
   together); today's `wall` type (a whole stretch per size) is a placeholder for that system.
 - Menu → "Gerador de Estruturas" (`#estruturas` opens it directly).
+
+## Equipment generator (`src/lib/equipment/`, `src/components/Equipment/`)
+Owner's rules - keep them:
+- Same art as the creatures: flat 2D pieces on the creature `Sketch`. Hand items are drawn in a grip frame
+  (`forge.ts`: a along the haft, f edge/front, c side) that the pose places in the hand; 8 facings, 8 frames.
+- The generator always shows **the species that made the item using it** (species from the seed/world sliders, clothes
+  and style of the chosen era). Animations: idle, walk, run and **use** (swing, thrust, raise the light, brace the
+  shield, draw the bow, aim/recoil). `loadout.ts` re-poses the arms (IK) and draws items via `LoadHooks`.
+- Slots: **one hand** (main or off; a second weapon strikes half a beat later), **two hands** (bows are held in the
+  off hand and drawn with the main one), **auxiliary** (back: backpack, quiver; belt: pouch, satchel, flask, sheath,
+  hip quiver) and **wear**.
+- **Every item can be made of any game resource its type accepts** (`materials.ts`: woods, stone/flint/obsidian,
+  bone/shell, hides/leather/fibres, copper→titanium, crystals, synthetics, plasma), limited to materials the era knows;
+  when the era changes the nearest known material of the same class is used. The same design numbers (seed + type +
+  variant) keep a species' items recognisable from flint to plasma.
+- **Creatures are generated naked; wear is fitted on their body anchors** (P/C/rP/rC/H/R, arms, legs) so every set fits
+  every body (stocky, lean, big heads, digitigrade legs, four arms, serpent tails via `naga`). Styles: civil clothes of
+  the era, simple clothes, padded, hides, leather, bone, lamellar, mail, scale, plate, tactical, exo, force field;
+  pieces (head/torso/arms/hands/legs/feet/cloak) switch off one by one. Closed helms are drawn over the face.
+- New types = one builder + one catalogue entry in `hand.ts` / `aux.ts` / `wear.ts`.
+- Menu → "Gerador de Equipamentos" (`#equipamentos`).
