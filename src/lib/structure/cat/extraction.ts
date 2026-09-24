@@ -106,8 +106,6 @@ function mine(x: Ctx) {
       disc(x, 0, 0, y + 0.01, r, i % 2 ? K.stone : x.K.soil, -9e4 + i);
       if (i < 5) x.D.hull([...ring(0, r * 0.1, y - 5, r * 0.86, 24).filter(p => p[2] < r * 0.1), ...ring(0, r * 0.1, y, r * 0.86, 24).filter(p => p[2] < r * 0.1)], K.stone, -9e4 + i + 0.5, { g: x.D.group(), dark: 0.8 });
     }
-    // haul trucks crawling down the ramp (or ore carts)
-    for (let i = 0; i < 3; i++) { const t = (x.t + i / 3) % 1, ang = t * Math.PI * 1.4 - 0.4, r = R * (0.9 - t * 0.5); box(x, Math.sin(ang) * r - 3, Math.cos(ang) * r * 0.5 - 2, Math.sin(ang) * r + 3, Math.cos(ang) * r * 0.5 + 2, -t * 25 + 0.5, -t * 25 + 3.5, e >= 4 ? K.accent : K.wood, e >= 4 ? K.accent : K.stone); }
     headframe(x, R * 0.8, -R * 0.55, S * 3);
     house(x, { a: -R * 0.75, f: -R * 0.6, w: 22, d: 14, floors: 2, roof: e >= 4 ? 'flat' : undefined });
     if (e >= 3) stack(x, -R * 0.55, -R * 0.75, 2.6, S * 4, K.wall2);
@@ -123,8 +121,6 @@ function mine(x: Ctx) {
     D.cap([-5, 8.5, hill * 0.68 - 7.4], [5, 8.5, hill * 0.68 - 7.4], 0.9, 0.9, K.wood, key + 0.02);
   }
   for (const s of [-1.2, 1.2]) D.cap([s, 0.2, hill * 0.8 - 8], [s, 0.2, hill + 10], 0.3, 0.3, K.iron, -5e4);
-  const ct = x.t;
-  box(x, -2.4, hill + 6 - ct * 12 - 2, 2.4, hill + 6 - ct * 12 + 2, 0.8, 3.6, e >= 3 ? K.iron : K.wood, K.stone);
   for (let i = 0; i < 5; i++) mound(x, 18 + (i % 3) * 4, 10 + Math.floor(i / 3) * 4, 3, 3);
   if (x.size !== 'small') {
     headframe(x, -hill * 0.9, 6, e >= 3 ? S * 2.4 : S * 1.6);
@@ -212,12 +208,7 @@ function lumber(x: Ctx) {
   } else {
     const h = house(x, { a: -6, f: -4, w: 20, d: 13, floors: 1, roof: e >= 4 ? 'flat' : 'gable', chimney: false, windows: false });
     if (e <= 4) { stack(x, -14, -10, 1.8, S * 2, K.iron); }
-    if (e >= 4) { // crane grabbing logs
-      const t = x.ph, ang = Math.sin(t) * 0.5;
-      D.cap([20, 0, -12], [20, S * 2.2, -12], 1, 0.8, K.accent, D.depth([20, 10, -12]));
-      D.cap([20, S * 2.2, -12], [20 + Math.cos(ang) * 16, S * 2.4, -12 + Math.sin(ang) * 16], 0.7, 0.5, K.accent, D.depth([20, S * 2, -6]) + 0.1);
-      D.cap([20 + Math.cos(ang) * 16, S * 2.4, -12 + Math.sin(ang) * 16], [20 + Math.cos(ang) * 16, S * 1.2, -12 + Math.sin(ang) * 16], 0.2, 0.2, K.rope, D.depth([20, S * 2, -6]) + 0.11);
-    }
+    if (e >= 4) for (let i = 0; i < 3; i++) box(x, 18, -14 + i * 6, 30, -9 + i * 6, 0, 4, K.wood, K.wood); // bundled timber
     void h;
   }
   void flag; void crate; void pavilion; void onWall; void chance; void rnd; void solarPanel;

@@ -50,10 +50,7 @@ function yard(x: Ctx, w: number, d: number) {
     box(x, side * 6 - 1, d / 2 + 5.8, side * 6 + 1, d / 2 + 7.2, 3, 4.4, K.accent, K.accent);
   } else {
     for (const s of [-1, 1]) { cyl(x, s * (w / 2 + 5), d / 2 + 3, 2, 0, 2.4, K.trim, K.soil); tree(x, s * (w / 2 + 5), d / 2 + 3, 0.5, 2); }
-    const bob = Math.sin(x.ph) * 1.2;
-    D.ell([fx, 5 + bob, -d / 4], 4, 1.8, K.trim, D.depth([fx, 5, -d / 4]), { g: D.group() });
-    D.ell([fx, 5.8 + bob, -d / 4], 2.2, 1.3, K.win, D.depth([fx, 5, -d / 4]) + 0.01, { g: D.group() });
-    lamp(x, [fx, 3.4 + bob, -d / 4], K.glow2, false, 1.2);
+    tree(x, fx, -d / 4, 0.9, 2);
   }
 }
 

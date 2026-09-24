@@ -50,13 +50,9 @@ function workshop(x: Ctx) {
   if (e >= 4) for (let i = 0; i < 4; i++) onWall(x, h.v, fs, L * 0.35, h.y0 + S * 0.1 + i * S * 0.2, S * 0.7, 0.4, 'rect', K.dark, 0.02);
   onWall(x, h.v, fs, L * 0.78, h.y0 + S * 0.35, S * 0.36, S * 0.66, 'rect', K.door);
   if (e <= 3) { const ca = w * 0.3; box(x, ca - 1.8, -d * 0.2 - 1.8, ca + 1.8, -d * 0.2 + 1.8, h.top - 1, h.peak + 4, K.stone, K.dark); smoke(x, [ca, h.peak + 6, -d * 0.2], 2, K.soot); }
-  if (e >= 6) { // fabricator pods with a glowing core and a working arm
+  if (e >= 6) { // fabricator pods with a glowing core
     cyl(x, w / 2 + 7, 3, 4, 0, 7, K.trim, K.win); domeRoof(x, w / 2 + 7, 3, 7, 4, 3.5, K.win, D.depth([w / 2 + 7, 7, 3]));
     lamp(x, [w / 2 + 7, 6 + Math.sin(x.ph) * 0.6, 3], K.glow2, false, 1.6);
-    const sw = Math.sin(x.ph);
-    D.cap([-w / 2 - 5, 0, 4], [-w / 2 - 5, 7, 4], 1, 0.8, K.metal, D.depth([-w / 2 - 5, 3, 4]));
-    D.cap([-w / 2 - 5, 7, 4], [-w / 2 - 5 + 4 * sw, 10, 6], 0.8, 0.6, K.metal, D.depth([-w / 2 - 5, 8, 5]) + 0.01);
-    lamp(x, [-w / 2 - 5 + 4 * sw, 10, 6], K.glow2, true, 0.6);
   } else {
     for (let i = 0; i < 3; i++) crate(x, w / 2 + 4, d / 2 - 2 - i * 3.4, 0, 3, i % 2 ? K.wood : e >= 4 ? K.accent : K.wood);
     crate(x, w / 2 + 4, d / 2 - 3.5, 3, 3, K.wood);
@@ -182,7 +178,6 @@ function factory(x: Ctx) {
     for (const s of [-1, 1]) D.cap([s * 17 * Z, 4, -6], [s * 24 * Z, 4, -6], 2, 2, K.win, D.depth([s * 20 * Z, 4, -6]) + 1);
     for (let i = 0; i < 2; i++) stack(x, -46 * Z + i * 8, -20, 2.4, 40, K.trim, true);
     for (let i = 0; i < 3; i++) { const t = frac(x.t + i / 3); lamp(x, [-24 * Z + t * 48 * Z, 4.2, -6 + 2], K.glow2, false, 1.1); }
-    for (let i = 0; i < 2; i++) { const t = x.ph + i * Math.PI; D.ell([Math.cos(t) * 30, 26 + Math.sin(t * 2) * 2, Math.sin(t) * 8], 2.4, 1, K.metal, 1e5 - 1, { g: D.group() }); lamp(x, [Math.cos(t) * 30, 25.2 + Math.sin(t * 2) * 2, Math.sin(t) * 8], K.glow2, true, 0.5); }
     return;
   }
   sawHall(x, 0, 0, w, d, S * 1.3, Math.round(d / 7));

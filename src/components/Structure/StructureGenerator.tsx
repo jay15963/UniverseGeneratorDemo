@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Dices, Download, Sparkles, Layers, Grid3x3, Castle, Moon, Sun, Home, Factory, Pickaxe, Store, Shield } from 'lucide-react';
+import { ArrowLeft, Dices, Download, Sparkles, Layers, Grid3x3, Castle, Moon, Sun, Home, Factory, Pickaxe, Store, Shield, Loader2 } from 'lucide-react';
 import { makeCulture, describeCulture, CATEGORIES, SIZES, ERAS, eraMeta, Category, Size, StructParams, DEFAULT_SPARAMS, ColorMode } from '../../lib/structure/genome';
 import { typesFor, typeById, typeName } from '../../lib/structure/registry';
-import { renderStructure, structData, structSheet, toCanvas, StructSpec, StructSprite, SFRAMES } from '../../lib/structure/render';
+import { renderStructure, structData, toCanvas, StructSpec, StructSprite, SFRAMES, LOD_K, Lod, CREATURE_K } from '../../lib/structure/render';
+import { renderStructureAsync, structSheetAsync } from '../../lib/structure/structAsync';
+import { makeGenome } from '../../lib/creature/genome';
+import { renderCreature, CreatureSprite } from '../../lib/creature/render';
 import { makeKit, MAT_PT } from '../../lib/structure/kit';
 import { drawStructBackdrop } from '../../lib/structure/backdrop';
 import { Dir8, DIRS, DIR_PT } from '../../lib/creature/pose';
@@ -27,13 +30,20 @@ const CAT_ICON: Record<Category, React.ReactNode> = {
 const ARROWS: Record<Dir8, string> = { N: '↑', NE: '↗', E: '→', SE: '↘', S: '↓', SW: '↙', W: '←', NW: '↖' };
 
 /** Draws the diorama + structure into ctx (logical pixels). */
-function paint(ctx: CanvasRenderingContext2D, W: number, H: number, gy: number, spec: StructSpec, sp: StructSprite, t: number, frame: number) {
+function paint(ctx: CanvasRenderingContext2D, W: number, H: number, gy: number, spec: StructSpec, sp: StructSprite, t: number, frame: number, who?: CreatureSprite | null) {
   const K = makeKit(spec.culture, spec.era, spec.night);
   drawStructBackdrop(ctx, W, H, gy, spec.culture, K.groundRGB, spec.night, t);
   ctx.fillStyle = 'rgba(0,0,0,0.22)';
   ctx.beginPath(); ctx.ellipse(W / 2, gy + 2, Math.min(sp.w * 0.46, W * 0.45), Math.max(3, sp.w * 0.08), 0, 0, Math.PI * 2); ctx.fill();
-  const n = sp.frames.length;
-  ctx.drawImage(sp.frames[((frame % n) + n) % n], Math.round(W / 2 - sp.ax), Math.round(gy - sp.ay));
+  const n = sp.frames.length, bx = Math.round(W / 2 - (who ? who.w / 2 + 8 : 0));
+  ctx.drawImage(sp.frames[((frame % n) + n) % n], Math.round(bx - sp.ax), Math.round(gy - sp.ay));
+  if (who) { // a citizen of the builders' species, in the era's clothes, for scale
+    const cx = bx + (sp.w - sp.ax) + 10 + who.ax, cy = gy + 3;
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.beginPath(); ctx.ellipse(cx, cy, who.w * 0.35, 2.5, 0, 0, Math.PI * 2); ctx.fill();
+    const m = who.frames.length;
+    ctx.drawImage(who.frames[Math.max(0, Math.floor(t * 7)) % m], Math.round(cx - who.ax), Math.round(cy - who.ay));
+  }
 }
 
 export function StructureGenerator({ onBack }: Props) {
@@ -47,6 +57,7 @@ export function StructureGenerator({ onBack }: Props) {
   const [variant, setVariant] = useState(0);
   const [dir, setDir] = useState<Dir8>('SE');
   const [night, setNight] = useState(false);
+  const [lod, setLod] = useState<Lod>('gameplay');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(2);
@@ -58,11 +69,30 @@ export function StructureGenerator({ onBack }: Props) {
   const types = useMemo(() => typesFor(cat, size), [cat, size]);
   const type = typeSel !== 'auto' && types.some(t => t.id === typeSel) ? typeById(typeSel) : types[(variant + Math.floor(culture.r[80] * 7)) % types.length];
   const spec: StructSpec = useMemo(() => ({ culture, type: type.id, size, era, variant, night }), [culture, type.id, size, era, variant, night]);
-  const sprite = useMemo(() => renderStructure(spec, dir, SFRAMES), [spec, dir]);
+  // regional LOD renders instantly; the gameplay one (4.5x bigger) comes from a worker, the last one stays up meanwhile
+  const regional = useMemo(() => renderStructure(spec, dir, SFRAMES, LOD_K.regional), [spec, dir]);
+  const [game, setGame] = useState<StructSprite | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (lod !== 'gameplay') return;
+    let alive = true;
+    setBusy(true);
+    renderStructureAsync(spec, dir, LOD_K.gameplay).then(sp => { if (alive) { if (sp) setGame(sp); setBusy(false); } });
+    return () => { alive = false; };
+  }, [spec, dir, lod]);
+  const sprite = lod === 'gameplay' && game ? game : regional;
+  const gameplay = lod === 'gameplay' && !!game;
+  // the builders: a citizen of a species from the same seed and world, in the clothes of the era
+  const citizen = useMemo(() => {
+    const p = culture.params;
+    const g = makeGenome(culture.seed, { gravity: p.gravity, temperature: p.temperature, water: p.water, atmosphere: 0.5, star: p.star, diet: 0.5, exotic: p.exotic, size: 0.5 }, culture.mode);
+    return { g, sprite: renderCreature(g, ERAS[era], 'SW', variant, 8, 'idle', CREATURE_K) };
+  }, [culture, era, variant]);
+  const who = gameplay ? citizen.sprite : null;
   const meta = eraMeta(ERAS[era]);
   const title = typeName(type, era);
 
-  const W = Math.max(208, Math.ceil((sprite.w + 64) / 16) * 16);
+  const W = Math.max(208, Math.ceil((sprite.w + (who ? who.w + 20 : 0) + 64) / 16) * 16);
   const below = sprite.h - sprite.ay;
   const H = Math.max(Math.round((W * 9) / 16), sprite.h + 56);
   const gy = H - Math.max(26, below + 18);
@@ -72,8 +102,8 @@ export function StructureGenerator({ onBack }: Props) {
     if (!el) return;
     const ro = new ResizeObserver(() => {
       const dpr = window.devicePixelRatio || 1;
-      const s = Math.max(1, Math.floor(Math.min((el.clientWidth * dpr) / W, (el.clientHeight * dpr) / H)));
-      setScale(s / dpr);
+      const fit = Math.min((el.clientWidth * dpr) / W, (el.clientHeight * dpr) / H);
+      setScale((fit >= 1 ? Math.floor(fit) : fit) / dpr); // giant gameplay structures may need to shrink
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -85,14 +115,14 @@ export function StructureGenerator({ onBack }: Props) {
     let raf = 0;
     const t0 = performance.now();
     const loop = (now: number) => {
-      const t = (now - t0) / 1000;
+      const t = Math.max(0, (now - t0) / 1000);
       if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
-      paint(ctx, W, H, gy, spec, sprite, t, Math.floor(t * 8));
+      paint(ctx, W, H, gy, spec, sprite, t, Math.floor(t * 8), who);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [spec, sprite, W, H, gy]);
+  }, [spec, sprite, W, H, gy, who]);
 
   // the same structure through the eight eras, rendered progressively
   const [eraThumbs, setEraThumbs] = useState<Record<number, HTMLCanvasElement>>({});
@@ -131,24 +161,28 @@ export function StructureGenerator({ onBack }: Props) {
   const K = useMemo(() => makeKit(culture, era, false), [culture, era]);
   const swatches = [K.wall, K.roof, K.trim, K.accent, K.glow].map(m => m.ramp[3]);
 
-  const download = (what: 'png' | 'sheet' | 'eras') => {
+  const download = async (what: 'png' | 'sheet' | 'eras') => {
+    const k = LOD_K[lod];
     const out = document.createElement('canvas');
     const o = out.getContext('2d')!;
     o.imageSmoothingEnabled = false;
     if (what === 'png') {
       const k = 4, c = document.createElement('canvas');
       c.width = W; c.height = H;
-      paint(c.getContext('2d')!, W, H, gy, spec, sprite, 0, 0);
+      paint(c.getContext('2d')!, W, H, gy, spec, sprite, 0, 0, who);
       out.width = W * k; out.height = H * k;
       o.imageSmoothingEnabled = false;
       o.drawImage(c, 0, 0, W * k, H * k);
     } else if (what === 'sheet') {
       // gameplay sheet: one row per facing (E, SE, S, SW, W, NW, N, NE), one column per frame, 1:1 pixels
-      const sh = structSheet(spec, 1);
+      setBusy(true);
+      const sh = await structSheetAsync(spec, k);
+      setBusy(false);
+      if (!sh) return;
       out.width = sh.cw * sh.frames; out.height = sh.ch * DIRS.length;
       o.drawImage(toCanvas(sh.data, out.width, out.height), 0, 0);
     } else {
-      const sps = ERAS.map((_, e) => structData({ ...spec, era: e }, dir, 1));
+      const sps = ERAS.map((_, e) => structData({ ...spec, era: e }, dir, 1, k));
       const cw = Math.max(...sps.map(s => s.w)) + 12, ch = Math.max(...sps.map(s => s.h)) + 28;
       out.width = cw * 4 * 2; out.height = ch * 2 * 2 + 40;
       o.fillStyle = '#07090f'; o.fillRect(0, 0, out.width, out.height);
@@ -161,7 +195,7 @@ export function StructureGenerator({ onBack }: Props) {
       });
     }
     const a = document.createElement('a');
-    a.download = `${culture.name}-${type.id}-${size}${what === 'eras' ? '-eras' : `-${meta.name}${what === 'sheet' ? '-sprites' : ''}`}.png`.replace(/\s+/g, '_');
+    a.download = `${culture.name}-${type.id}-${size}-${lod}${what === 'eras' ? '-eras' : `-${meta.name}${what === 'sheet' ? '-sprites' : ''}`}.png`.replace(/\s+/g, '_');
     a.href = out.toDataURL('image/png');
     a.click();
   };
@@ -247,15 +281,24 @@ export function StructureGenerator({ onBack }: Props) {
         </aside>
 
         {/* stage */}
-        <main className="order-1 lg:order-2 flex flex-col min-h-0 p-3 sm:p-4 gap-3">
-          <div ref={wrapRef} className="relative flex-1 min-h-[260px] sm:min-h-[340px] flex items-center justify-center rounded-2xl bg-black/50 border border-white/5 overflow-hidden">
-            <canvas ref={canvasRef} width={W} height={H} style={{ width: W * scale, height: H * scale, imageRendering: 'pixelated' }} className="rounded-lg shadow-2xl" />
+        <main className="order-1 lg:order-2 flex flex-col min-h-0 min-w-0 p-3 sm:p-4 gap-3">
+          <div ref={wrapRef} className="relative flex-1 min-w-0 min-h-[260px] sm:min-h-[340px] flex items-center justify-center rounded-2xl bg-black/50 border border-white/5 overflow-hidden">
+            <canvas ref={canvasRef} width={W} height={H} style={{ width: W * scale, height: H * scale, imageRendering: "pixelated" }} className="absolute rounded-lg shadow-2xl" />
             <div className="absolute top-3 left-3 bg-black/60 border border-white/10 rounded-lg px-2.5 py-1 text-[11px] font-mono">
               <span className="text-amber-300">{CATEGORIES.find(c => c.id === cat)!.name.toUpperCase()}</span> <span className="text-neutral-400">· {SIZES.find(s => s.id === size)!.name} · {meta.name}{meta.years ? ` · ${meta.years}` : ''}</span>
             </div>
-            <button onClick={() => setNight(n => !n)} className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/60 border border-white/10 rounded-xl px-2.5 py-1.5 text-[11px] font-bold hover:bg-white/10">
-              {night ? <Sun className="w-3.5 h-3.5 text-amber-300" /> : <Moon className="w-3.5 h-3.5 text-sky-300" />} {night ? 'Dia' : 'Noite'}
-            </button>
+            <div className="absolute top-3 right-3 flex gap-1.5">
+              <div className="flex gap-1 bg-black/60 border border-white/10 rounded-xl p-1" title="Nível de detalhe: gameplay (escala da criatura) ou mapa regional (4,5× menor)">
+                {(['gameplay', 'regional'] as Lod[]).map(l => (
+                  <button key={l} onClick={() => setLod(l)} className={`px-2 py-1 rounded-md text-[11px] font-bold ${lod === l ? 'bg-amber-300 text-black' : 'text-neutral-300 hover:bg-white/10'}`}>{l === 'gameplay' ? 'LOD gameplay' : 'LOD regional'}</button>
+                ))}
+              </div>
+              <button onClick={() => setNight(n => !n)} className="flex items-center gap-1.5 bg-black/60 border border-white/10 rounded-xl px-2.5 py-1.5 text-[11px] font-bold hover:bg-white/10">
+                {night ? <Sun className="w-3.5 h-3.5 text-amber-300" /> : <Moon className="w-3.5 h-3.5 text-sky-300" />} {night ? 'Dia' : 'Noite'}
+              </button>
+            </div>
+            {busy && <div className="absolute bottom-3 left-3 flex items-center gap-1.5 bg-black/60 border border-white/10 rounded-lg px-2.5 py-1 text-[11px] text-neutral-300"><Loader2 className="w-3.5 h-3.5 animate-spin" /> renderizando…</div>}
+            {gameplay && !busy && <div className="absolute bottom-3 left-3 bg-black/60 border border-white/10 rounded-lg px-2.5 py-1 text-[11px] text-neutral-400">ao lado: um(a) cidadão(ã) {citizen.g.name.people} da era, para escala</div>}
             <div className="absolute bottom-3 right-3 grid grid-cols-3 gap-1 bg-black/60 border border-white/10 rounded-xl p-1.5" title="Direção (para o mapa de gameplay)">
               {(['NW', 'N', 'NE', 'W', '', 'E', 'SW', 'S', 'SE'] as (Dir8 | '')[]).map((d, i) => d ? (
                 <button key={d} onClick={() => setDir(d)} title={DIR_PT[d]} className={`w-7 h-7 rounded-md text-xs font-bold ${dir === d ? 'bg-amber-300 text-black' : 'bg-white/5 text-neutral-300 hover:bg-white/15'}`}>{ARROWS[d]}</button>
@@ -286,6 +329,7 @@ export function StructureGenerator({ onBack }: Props) {
             <div className="text-[10px] font-mono tracking-[0.3em] text-neutral-500">ESTRUTURA</div>
             <div className="italic font-serif text-2xl text-amber-100 leading-tight">{title}</div>
             <div className="mt-1 text-sm font-bold text-amber-300">Arquitetura {culture.name}</div>
+            <div className="text-[12px] text-neutral-400">construída pelo povo {citizen.g.name.people}</div>
             <p className="mt-2 text-sm text-neutral-300 leading-relaxed">{type.blurb}</p>
           </div>
           <div>
