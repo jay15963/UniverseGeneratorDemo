@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useMemo } from 'react';
+import { Rocket, Globe2, Sun, Sparkles, Orbit, Settings } from 'lucide-react';
+import { MenuScene } from './MenuScene';
 
 interface MainMenuProps {
   onStart: () => void;
@@ -9,38 +11,40 @@ interface MainMenuProps {
 }
 
 export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay }: MainMenuProps) {
+  // A different showcase world every time the menu opens
+  const sceneSeed = useMemo(() => 'menu-' + Math.random().toString(36).slice(2, 8), []);
+
   return (
-    <div 
-      className="min-h-screen w-full font-sans text-white relative flex flex-col justify-center"
-      style={{
-        backgroundImage: 'url(/background.png)',
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-      }}
-    >
-      {/* Overlays / Gradients for better text readability */}
-      <div className="absolute inset-0 bg-black/40 bg-gradient-to-r from-black/80 via-black/40 to-transparent"></div>
-      
-      <div className="relative z-10 px-6 sm:px-12 md:px-24 max-w-2xl">
-        <h1 className="text-4xl sm:text-5xl md:text-6xl font-black mb-10 md:mb-16 tracking-widest text-white drop-shadow-xl" style={{ textShadow: '0 0 20px rgba(255,255,255,0.4)' }}>
-          SPACE ENGINE
-        </h1>
-        
-        <div className="flex flex-col gap-4 md:gap-6 w-full max-w-[20rem]">
-          <MenuButton label="Jogar" onClick={onPlay} />
-          <MenuButton label="Gerador de Planeta" onClick={onStart} />
-          <MenuButton label="Gerador de Sistema Solar" onClick={onSolarSystemStart} />
-          <MenuButton label="Gerador de Galáxia" onClick={onGalaxyStart} />
-          <MenuButton label="Gerador de Universo" onClick={onUniverseStart} />
-          <MenuButton label="Opções" disabled />
+    <div className="fixed inset-0 w-full font-sans text-white overflow-hidden bg-black">
+      <MenuScene seed={sceneSeed} />
+      <div className="absolute inset-0 bg-gradient-to-r from-black/85 via-black/35 to-transparent pointer-events-none" />
+      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/30 pointer-events-none" />
+
+      <div className="relative z-10 h-full flex flex-col justify-center px-6 sm:px-12 md:px-20 max-w-xl">
+        <div className="mb-8 md:mb-12">
+          <div className="text-[10px] sm:text-xs font-mono tracking-[0.5em] text-cyan-300/70 mb-3">PROCEDURAL UNIVERSE</div>
+          <h1 className="text-5xl sm:text-6xl md:text-7xl font-black tracking-[0.12em] leading-[0.9] bg-gradient-to-br from-white via-indigo-100 to-fuchsia-300 bg-clip-text text-transparent drop-shadow-[0_0_30px_rgba(180,160,255,0.35)]">
+            SPACE<br />ENGINE
+          </h1>
+          <p className="mt-4 text-sm text-neutral-400 max-w-xs leading-relaxed">
+            Bilhões de galáxias, estrelas e mundos — todos gerados a partir de uma única semente.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-1.5 w-full max-w-[22rem]">
+          <MenuButton label="Jogar" hint="Explore um universo inteiro" icon={<Rocket className="w-5 h-5" />} onClick={onPlay} primary />
+          <MenuButton label="Gerador de Planeta" icon={<Globe2 className="w-4 h-4" />} onClick={onStart} />
+          <MenuButton label="Gerador de Sistema Solar" icon={<Sun className="w-4 h-4" />} onClick={onSolarSystemStart} />
+          <MenuButton label="Gerador de Galáxia" icon={<Orbit className="w-4 h-4" />} onClick={onGalaxyStart} />
+          <MenuButton label="Gerador de Universo" icon={<Sparkles className="w-4 h-4" />} onClick={onUniverseStart} />
+          <MenuButton label="Opções" icon={<Settings className="w-4 h-4" />} disabled />
         </div>
       </div>
 
-      <div className="absolute bottom-6 left-6 sm:left-12 text-[10px] sm:text-sm text-white/50 tracking-widest">
-        0 | 9 | 9 | 0 BETA
+      <div className="absolute bottom-5 left-6 sm:left-12 md:left-20 text-[10px] sm:text-xs text-white/40 tracking-[0.3em] font-mono z-10">
+        v1.0 · ALPHA
       </div>
-      
-      <div className="absolute bottom-6 right-6 sm:right-12 text-[10px] sm:text-sm text-white/80 font-bold tracking-widest cursor-pointer hover:text-white transition-colors">
+      <div className="absolute bottom-5 right-6 sm:right-12 text-[10px] sm:text-xs text-white/60 font-bold tracking-[0.3em] cursor-pointer hover:text-white transition-colors z-10">
         DONATE
       </div>
     </div>
@@ -49,34 +53,29 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
 
 interface MenuButtonProps {
   label: string;
+  hint?: string;
+  icon: React.ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  primary?: boolean;
 }
 
-function MenuButton({ label, onClick, disabled }: MenuButtonProps) {
+function MenuButton({ label, hint, icon, onClick, disabled, primary }: MenuButtonProps) {
   return (
     <button
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
-      className={`
-        group relative text-left py-2 px-6 rounded-l-full overflow-hidden transition-all duration-300
-        ${disabled 
-          ? 'cursor-not-allowed opacity-50' 
-          : 'cursor-pointer hover:pl-8'
-        }
-      `}
+      className={`group relative flex items-center gap-4 text-left rounded-xl overflow-hidden transition-all duration-300 border
+        ${primary ? 'py-4 px-5 mb-3 bg-gradient-to-r from-fuchsia-600/80 to-indigo-600/70 border-white/20 shadow-[0_0_40px_rgba(192,38,211,0.35)] hover:shadow-[0_0_60px_rgba(192,38,211,0.55)] hover:translate-x-1'
+          : disabled ? 'py-2.5 px-5 border-transparent cursor-not-allowed opacity-40'
+          : 'py-2.5 px-5 border-transparent hover:border-white/10 hover:bg-white/[0.06] hover:translate-x-1'}`}
     >
-      {/* Glow background on hover */}
-      {!disabled && (
-        <div className="absolute inset-0 rounded-l-full bg-gradient-to-r from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 border-l-2 border-transparent group-hover:border-white/50"></div>
-      )}
-      
-      <span className={`
-        relative z-10 font-bold text-lg md:text-xl tracking-wider
-        ${disabled ? 'text-gray-400' : 'text-white'}
-      `}>
-        {label}
+      <span className={`${primary ? 'text-white' : 'text-cyan-200/70 group-hover:text-cyan-200'} transition-colors`}>{icon}</span>
+      <span className="flex flex-col">
+        <span className={`font-bold tracking-wide ${primary ? 'text-lg' : 'text-sm sm:text-base text-neutral-200 group-hover:text-white'}`}>{label}</span>
+        {hint && <span className="text-[11px] text-white/70 font-medium">{hint}</span>}
       </span>
+      {primary && <span className="ml-auto text-white/80 group-hover:translate-x-1 transition-transform">→</span>}
     </button>
   );
 }

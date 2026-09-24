@@ -1,4 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { galaxySprite, cssColorToRgb } from '../../lib/render/celestialSprites';
+import { SpaceBackdrop } from '../../lib/render/spaceBackdrop';
 import { UniverseGalaxyMetadata, UniverseConfig } from '../../lib/universe/types';
 import { GalaxyConfig, GalaxyLayer, GalaxyShape } from '../../lib/galaxy/types';
 import { ZoomIn, ZoomOut, Crosshair, ChevronRight } from 'lucide-react';
@@ -69,6 +71,8 @@ export function UniverseViewer({ galaxies, config, onEnterGalaxy }: UniverseView
    const [selectedGalaxy, setSelectedGalaxy] = useState<UniverseGalaxyMetadata | null>(null);
    const [dimensions, setDimensions] = useState({ w: 1200, h: 800 });
 
+   const backdrop = useMemo(() => new SpaceBackdrop({ seed: config.seed + '_cosmos', nebula: 0.3, density: 0.18, hues: [230, 280, 200], dim: 0.35 }), [config.seed]);
+
    // The bounding spatial radius of the universe
    const LOGICAL_RADIUS = Math.max(10000, Math.sqrt(config.maxGalaxies) * 200) * 1.5;
 
@@ -95,9 +99,8 @@ export function UniverseViewer({ galaxies, config, onEnterGalaxy }: UniverseView
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      // 1. Background
-      ctx.fillStyle = '#020202';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // 1. Background: faint far-field stars + cosmic web haze
+      backdrop.draw(ctx, canvas.width, canvas.height, -offset.x, -offset.y, 0, scale / 2);
 
       ctx.save();
       ctx.translate(canvas.width / 2 + offset.x, canvas.height / 2 + offset.y);
@@ -167,61 +170,32 @@ export function UniverseViewer({ galaxies, config, onEnterGalaxy }: UniverseView
          }
       }
 
-      // Execute LOD 2 Puff Render (Galaxy Shapes with Nebulae)
+      // Execute LOD 2: procedural galaxy sprites (shape-aware, random inclination)
       if (puffBatches.length > 0) {
+         ctx.globalCompositeOperation = 'lighter';
+         ctx.imageSmoothingEnabled = true;
          for (let i = 0; i < puffBatches.length; i++) {
              const g = puffBatches[i];
              const cx = g.x * ratio;
              const cy = g.y * ratio;
-             
-             const galRadius = (g.size * 30) * ratio;
-             const puff = getPuffForColor(g.baseColor);
-             
-             ctx.globalCompositeOperation = 'screen';
-             ctx.globalAlpha = g.isDead ? 0.2 : 0.9; // Brighter
-             
-             // Fast deterministic rotation
-             const angle = ((g.x * 12.9898) + (g.y * 78.233)) % (Math.PI * 2);
-
+             const galRadius = (g.size * 30) * ratio * 2.2;
+             // Deterministic per-galaxy orientation & inclination from its position
+             const h = Math.abs(Math.sin(g.x * 12.9898 + g.y * 78.233) * 43758.5453);
+             const frac = h - Math.floor(h);
+             const angle = frac * Math.PI * 2;
+             const incl = 0.22 + ((frac * 7.31) % 1) * 0.78;
+             const variant = Math.floor((frac * 13.7) % 1 * 6);
+             const sprite = galaxySprite(g.shape, cssColorToRgb(g.baseColor), variant);
+             ctx.globalAlpha = g.isDead ? 0.22 : 0.95;
              ctx.save();
              ctx.translate(cx, cy);
              ctx.rotate(angle);
-
-             if (g.shape === GalaxyShape.BARRED_SPIRAL) {
-                 // Bright Core
-                 ctx.drawImage(puff, -galRadius*0.8, -galRadius*0.8, galRadius*1.6, galRadius*1.6);
-                 // Horizontal Bar
-                 ctx.globalAlpha = g.isDead ? 0.1 : 0.6;
-                 ctx.drawImage(puff, -galRadius*1.8, -galRadius*0.4, galRadius*3.6, galRadius*0.8);
-             } else if (g.shape === GalaxyShape.ELLIPTICAL) {
-                 // Large squashed oval
-                 ctx.scale(1.5, 0.8);
-                 ctx.drawImage(puff, -galRadius*1.2, -galRadius*1.2, galRadius*2.4, galRadius*2.4);
-                 // Inner core
-                 ctx.globalAlpha = g.isDead ? 0.15 : 0.7;
-                 ctx.scale(0.5, 0.5);
-                 ctx.drawImage(puff, -galRadius*1.2, -galRadius*1.2, galRadius*2.4, galRadius*2.4);
-             } else if (g.shape === GalaxyShape.SPIRAL) {
-                 // Bright dense core
-                 ctx.drawImage(puff, -galRadius*0.8, -galRadius*0.8, galRadius*1.6, galRadius*1.6);
-                 // Intersecting arms mimicking spirals
-                 ctx.globalAlpha = g.isDead ? 0.1 : 0.5;
-                 ctx.scale(1.3, 1.3);
-                 ctx.drawImage(puff, -galRadius, -galRadius*0.35, galRadius*2, galRadius*0.7);
-                 ctx.rotate(Math.PI / 1.5);
-                 ctx.drawImage(puff, -galRadius, -galRadius*0.35, galRadius*2, galRadius*0.7);
-             } else {
-                 // Irregular - Chaotic blobs
-                 ctx.drawImage(puff, -galRadius, -galRadius, galRadius*2, galRadius*2);
-                 ctx.globalAlpha = g.isDead ? 0.1 : 0.6;
-                 ctx.drawImage(puff, -galRadius*0.2, -galRadius*1.3, galRadius*1.6, galRadius*1.6);
-                 ctx.drawImage(puff, -galRadius*1.3, -galRadius*0.1, galRadius*1.5, galRadius*1.5);
-             }
-
+             ctx.scale(1, g.shape === GalaxyShape.ELLIPTICAL ? Math.max(0.6, incl) : incl);
+             ctx.drawImage(sprite, -galRadius, -galRadius, galRadius * 2, galRadius * 2);
              ctx.restore();
-             ctx.globalAlpha = 1.0;
-             ctx.globalCompositeOperation = 'source-over';
          }
+         ctx.globalAlpha = 1.0;
+         ctx.globalCompositeOperation = 'source-over';
       }
 
       ctx.restore();
@@ -229,7 +203,7 @@ export function UniverseViewer({ galaxies, config, onEnterGalaxy }: UniverseView
       // Debug
       // ctx.fillStyle = 'white'; ctx.fillText(`Rendered Galaxies (Viewport): ${drawCount} | Zoom: ${scale.toFixed(2)}`, 10, 20);
 
-   }, [galaxies, scale, offset, config.age, dimensions]);
+   }, [galaxies, scale, offset, config.age, dimensions, backdrop]);
 
    // HUD Render Loop
    useEffect(() => {
@@ -266,12 +240,23 @@ export function UniverseViewer({ galaxies, config, onEnterGalaxy }: UniverseView
    }, [hoveredGalaxy, selectedGalaxy, scale, offset, dimensions]);
 
    // Interactions
-    const handleWheel = (e: React.WheelEvent) => {
+    const handleWheel = (e: { deltaY: number }) => {
         const zoomSensitivity = 0.002;
         // Bounded zoom between 2x and 15x
         const newScale = Math.max(2.0, Math.min(15.0, scale - (e.deltaY * zoomSensitivity * scale)));
         applyZoom(newScale);
     };
+
+    // Native non-passive wheel listener so the page doesn't scroll while zooming
+    const wheelRef = useRef(handleWheel);
+    wheelRef.current = handleWheel;
+    useEffect(() => {
+       const el = containerRef.current;
+       if (!el) return;
+       const fn = (e: WheelEvent) => { e.preventDefault(); wheelRef.current(e); };
+       el.addEventListener('wheel', fn, { passive: false });
+       return () => el.removeEventListener('wheel', fn);
+    }, []);
 
     const applyZoom = (newScale: number) => {
         setScale(newScale);
@@ -413,8 +398,7 @@ export function UniverseViewer({ galaxies, config, onEnterGalaxy }: UniverseView
           <div
              ref={containerRef}
              className="flex-1 bg-black rounded-xl border border-neutral-700 overflow-hidden relative"
-             onWheel={handleWheel}
-             onPointerDown={handlePointerDown}
+                          onPointerDown={handlePointerDown}
              onPointerMove={handlePointerMove}
              onPointerUp={handlePointerUp}
              onPointerLeave={() => { setIsDragging(false); setHoveredGalaxy(null); }}

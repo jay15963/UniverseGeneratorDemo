@@ -1,35 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useGameEngine } from '../../stores/useGameEngine';
 import { UniverseGenerator } from '../../lib/universe/generator';
 import { UniverseGalaxyMetadata } from '../../lib/universe/types';
 import { ChevronLeft, Play, RefreshCw } from 'lucide-react';
-
-// Puff texture cache for galaxy rendering
-const createPuff = (rgb: string) => {
-  const cvs = document.createElement('canvas');
-  cvs.width = 64; cvs.height = 64;
-  const c = cvs.getContext('2d');
-  if (c) {
-    const grad = c.createRadialGradient(32, 32, 0, 32, 32, 32);
-    grad.addColorStop(0, `${rgb}1.0)`);
-    grad.addColorStop(0.1, `${rgb}0.8)`);
-    grad.addColorStop(0.3, `${rgb}0.3)`);
-    grad.addColorStop(0.6, `${rgb}0.1)`);
-    grad.addColorStop(1, `${rgb}0)`);
-    c.fillStyle = grad;
-    c.fillRect(0, 0, 64, 64);
-  }
-  return cvs;
-};
-
-const puffCache: Record<string, HTMLCanvasElement> = {};
-function getPuffForColor(color: string) {
-  if (!puffCache[color]) {
-    const hslaPrefix = color.replace('hsl', 'hsla').replace(')', ', ');
-    puffCache[color] = createPuff(hslaPrefix);
-  }
-  return puffCache[color];
-}
+import { galaxySprite, cssColorToRgb } from '../../lib/render/celestialSprites';
+import { SpaceBackdrop } from '../../lib/render/spaceBackdrop';
+import { GalaxyShape } from '../../lib/galaxy/types';
 
 interface UniverseSetupProps {
   onBackToMenu: () => void;
@@ -46,6 +22,7 @@ export function UniverseSetup({ onBackToMenu }: UniverseSetupProps) {
   const setPhase = useGameEngine(s => s.setPhase);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const backdrop = useMemo(() => new SpaceBackdrop({ seed: 'setup', nebula: 0.3, density: 0.2, hues: [230, 280, 200], dim: 0.35 }), []);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ w: window.innerWidth, h: window.innerHeight });
   const [generatedGalaxies, setGeneratedGalaxies] = useState<UniverseGalaxyMetadata[]>([]);
@@ -83,8 +60,7 @@ export function UniverseSetup({ onBackToMenu }: UniverseSetupProps) {
     canvas.height = dimensions.h;
 
     // Background
-    ctx.fillStyle = '#020202';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    backdrop.draw(ctx, canvas.width, canvas.height, 0, 0, 0);
 
     // Use the same coordinate system as UniverseViewer:
     // LOGICAL_RADIUS defines the bounding area, ratio maps logical coords to canvas space,
@@ -122,25 +98,25 @@ export function UniverseSetup({ onBackToMenu }: UniverseSetupProps) {
         cy < -viewportHalfH - 100 || cy > viewportHalfH + 100
       ) continue;
 
-      const galRadius = (g.size * 30) * ratio;
-      const puff = getPuffForColor(g.baseColor);
-
-      ctx.globalCompositeOperation = 'screen';
-      ctx.globalAlpha = g.isDead ? 0.2 : 0.9;
-
-      const angle = ((g.x * 12.9898) + (g.y * 78.233)) % (Math.PI * 2);
+      const galRadius = (g.size * 30) * ratio * 2.2;
+      const h = Math.abs(Math.sin(g.x * 12.9898 + g.y * 78.233) * 43758.5453);
+      const frac = h - Math.floor(h);
+      const incl = 0.22 + ((frac * 7.31) % 1) * 0.78;
+      const sprite = galaxySprite(g.shape, cssColorToRgb(g.baseColor), Math.floor((frac * 13.7) % 1 * 6));
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = g.isDead ? 0.2 : 0.95;
       ctx.save();
       ctx.translate(cx, cy);
-      ctx.rotate(angle);
-      ctx.drawImage(puff, -galRadius * 0.8, -galRadius * 0.8, galRadius * 1.6, galRadius * 1.6);
+      ctx.rotate(frac * Math.PI * 2);
+      ctx.scale(1, g.shape === GalaxyShape.ELLIPTICAL ? Math.max(0.6, incl) : incl);
+      ctx.drawImage(sprite, -galRadius, -galRadius, galRadius * 2, galRadius * 2);
       ctx.restore();
-
       ctx.globalAlpha = 1.0;
       ctx.globalCompositeOperation = 'source-over';
     }
 
     ctx.restore();
-  }, [generatedGalaxies, dimensions, universeAge, numGalaxies]);
+  }, [generatedGalaxies, dimensions, universeAge, numGalaxies, backdrop]);
 
   const handleExplore = () => {
     setGalaxies(generatedGalaxies);

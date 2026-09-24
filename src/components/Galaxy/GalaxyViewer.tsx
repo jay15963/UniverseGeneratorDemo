@@ -1,4 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { bakeGalaxyGlow } from '../../lib/render/galaxyGlow';
+import { SpaceBackdrop } from '../../lib/render/spaceBackdrop';
 import { StellarSystemMetadata, GalaxyLayer, GalaxyConfig } from '../../lib/galaxy/types';
 import { ZoomIn, ZoomOut, Crosshair, Map as MapIcon, Info, ChevronRight, AlertTriangle } from 'lucide-react';
 import { GalaxyLegend } from './GalaxyLegend';
@@ -53,6 +55,14 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
    // Logical space based on the generator radius. We add padding so the edges aren't touching canvas borders.
    const LOGICAL_RADIUS = config.radius * 1.5;
 
+   // Photographic integrated-light image of the galaxy (baked once per generation)
+   const glow = useMemo(
+      () => (stars.length ? bakeGalaxyGlow(stars, LOGICAL_RADIUS, config.radius, config.age, config.seed) : null),
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [stars],
+   );
+   const backdrop = useMemo(() => new SpaceBackdrop({ seed: config.seed + '_intergalactic', nebula: 0.22, density: 0.7 }), [config.seed]);
+
    // Track parent container resize to dynamically resize canvas and eliminate black bars
    useEffect(() => {
       if (!containerRef.current) return;
@@ -80,9 +90,8 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      // Background clearing
-      ctx.fillStyle = '#050505';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Deep-space backdrop with gentle parallax
+      backdrop.draw(ctx, canvas.width, canvas.height, -offset.x * 2, -offset.y * 2, 0, scale);
 
       ctx.save();
 
@@ -92,6 +101,18 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
 
       // Calcular o Ratio o mais cedo possível, pois as Nebulosas também usam coordenadas mapeadas agora
       const ratio = (Math.min(canvas.width, canvas.height) / 2) / LOGICAL_RADIUS;
+
+      // Integrated light (arms, bulge, HII regions, dust lanes) under the resolved stars
+      if (glow) {
+         ctx.save();
+         ctx.globalCompositeOperation = 'lighter';
+         ctx.imageSmoothingEnabled = true;
+         ctx.imageSmoothingQuality = 'high';
+         ctx.globalAlpha = layer === GalaxyLayer.SYSTEM ? Math.max(0.22, 1 - (scale - 1) / 6) : 0.18;
+         const E = LOGICAL_RADIUS * ratio;
+         ctx.drawImage(glow, -E, -E, E * 2, E * 2);
+         ctx.restore();
+      }
 
       // Render Stars
 
@@ -238,12 +259,10 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
       });
 
       // Render "Smoky" Background Nebula ON TOP of stars & BHs (hides them with gas until zoomed in)
-      if (layer === GalaxyLayer.SYSTEM && stars.length > 0) {
-         renderNebulaBackground(ctx, ratio);
-      }
+
 
       ctx.restore();
-   }, [stars, layer, scale, offset, config.radius, dimensions.w, dimensions.h]);
+   }, [stars, layer, scale, offset, config.radius, dimensions.w, dimensions.h, glow, backdrop]);
 
    // -- HUD Render Loop (Extremely Fast, only runs for hovered/selected) --
    useEffect(() => {
@@ -346,12 +365,22 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
       ctx.restore();
    };
 
-   const handleWheel = (e: React.WheelEvent) => {
-      e.preventDefault();
+   const handleWheel = (e: { deltaY: number }) => {
       const zoomSensitivity = 0.001;
       const newScale = Math.max(0.2, Math.min(20, scale - e.deltaY * zoomSensitivity));
       applyZoom(newScale);
    };
+
+   // Native non-passive wheel listener so the page doesn't scroll while zooming
+   const wheelRef = useRef(handleWheel);
+   wheelRef.current = handleWheel;
+   useEffect(() => {
+      const el = containerRef.current;
+      if (!el) return;
+      const fn = (e: WheelEvent) => { e.preventDefault(); wheelRef.current(e); };
+      el.addEventListener('wheel', fn, { passive: false });
+      return () => el.removeEventListener('wheel', fn);
+   }, []);
 
    const applyZoom = (newScale: number) => {
       setScale(newScale);
@@ -583,8 +612,7 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
          <div
             ref={containerRef}
             className="flex-1 bg-black rounded-xl border border-neutral-700 overflow-hidden relative"
-            onWheel={handleWheel}
-            onPointerDown={handlePointerDown}
+                        onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerLeave={() => { setIsDragging(false); setHoveredStar(null); }}
@@ -604,7 +632,7 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
 
             {stars.length === 0 && (
                <div className="absolute inset-0 flex items-center justify-center text-neutral-500 font-medium">
-                  Configure parameters and Generate Galaxy
+                  Configure os parâmetros e gere a galáxia
                </div>
             )}
 
@@ -640,29 +668,29 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                   {/* Stats Grid */}
                   <div className="grid grid-cols-2 gap-2 text-sm">
                      <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                        <span className="block text-neutral-500 text-xs mb-0.5">Classification</span>
+                        <span className="block text-neutral-500 text-xs mb-0.5">Classificação</span>
                         <span className="font-semibold text-neutral-200">{selectedStar.starClass}</span>
                      </div>
                      <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                        <span className="block text-neutral-500 text-xs mb-0.5">System Age</span>
+                        <span className="block text-neutral-500 text-xs mb-0.5">Idade do Sistema</span>
                         <span className="font-semibold text-neutral-200">{Math.round(selectedStar.config.systemAge * 100)}%</span>
                      </div>
                      {!isBHtype && (
                         <>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Planets</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">Planetas</span>
                            <span className="font-semibold text-neutral-200">{selectedStar.config.numPlanets}</span>
                         </div>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Moons</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">Luas</span>
                            <span className="font-semibold text-neutral-200">{selectedStar.config.numMoons}</span>
                         </div>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Rocky %</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">% Rochosos</span>
                            <span className="font-semibold text-neutral-200">{Math.round(selectedStar.config.rockyPercentage * 100)}%</span>
                         </div>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Life Chance</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">Chance de Vida</span>
                            <span className="font-semibold text-neutral-200">{Math.round(selectedStar.config.lifeChance * 100)}%</span>
                         </div>
                         </>
@@ -670,11 +698,11 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                      {isBHtype && (
                         <>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Debris Belts</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">Cinturões de Detritos</span>
                            <span className="font-semibold text-neutral-200">{selectedStar.config.numAsteroidBelts}</span>
                         </div>
                         <div className="bg-neutral-800/80 p-2.5 rounded-lg">
-                           <span className="block text-neutral-500 text-xs mb-0.5">Habitability</span>
+                           <span className="block text-neutral-500 text-xs mb-0.5">Habitabilidade</span>
                            <span className="font-semibold text-red-400">0%</span>
                         </div>
                         </>
@@ -685,7 +713,7 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                   {!isBHtype && (
                      <div>
                         <div className="flex justify-between text-xs mb-1">
-                           <span className="text-neutral-500">Habitability Index</span>
+                           <span className="text-neutral-500">Índice de Habitabilidade</span>
                            <span className="font-semibold" style={{ color: selectedStar.habitability > 0.6 ? '#4ade80' : selectedStar.habitability > 0.3 ? '#facc15' : '#f87171' }}>
                               {Math.round(selectedStar.habitability * 100)}%
                            </span>
@@ -704,8 +732,8 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                      <div className="bg-red-950/40 text-red-400 p-3 rounded-lg text-xs flex items-start gap-2 border border-red-500/20">
                         <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                         <div>
-                           <span className="font-semibold block mb-0.5">⚠ Supernova Dead Zone</span>
-                           This region was devastated by a cataclysmic supernova blast. Surviving matter has been irradiated beyond recovery. No biological systems can exist here.
+                           <span className="font-semibold block mb-0.5">⚠ Zona Morta de Supernova</span>
+                           Esta região foi devastada por uma supernova cataclísmica. A matéria restante foi irradiada além de qualquer recuperação — nenhum sistema biológico pode existir aqui.
                         </div>
                      </div>
                   )}
@@ -713,15 +741,15 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                      <div className="bg-emerald-950/40 text-emerald-400 p-3 rounded-lg text-xs flex items-start gap-2 border border-emerald-500/20">
                         <span className="text-base">🌱</span>
                         <div>
-                           <span className="font-semibold block mb-0.5">Galactic Sweet Spot</span>
-                           This system resides in the optimal habitability zone of the galaxy — far enough from the lethal radiation of the core, yet close enough to benefit from high metallicity for rocky planet formation.
+                           <span className="font-semibold block mb-0.5">Zona Galáctica Ideal</span>
+                           Este sistema está na zona de habitabilidade ideal da galáxia — longe da radiação letal do núcleo, mas perto o bastante para ter a metalicidade necessária à formação de planetas rochosos.
                         </div>
                      </div>
                   )}
 
                   {/* Coordinates */}
                   <div className="text-xs text-neutral-600 pt-2 border-t border-neutral-800">
-                     Position: ({selectedStar.x.toFixed(1)}, {selectedStar.y.toFixed(1)}) · Seed: {selectedStar.config.seed}
+                     Posição: ({selectedStar.x.toFixed(1)}, {selectedStar.y.toFixed(1)}) · Seed: {selectedStar.config.seed}
                   </div>
                </div>
 
@@ -732,7 +760,7 @@ export function GalaxyViewer({ stars, layer, config, onEnterSystem }: GalaxyView
                         onClick={() => onEnterSystem(selectedStar.config)}
                         className="w-full bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 shadow-lg shadow-fuchsia-900/30"
                      >
-                        Enter System <ChevronRight className="w-4 h-4" />
+                        Entrar no Sistema <ChevronRight className="w-4 h-4" />
                      </button>
                   </div>
                )}

@@ -413,6 +413,15 @@ export class GalaxyGenerator {
     return 'O'; // Extremely rare blue supergiant
   }
 
+  private _spiral?: { arms: number; twist: number };
+  private spiralShape() {
+    if (!this._spiral) {
+      const rng = seedrandom(this.config.seed + '_spiral');
+      this._spiral = { arms: 2 + Math.floor(rng() * 3), twist: 2.4 + rng() * 1.4 };
+    }
+    return this._spiral;
+  }
+
   private getPosition(index: number): { x: number, y: number } {
     let x = 0; let y = 0;
     const r = this.config.radius;
@@ -422,8 +431,10 @@ export class GalaxyGenerator {
     switch (this.config.shape) {
       case GalaxyShape.SPIRAL: {
         // Archimedean Spiral with Noise
-        const arms = 2 + Math.floor(this.prng() * 3); // 2 to 4 arms
-        const armOffset = (this.prng() * Math.PI * 2) / arms;
+        // Arm count / winding are properties of the whole galaxy (not per star).
+        // The per-star prng draws are kept so the rest of the star stream stays identical.
+        this.prng(); this.prng();
+        const { arms, twist } = this.spiralShape();
         
         // Randomly pick an arm
         const arm = Math.floor(this.prng() * arms);
@@ -433,11 +444,11 @@ export class GalaxyGenerator {
         const dist = Math.pow(this.prng(), 2) * r;
         
         // Spiral angle based on distance
-        const twist = 5; // How many turns
         const angle = (dist / r) * twist * Math.PI + (arm * (Math.PI * 2 / arms));
         
-        // Add spread (thickness of the arm)
-        const spread = (this.prng() - 0.5) * (r * 0.15);
+        // Arm thickness: concentrated near the arm ridge, widening outwards
+        const u = this.prng() * 2 - 1;
+        const spread = Math.sign(u) * u * u * (r * (0.05 + 0.1 * dist / r));
         
         // Adding general core sphere
         if (this.prng() < 0.2) {

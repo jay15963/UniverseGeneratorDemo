@@ -1159,15 +1159,20 @@ export class PlanetGenerator {
     const stormCount = Math.floor(2 + sf * 15);
     const storms: { cx: number; cy: number; rx: number; ry: number; intensity: number; rotation: number }[] = [];
     for (let s = 0; s < stormCount; s++) {
+      const big = s < 2;
       storms.push({
-        cx: this.fbm(s * 1.7 + 0.1, s * 2.3 + 0.2, 1, 0.5, 2, 1),
-        cy: 0.12 + this.fbm(s * 3.1 + 0.3, s * 0.7 + 0.4, 1, 0.5, 2, 1) * 0.76,
-        rx: 0.015 + this.fbm(s * 5.5 + 0.5, 0, 1, 0.5, 2, 1) * (s < 2 ? 0.04 : 0.02), // first 2 can be big
-        ry: 0.008 + this.fbm(s * 4.2 + 0.6, 0, 1, 0.5, 2, 1) * (s < 2 ? 0.02 : 0.01),
-        intensity: 0.4 + this.fbm(s * 6.1, s * 7.2, 1, 0.5, 2, 1) * 0.6,
-        rotation: this.fbm(s * 8.3, s * 9.1, 1, 0.5, 2, 1) * Math.PI * 2,
+        cx: this.rng(),
+        cy: 0.15 + this.rng() * 0.7,
+        rx: big ? 0.03 + this.rng() * 0.04 : 0.008 + this.rng() * 0.018,
+        ry: big ? 0.02 + this.rng() * 0.025 : 0.006 + this.rng() * 0.01,
+        intensity: 0.4 + this.rng() * 0.6,
+        rotation: (this.rng() - 0.5) * 0.3,
       });
     }
+
+    // Seeded band structure: three superimposed latitudinal waves
+    const f1 = 7 + this.rng() * 6, f2 = 14 + this.rng() * 10, f3 = 28 + this.rng() * 16;
+    const p1 = this.rng() * 6.28, p2 = this.rng() * 6.28, p3 = this.rng() * 6.28;
 
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -1175,32 +1180,17 @@ export class PlanetGenerator {
         const nx = x / width;
         const ny = y / height;
 
-        // === DOMAIN WARPING for turbulent band edges ===
-        // Low-freq warp creates large-scale chevron/wave patterns at band boundaries
-        const warpAmt = 0.03 + bc * 0.04;
-        const warpX = this.fbm(nx * 2.0 + 13.7, ny * 1.5 + 5.3, 3, 0.55, 2.0, 15.0) * warpAmt;
-        const warpY = this.fbm(nx * 1.8 + 7.1, ny * 2.0 + 11.9, 3, 0.55, 2.0, 15.0) * warpAmt;
-        const wny = ny + warpX;
-        const wnx = nx + warpY * 0.3; // mostly horizontal warp
+        // Zonal jets shear the flow horizontally -> chevrons at band edges
+        const jet = Math.sin(ny * Math.PI * f1 + p1);
+        const wnx = nx + jet * 0.035 * bc + this.fbm(nx, ny * 3 + 5.3, 3, 0.5, 2.0, 4.0) * 0.03;
+        // Streaky turbulence: stretched vertically-compressed noise displaces the latitude
+        const turb = this.fbm(wnx, ny * 5 + 1.7, 5, 0.55, 2.0, 5.0);
+        const wny = ny + turb * (0.012 + bc * 0.022);
 
-        // === MULTI-FREQUENCY BANDS (varied widths) ===
-        // Layer 1: broad bands (major zones/belts)
-        const band1 = Math.sin(wny * Math.PI * 12.0) * 0.5 + 0.5;
-        // Layer 2: medium subdivisions
-        const band2 = Math.sin(wny * Math.PI * 22.0 + wnx * 0.5) * 0.5 + 0.5;
-        // Layer 3: fine detail bands
-        const band3 = Math.sin(wny * Math.PI * 38.0 + wnx * 1.2) * 0.5 + 0.5;
+        const bandMix = 0.5 + 0.5 * (Math.sin(wny * Math.PI * f1 + p1) * 0.5 + Math.sin(wny * Math.PI * f2 + p2) * 0.3 + Math.sin(wny * Math.PI * f3 + p3) * 0.2);
+        const fine = this.fbm(wnx, ny * 14 + 9.1, 4, 0.5, 2.0, 7.0);
 
-        // Combine with decreasing weight for natural varied-width appearance
-        const bandMix = band1 * 0.55 + band2 * 0.30 + band3 * 0.15;
-
-        // === WITHIN-BAND TURBULENCE (streaky cloud detail) ===
-        // Horizontally elongated noise for the streaky appearance
-        const inBandTurb = this.fbm(wnx * 6.0, wny * 0.8, 4, 0.5, 2.0, 40.0);
-        // Fine wispy detail
-        const wispNoise = this.fbm(wnx * 10.0 + 3.3, wny * 1.5 + 7.7, 3, 0.5, 2.0, 80.0);
-
-        let value = bandMix + (inBandTurb - 0.5) * bc * 0.35 + (wispNoise - 0.5) * 0.08;
+        let value = bandMix * (0.55 + bc * 0.45) + (1 - (0.55 + bc * 0.45)) * 0.5 + fine * (0.08 + bc * 0.08);
 
         // === STORM VORTICES (oval with spiral arms) ===
         let stormValue = 0;
@@ -1252,7 +1242,7 @@ export class PlanetGenerator {
 
         this.elevation[index] = value;
         // Secondary channel: within-band color richness
-        this.moisture[index] = this.fbm(wnx * 4.0 + 7.7, wny * 0.6 + 3.3, 4, 0.5, 2.0, 50.0);
+        this.moisture[index] = this.fbm(wnx + 0.37, wny * 4 + 3.3, 3, 0.5, 2.0, 4.0) * 0.5 + 0.5;
         // Storm channel: pack storm & spots data
         this.temperature[index] = Math.max(0, Math.min(1, stormValue + brightSpot - stormDark));
       }
@@ -2041,9 +2031,16 @@ export class PlanetGenerator {
   }
 
   render(ctx: CanvasRenderingContext2D, layer: LayerType) {
-    const { width, height, seaLevel } = this.config;
+    const { width, height } = this.config;
     const imageData = ctx.createImageData(width, height);
-    const data = imageData.data;
+    imageData.data.set(this.renderToBuffer(layer));
+    ctx.putImageData(imageData, 0, 0);
+  }
+
+  /** Renders a layer to a raw RGBA buffer. Canvas-free, so it can run inside a Web Worker. */
+  renderToBuffer(layer: LayerType): Uint8ClampedArray {
+    const { width, height, seaLevel } = this.config;
+    const data = new Uint8ClampedArray(width * height * 4);
     
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -2356,8 +2353,8 @@ export class PlanetGenerator {
         data[pixelIndex + 3] = 255;
       }
     }
-    
-    ctx.putImageData(imageData, 0, 0);
+
+    return data;
   }
 }
 
