@@ -113,7 +113,7 @@ export function SurfaceModal({ body, onClose }: SurfaceModalProps) {
         </div>
 
         <div className="lg:col-span-3 flex flex-col min-h-0 order-1 lg:order-2 lg:overflow-y-auto no-scrollbar">
-          <MapViewer layer={layer} config={config} isGenerating={isGenerating} progress={progress} status={status} session={session} compact />
+          <MapViewer layer={layer} config={config} isGenerating={isGenerating} progress={progress} status={status} session={session} compact worldName={body.name} />
         </div>
       </div>
     </div>

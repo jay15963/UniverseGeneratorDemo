@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Download, Maximize, Globe2, Map as MapIcon, Cloud } from 'lucide-react';
+import { Download, Maximize, Globe2, Map as MapIcon, Cloud, Rocket } from 'lucide-react';
+import { SurvivalView } from './Survival/SurvivalView';
 import { LayerType, BIOME_NAMES, hasCapability, PlanetCapability, PlanetConfig } from '../lib/planet-generator/generator';
 import type { PlanetSession, PlanetProbe } from '../lib/planet-generator/planetClient';
 import { atmosphereFor } from '../lib/planet-generator/visualProfile';
@@ -16,6 +17,8 @@ interface MapViewerProps {
   session: PlanetSession | null;
   /** Compact chrome for embedding inside modals. */
   compact?: boolean;
+  /** Display name of the world (used by the survival HUD). */
+  worldName?: string;
 }
 
 interface HoverInfo { x: number; y: number; screenX: number; screenY: number; probe: PlanetProbe | null }
@@ -26,7 +29,10 @@ const LAYER_LABELS: Record<string, string> = {
   fertility: 'Fertilidade', ores: 'Minérios', spices: 'Especiarias', resources: 'Recursos', fauna: 'Fauna',
 };
 
-export function MapViewer({ layer, config, isGenerating, progress, status, session, compact }: MapViewerProps) {
+export function MapViewer({ layer, config, isGenerating, progress, status, session, compact, worldName }: MapViewerProps) {
+  const [landingMode, setLandingMode] = useState(false);
+  const [landing, setLanding] = useState<{ x: number; y: number } | null>(null);
+  const canLand = config.planetType !== 'gas-giant';
   const [viewTransform, setViewTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -178,6 +184,10 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (landingMode && session && Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y) < 6) {
+      const px = getMapPixel(e.clientX, e.clientY);
+      if (px) { setLanding({ x: px.px, y: px.py }); setLandingMode(false); }
+    }
     activePointers.current.delete(e.pointerId);
     if (activePointers.current.size < 2) lastPinchDistance.current = null;
     setIsDragging(false);
@@ -249,6 +259,13 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
               <Maximize className="w-3.5 h-3.5" />
             </button>
           )}
+          {canLand && (
+            <button onClick={() => { setMode('map'); setLandingMode(m => !m); }} disabled={!session}
+              title="Escolha um ponto no mapa para pousar e explorar a pé"
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors disabled:opacity-40 ${landingMode ? 'bg-amber-400 text-black border-amber-200 animate-pulse' : 'bg-gradient-to-r from-orange-500 to-amber-500 text-black border-amber-300/50 hover:from-orange-400'}`}>
+              <Rocket className="w-3.5 h-3.5" /> {landingMode ? 'Clique no mapa…' : 'Pousar'}
+            </button>
+          )}
           <button onClick={handleExport} className="flex items-center gap-1.5 px-2.5 py-1 bg-black/40 border border-white/10 hover:bg-white/10 rounded-lg text-xs">
             <Download className="w-3.5 h-3.5" /> PNG
           </button>
@@ -310,12 +327,20 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
           <canvas ref={rightRef} width={config.width} height={config.height} className="w-1/3 h-full" style={{ imageRendering: 'pixelated' }} />
         </div>
 
+        {landingMode && mode === 'map' && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-amber-400 text-black text-xs font-bold px-3 py-1.5 rounded-full shadow-xl pointer-events-none">
+            Escolha o local de pouso — clique em terra firme
+          </div>
+        )}
         {mode === 'globe' && (
           <GlobeView texture={globeTex} clouds={session?.clouds ?? null} cloudsOn={cloudsOn && layer === LayerType.FINAL}
             rim={atmo?.color ?? null} seed={config.seed} />
         )}
       </div>
 
+      {landing && session && (
+        <SurvivalView session={session} mapX={landing.x} mapY={landing.y} title={worldName ?? config.seed} onExit={() => setLanding(null)} />
+      )}
       <div className="mt-3 bg-black/30 p-3 sm:p-4 rounded-xl border border-white/5">
         <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500 mb-2">Legenda</h3>
         <MapLegend layer={layer} planetType={config.planetType} vegetationHue={config.vegetationHue} waterHue={config.waterHue} />

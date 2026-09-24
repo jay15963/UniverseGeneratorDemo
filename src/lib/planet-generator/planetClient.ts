@@ -5,6 +5,7 @@
 //  - openPlanetSession(): a dedicated worker holding a full-resolution generator for the surface map.
 import type { LayerType, PlanetConfig } from './generator';
 import type { PlanetProbe, WorkerRequest, WorkerResponse } from './workerProtocol';
+import type { ChunkData } from '../terrain/types';
 
 export type { PlanetProbe };
 
@@ -151,6 +152,11 @@ export interface PlanetSession {
   clouds: { width: number; height: number; data: Uint8ClampedArray } | null;
   renderLayer(layer: LayerType): Promise<ImageData>;
   probe(x: number, y: number): Promise<PlanetProbe | null>;
+  /** Playable terrain chunk (32x32 tiles) */
+  chunk(cx: number, cy: number): Promise<ChunkData>;
+  /** Nearest walkable tile to a map pixel */
+  spawn(x: number, y: number): Promise<{ tx: number; ty: number }>;
+  config: PlanetConfig;
   dispose(): void;
 }
 
@@ -200,6 +206,17 @@ export function openPlanetSession(
         const res = await call({ kind: 'probe', id: nextId++, sessionId, x, y });
         return res.kind === 'probe' ? res.probe : null;
       },
+      chunk: async (cx, cy) => {
+        const res = await call({ kind: 'chunk', id: nextId++, sessionId, cx, cy });
+        if (res.kind !== 'chunk') throw new Error('unexpected response');
+        return res.chunk;
+      },
+      spawn: async (x, y) => {
+        const res = await call({ kind: 'spawn', id: nextId++, sessionId, x, y });
+        if (res.kind !== 'spawn') throw new Error('unexpected response');
+        return { tx: res.tx, ty: res.ty };
+      },
+      config,
       dispose,
     };
     return session;

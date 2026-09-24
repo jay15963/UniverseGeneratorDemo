@@ -55,6 +55,19 @@ Além do modo exploração, cada gerador pode ser usado separadamente pela tela 
 - **Menu vivo** — cena procedural animada com um mundo diferente do gerador a cada visita.
 - **Sem travamentos** — toda geração de planeta roda em **Web Workers** (pool para texturas + worker dedicado para a superfície em 2048×1024), com cache LRU de texturas.
 
+### 🏕️ Modo Sobrevivência (pouso na superfície)
+
+No mapa de superfície de qualquer planeta sólido, clique em **Pousar** e escolha um ponto: você desce e explora a pé um terreno em pixel art gerado **a partir dos dados reais do planeta** (bioma, clima, costa, rios, rochas, minérios e fertilidade daquele ponto do mapa).
+
+- **Mundo contínuo em chunks** de 32×32 tiles, gerados no Web Worker (≈80 ms cada) e carregados ao redor do jogador.
+- **Solos**: gramados, capim seco, tundra, neve, serrapilheira, folhiço de pinheiro, solo de selva, terra, lama, argila vermelha/azul, turfa, brejo, areia, cascalho, salina, afloramentos rochosos (8 tipos de rocha: granito, andesito, basalto, calcário, arenito, giz, xisto, peridotito), além de regolito, gelo, lava, cinzas, enxofre e grafite em mundos sem vida.
+- **Água**: oceanos com espuma na costa, rios que seguem o mapa do planeta, riachos, lagoas e pântanos.
+- **Florestas densas de verdade**: copas entrelaçadas, sub-bosque com samambaias, arbustos, cogumelos, gravetos, troncos caídos e tocos. Espécies por bioma: carvalho, bétula, bordo, pinheiro, abeto (com neve), acácia, sumaúma com cipós, palmeira, salgueiro e árvores mortas.
+- **Recursos para crafting (inspirados em Vintage Story)**: graveto, pedras soltas de cada rocha, pederneira, cobre nativo, cassiterita, quartzo aurífero, limonita, capim, junco, taboa, linho, samambaia, mirtilo, framboesa, amora, cogumelos, cenoura/cebola/nabo/abóbora/trigo selvagens, conchas, flores; e em outros mundos: cristais de gelo, obsidiana, enxofre, diamante bruto e sal-gema.
+- **Coleta e mochila** persistentes por planeta; frutinhas rebrotam após um dia; árvores, pedregulhos e troncos exigem ferramentas (próximo passo: crafting).
+- **Toda a arte é gerada por código** (sem arquivos de imagem): galeria em `#galeria` na URL.
+- Controles: WASD/setas, E/Espaço/clique para coletar, roda para zoom, I mochila, M minimapa, Esc sair; no celular, joystick virtual + botão de ação.
+
 ### ⌨️ Atalhos no Sistema Solar
 
 | Tecla | Ação |
@@ -172,7 +185,8 @@ src/
 │   ├── galaxy/                  # Gerador de galáxia
 │   ├── solar-system/            # Gerador de sistema solar
 │   ├── planet-generator/        # Gerador de superfície + Web Worker + perfis visuais
-│   └── render/                  # Esferas planetárias, estrelas, anéis, galáxias, fundo espacial
+│   ├── render/                  # Esferas planetárias, estrelas, anéis, galáxias, fundo espacial
+│   └── terrain/                 # Terreno jogável: gerador, solos, recursos, pixel art procedural
 └── hooks/                       # Controllers dos geradores individuais
 ```
 
@@ -186,6 +200,9 @@ src/
 - [x] Gerador de universo com milhares de galáxias
 - [x] Modo Exploração com LOD e transições de hiperespaço
 - [ ] Jogo Grand Strategy estilo "War" com Supabase multiplayer
+- [x] Terreno jogável com recursos coletáveis (modo sobrevivência)
+- [ ] Crafting (machado de pedra, faca de pederneira, fogueira, cestos)
+- [ ] Fauna procedural e tribos/NPCs
 - [ ] Terraformação e construção de bases planetárias
 - [ ] Nações, cidades e controle territorial por sistema solar
 
