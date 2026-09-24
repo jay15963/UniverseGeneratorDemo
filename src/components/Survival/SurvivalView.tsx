@@ -31,6 +31,8 @@ interface Props {
   playerCreature?: { genome: Genome; citizen: number } | null;
   /** Scripted camera (demo reel): no HUD, no input, nothing saved; implies the spectator camera. */
   cinematic?: Cinematic | null;
+  /** loaded but invisible (a later scene of a trailer): terrain streams in, nothing is drawn */
+  standby?: boolean;
 }
 
 /** A drawable image: a GPU texture region (WebGL path) or a canvas (Canvas2D fallback). */
@@ -146,9 +148,12 @@ const PLAYER_K = 0.4;
 const REACH = 26;
 const SPEED = 74;
 
-export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null }: Props) {
+export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null, standby = false }: Props) {
   const cine = cinematic;
   const spectator = spectatorProp || !!cine;
+  const standbyRef = useRef(standby);
+  standbyRef.current = standby;
+  const preloadRef = useRef<{ x: number; y: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const miniRef = useRef<HTMLCanvasElement>(null);
   const cfg = session.config;
@@ -279,6 +284,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     const pool = poolRef.current;
     const R = pool ? 3 : 2;
     for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) want.push([pcx + dx, pcy + dy, dx * dx + dy * dy]);
+    // a scripted camera also streams in the place of its next cut
+    const pre = preloadRef.current;
+    if (pre) {
+      const qx = Math.floor(pre.x / CHUNK_PX), qy = Math.floor(pre.y / CHUNK_PX);
+      for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) want.push([qx + dx, qy + dy, dx * dx + dy * dy + 2]);
+    }
     want.sort((a, b) => a[2] - b[2]);
     for (const [cx, cy] of want) {
       const key = `${cx},${cy}`;
@@ -301,8 +312,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         mini.getContext('2d')!.putImageData(new ImageData(data.mini as Uint8ClampedArray<ArrayBuffer>, CHUNK, CHUNK), 0, 0);
         g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow, tex });
         fauna.spawnChunk(data.cx, data.cy, world);
-        if (g.chunks.size > 64) {
-          const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - 64);
+        const cap = cine ? 150 : 64;
+        if (g.chunks.size > cap) {
+          const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - cap);
           for (const [k, c] of far) { g.chunks.delete(k); fauna.removeChunk(k); if (c.tex) glRef.current?.deleteTexture(c.tex); }
         }
         requestChunks();
@@ -797,6 +809,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         return q ? { water: !!GROUND_INFO[q.c.data.ground[q.k] as Ground].water, lava: !!q.c.data.lava[q.k], level: q.c.data.level[q.k] } : null;
       },
       animals: () => fauna.all,
+      pending: () => G.current.pending.size,
       get worldZoom() {
         return Math.min(canvas.clientWidth / WORLD_PX, canvas.clientHeight / (WORLD_PX * (session.height / session.width))) * 0.92;
       },
@@ -830,8 +843,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       if (cine && (g.x || g.y)) {
         const cam = cine.update(dt, cineApi);
         g.x = cam.x; g.y = cam.y; cineZoom = cam.zoom; cineFade = cam.fade;
+        preloadRef.current = cam.preload ?? null;
         if (cam.hour !== undefined) g.time = ((((cam.hour / 24) % 1) + 1) % 1) * DAY_SECONDS;
-        if (cam.weather && cam.weather !== cineWeather) { cineWeather = cam.weather; fx.force(cam.weather, cineFade > 0.9); }
+        // hard cuts: the new weather is there at once
+        if (cam.weather && cam.weather !== cineWeather) { cineWeather = cam.weather; fx.force(cam.weather, true); }
         if (g.ready && !mapImg) loadMap();
       }
 
@@ -901,6 +916,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const lod = lodOf(Z);
       if (lod !== lodShown || (!cine && zt !== zoomShown)) { lodShown = lod; zoomShown = zt; setLodLabel({ lod, zoom: zt }); }
       const local = lod === 'local';
+      if (standbyRef.current) { raf = requestAnimationFrame(frame); return; }
 
       // --- interaction target (same terrace only; hand-gatherables win over tool-only things) ---
       let target: Feature | null = null, td = REACH, toolT: Feature | null = null, toolD = REACH - 6;
@@ -1196,7 +1212,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const itemIcon = (it: ItemDef) => <ItemIcon def={it} bank={bank} />;
 
   const ui = cine ? (
-    <div className="fixed inset-0 z-[300] bg-black select-none pointer-events-none">
+    <div className="fixed inset-0 z-[300] bg-black select-none pointer-events-none" style={{ visibility: standby ? 'hidden' : 'visible' }}>
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" style={{ imageRendering: 'pixelated' }} />
       <canvas ref={overlayRef} className="absolute inset-0 w-full h-full" />
       {loading && <div className="absolute inset-0 bg-black" />}

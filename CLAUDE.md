@@ -42,5 +42,23 @@ These were set by the project owner — keep them:
 - Menu → "Assistir demo": a self-running film of the living worlds, no editors and no HUD - only the engine FPS
   (`frameMeter`: 1000 / CPU ms per frame, i.e. uncapped by the monitor). Esc or the auto-hiding X leaves it.
 - `DemoReel` plays space shots (gas-giant flyby, planet approach + dive) and mounts `SurvivalView` with a `cinematic`
-  director (`director.ts`): shots are specs (coast / wild / peaks / cold / rise, hours, weather, zoom); spots are scouted
-  on the planet map and refined on the loaded tiles. Add worlds or shots in the `PLANETS` list. `#demo=N` starts at world N.
+  director (`director.ts`): shots are specs (coast / wild / peaks / cold / lava / rise, hours, weather, zoom); spots are
+  scouted on the planet map and refined on the loaded tiles. Add worlds or shots in the `PLANETS` list. `#demo=N` starts
+  at world N.
+- **Hard cuts only** between scenes/shots (the owner does not want fades to black). The director streams the next
+  shot's terrain in (`CineCam.preload`) while the current one plays, so a cut never shows unloaded ground.
+
+## Trailer (`src/components/Trailer/`)
+- Menu → "Assistir trailer": a ~2:28 film locked to the soundtrack "Leaf" by Infraction [No Copyright Music]
+  (100 BPM: beat 0.6 s, bar 2.4 s, first beat 0.45 s; sections: intro 0-19.6, build -58, breakdown -96.4, climax -116,
+  outro -137, fade-out). Every cut sits on that grid; the timeline table is at the top of `Trailer.tsx`.
+- Script (owner's): black title cards "Claude gave me $100" / "and I cooked." (linear fade-in, no music) → universe
+  (music starts) → hyperspace into a galaxy → a star with an Earth-like world → hyperspace into its system → the planet →
+  hyperspace to the globe (3 s) → through the clouds → nature → 20 creatures (0.5 s each) → one is picked → its lineage
+  + 8 eras (1 s each, space age held 3 s) → 2:17 end card for 5 s: "Made with Claude Opus 5.5", "running in a web
+  browser at 500+ FPS", "@jaayyyy.ay" and the music credit. Keep it mysterious (no genre labels).
+- The clock is the music itself (`public/trailer/leaf.mp3` if present - gitignored, the licence covers use with credit,
+  not redistribution - otherwise the YouTube player). Heavy things are prepared before the title cards.
+- Cosmos renderers (`cosmos.ts`) reuse the game's generators/sprites with a scripted camera; `creatures.ts` renders
+  sheets through `SpriteStore` workers. `#trailer=S` starts at second S; `#trailer=S,0.0333` runs a silent fixed-step
+  clock (for slow test machines).
