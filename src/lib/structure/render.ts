@@ -9,6 +9,14 @@ import { typeById } from './registry';
 import type { Ctx } from './parts';
 
 export const SFRAMES = 8;
+/**
+ * Pixel scale per level of detail. Gameplay: a civilised creature (drawn at CREATURE_K, ~40 px tall) fits the doors and
+ * a storey is ~1.7 creatures tall. Regional: the same structure 4.5x smaller, for the regional map.
+ */
+export const LOD_K = { gameplay: 4.5, regional: 1 } as const;
+export type Lod = keyof typeof LOD_K;
+/** the creatures' gameplay scale (SurvivalView PLAYER_K) */
+export const CREATURE_K = 0.4;
 export interface StructSpec { culture: Culture; type: string; size: Size; era: number; variant: number; night: boolean }
 
 const kits = new Map<string, Kit>();
@@ -98,7 +106,7 @@ export function structSheet(s: StructSpec, k = 1, frames = SFRAMES) {
 // Canvas wrappers (main thread)
 // ---------------------------------------------------------------------------------------------------
 export interface StructSprite { frames: HTMLCanvasElement[]; w: number; h: number; ax: number; ay: number }
-const cache = new Map<string, StructSprite>();
+export const cache = new Map<string, StructSprite>();
 export const specKey = (s: StructSpec) => `${s.culture.seed}|${s.culture.mode}|${Object.values(s.culture.params).map(v => v.toFixed(3)).join(',')}|${s.type}|${s.size}|${s.era}|${s.variant}|${s.night}`;
 export const toCanvas = (px: Uint8ClampedArray, w: number, h: number) => {
   const c = document.createElement('canvas');
@@ -116,3 +124,4 @@ export function renderStructure(s: StructSpec, dir: Dir8, frames = SFRAMES, k = 
   cache.set(key, sp);
   return sp;
 }
+

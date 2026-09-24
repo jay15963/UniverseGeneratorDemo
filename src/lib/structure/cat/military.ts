@@ -158,60 +158,58 @@ function barracks(x: Ctx) {
   void D; void sack; void windowRow;
 }
 
-function cannon(x: Ctx, a: number, f: number, s: number, recoil: number) {
-  const { K, D, e } = x, k = D.depth([a, 2, f]);
-  if (e <= 3) { for (const sd of [-1, 1]) { const c: V3 = [a + sd * 1.6 * s, 1.5 * s, f]; D.ell(c, 1.5 * s * 0.3, 1.5 * s, K.wood, k + sd * 0.01, { g: D.group() }); } }
-  else box(x, a - 2.5 * s, f - 2.5 * s, a + 2.5 * s, f + 2.5 * s, 0, 1.6 * s, K.metal, K.metal);
-  D.cap([a, 2 * s, f - 1.5 * s + recoil], [a, 3.2 * s, f + 5 * s + recoil], 1 * s, 0.7 * s, e <= 3 ? K.iron : K.metal, k + 0.02);
-}
-function battery(x: Ctx) {
+/**
+ * Redoubt / bunker: a fortified position (no weapons - only the structure: earthworks, walls,
+ * embrasures, blast doors, shield emitters).
+ */
+function bunker(x: Ctx) {
   const { C, K, e, D } = x, S = C.storey, med = x.size === 'medium';
-  const W = med ? 36 : 22;
-  ground(x, rect(-W / 2 - 3, -10, W / 2 + 3, 12), K.soil, 0, 0.5);
-  if (e === 0) { // boulder piles and a sling frame
-    for (let i = 0; i < 6; i++) D.ell([-8 + (i % 3) * 2.6, 1.2 + Math.floor(i / 3) * 1.8, 4], 1.6, 1.4, K.stone, D.depth([-8, 1, 4]) + i * 0.001, { g: D.group() });
-    for (const s of [-1, 1]) D.cap([6 + s * 3, 0, 0], [6, 9, 0], 0.7, 0.6, K.wood, D.depth([6, 4, 0]));
-    const sw = Math.sin(x.ph) * 0.8;
-    D.cap([6, 9, 0], [6 + Math.sin(sw) * 8, 9 - Math.cos(sw) * 8 + 8, Math.cos(sw) * 2], 0.3, 0.3, K.rope, D.depth([6, 8, 0]) + 0.1);
-    fence(x, [[-W / 2, 9], [W / 2, 9]], 4, K.wood, 1.6, true);
+  const R = med ? 20 : 13;
+  ground(x, rect(-R - 8, -R - 6, R + 8, R + 8), K.soil, 0, 0.5);
+  if (e === 0) { // earthen ring bristling with sharpened stakes, a hut inside
+    x.D.hull([...ring(0, 0, 0, R + 3, 24), ...ring(0, 0, 4, R, 24)], K.soil, -8e4, { g: D.group(), flat: 0.1 });
+    for (let i = 0; i < 18; i++) { const t = (i / 18) * Math.PI * 2; if (Math.abs(Math.cos(t) - 1) < 0.05) continue; const p0: V3 = [Math.sin(t) * (R + 1), 3, Math.cos(t) * (R + 1)]; D.cap(p0, [Math.sin(t) * (R + 5), 7, Math.cos(t) * (R + 5)], 0.7, 0.2, K.wood, D.depth(p0) + 0.01); }
+    house(x, { a: 0, f: -2, w: 11, d: 9, floors: 1, y0: 4, stilts: false, plinth: false, chimney: false });
+    fire(x, [R * 0.5, 4, R * 0.3], 1.1);
     return;
   }
-  if (e <= 2) { // trebuchet: the arm swings through the loop
-    const k = D.depth([0, 8, 0]), H = S * 1.3, sw = Math.sin(x.ph) * 1.2 - 0.3;
-    for (const s of [-1, 1]) { D.cap([-5, 0, s * 3], [0, H, s * 2], 0.9, 0.8, K.wood, k + s * 0.02); D.cap([5, 0, s * 3], [0, H, s * 2], 0.9, 0.8, K.wood, k + s * 0.02); }
-    const L1 = H * 1.3, L2 = H * 0.45, p: V3 = [0, H, 0];
-    const arm1: V3 = [Math.cos(sw) * L1, H + Math.sin(sw) * L1, 0], arm2: V3 = [-Math.cos(sw) * L2, H - Math.sin(sw) * L2, 0];
-    D.cap(arm2, arm1, 0.9, 0.6, K.wood, k + 0.01);
-    box(x, arm2[0] - 2.5, -2, arm2[0] + 2.5, 2, arm2[1] - 5, arm2[1] - 1, K.wood, K.wood, 0.5);
-    D.cap(arm1, [arm1[0] + 2, arm1[1] - 4, 0], 0.2, 0.2, K.rope, k + 0.02); void p;
-    for (let i = 0; i < 4; i++) D.ell([W / 2 - 3 + (i % 2) * 2.4, 1.2 + Math.floor(i / 2) * 1.8, 5], 1.2, 1.2, K.stone, D.depth([W / 2, 1, 5]) + i * 0.001, { g: D.group() });
-    if (med) defWall(x, -W / 2, W / 2, 10, S * 0.6, false, 3);
+  if (e <= 2) { // stone redoubt: a low, thick tower behind a ditch
+    if (med) { disc(x, 0, 0, 0.02, R + 6, K.dark, -9e4); disc(x, 0, 0, 0.03, R + 2, K.soil, -9e4 + 1); }
+    const round = C.plan !== 'box';
+    const r = R * 0.75, h = S * 1.4;
+    const v = round ? cyl(x, 0, 0, r, 0, h, K.stone, K.paving, { rt: r * 0.92 }) : box(x, -r, -r, r, r, 0, h, K.stone, K.paving);
+    for (let i = 0; i < 8; i++) onWall(x, v, round ? (i / 8) * Math.PI * 2 + 0.2 : i % 4, round ? 0 : r * (i < 4 ? 0.5 : 1.5), h * 0.6, 1.6, 4, 'slit', K.dark);
+    onWall(x, v, round ? 0 : frontSide(v), round ? 0 : r, 3.5, 4, 7, 'arch', K.door);
+    if (round) for (let i = 0; i < 10; i++) { const t = (i / 10) * Math.PI * 2; box(x, Math.sin(t) * r * 0.9 - 1, Math.cos(t) * r * 0.9 - 1, Math.sin(t) * r * 0.9 + 1, Math.cos(t) * r * 0.9 + 1, h, h + 2.4, K.stone, K.stone); }
+    else for (const [a0, f0, a1, f1] of [[-1, 1, 1, 1], [-1, -1, 1, -1], [-1, -1, -1, 1], [1, -1, 1, 1]]) merlons(x, a0 * r, f0 * r, a1 * r, f1 * r, h, 2.4, 1.2, K.stone, 3.6);
+    flag(x, [0, h, 0], 8, 6, K.accent);
     return;
   }
-  if (e <= 4) { // cannons / guns behind an earthwork or sandbags
-    const n = med ? 3 : 2, rec = Math.max(0, Math.sin(x.ph * 2)) * -1.2;
-    for (let i = 0; i < n; i++) cannon(x, (i - (n - 1) / 2) * 14, 0, 2, i === 1 ? rec : 0);
-    x.D.hull([...ring(0, 9, 0, W / 2 + 2, 20, 3), ...ring(0, 9, 3.2, W / 2, 20, 1.5)], e === 3 ? K.soil : K.cloth2, D.depth([0, 1, 9]), { g: D.group(), flat: 0.1 });
-    for (let i = 0; i < 4; i++) (i % 2 ? barrel : crate)(x, -W / 2 - 1 + i * 3, -7, 0, 2.8, e >= 4 ? K.accent2 : K.wood);
-    if (e === 4) defTower(x, W / 2 + 6, -6, 3, S * 2, false);
+  if (e === 3) { // earth-and-brick bastion (a pointed star fort in miniature)
+    const rg = polyRing(0, 0, R, R, 5, 0);
+    prism(x, rg, 0, S * 0.9, K.wall, K.ground, { topRing: polyRing(0, 0, R * 0.9, R * 0.9, 5, 0) });
+    for (let i = 0; i < 5; i++) { const t = (i / 5) * Math.PI * 2 + Math.PI / 5; if (D.facing([Math.sin(t), 0, Math.cos(t)]) > 0.2) D.ell([Math.sin(t) * R * 0.85, S * 0.7, Math.cos(t) * R * 0.85], 1.4, 1, K.dark, D.depth([0, S, 0]) + 0.01); }
+    house(x, { a: 0, f: -2, w: R * 0.8, d: R * 0.6, floors: 1, y0: S * 0.9, plinth: false, stilts: false, chimney: false, roof: 'flat' });
+    flag(x, [R * 0.4, S * 0.9, R * 0.2], 9, 6, K.accent);
     return;
   }
-  if (e === 5) { // missile launcher tilting up
-    const tilt = 0.5 + Math.sin(x.ph) * 0.15;
-    box(x, -12, -9, 12, 9, 0, 4.5, K.accent2, K.accent2);
-    for (let i = 0; i < 4; i++) { const a = -6.6 + i * 4.4; D.cap([a, 5.5, -6], [a, 5.5 + Math.sin(tilt) * 20, -6 + Math.cos(tilt) * 20], 1.8, 1.8, K.trim, D.depth([a, 10, 2]) + 0.1 + i * 0.001); }
-    dish(x, [14, 0, -4], 3);
+  if (e <= 5) { // concrete pillbox / bunker half-sunk in an earth mound
+    x.D.hull([...ring(0, 0, 0, R + 5, 24), ...ring(0, 0, S * 0.5, R * 0.9, 24)], K.ground, -8e4, { g: D.group(), flat: 0.1 });
+    const n = C.plan === 'box' ? 4 : 6;
+    const v = prism(x, polyRing(0, 0, R * 0.75, R * 0.75, n, Math.PI / n), S * 0.2, S * 1.05, K.base, K.base, { topRing: polyRing(0, 0, R * 0.68, R * 0.68, n, Math.PI / n) });
+    for (let s2 = 0; s2 < n; s2++) onWall(x, v, s2, (R * 0.75 * 2 * Math.sin(Math.PI / n)) / 2, S * 0.75, R * 0.6, 1.8, 'rect', K.dark);
+    onWall(x, v, frontSide(v), (R * 0.75 * 2 * Math.sin(Math.PI / n)) / 2, S * 0.45, 4.4, 6, 'rect', K.metal);
+    if (e === 4) for (let i = 0; i < 12; i++) { const t = (i / 12) * Math.PI * 2; D.ell([Math.sin(t) * (R + 2), S * 0.35, Math.cos(t) * (R + 2)], 1.8, 1.1, K.cloth2, D.depth([Math.sin(t) * (R + 2), 0, Math.cos(t) * (R + 2)]) - 1e4, { g: D.group() }); }
+    else { antenna(x, [R * 0.3, S * 1.05, -R * 0.2], 10); box(x, -R * 0.4, -R * 0.3, -R * 0.4 + 3, -R * 0.3 + 3, S * 1.05, S * 1.05 + 2.4, K.metal, K.metal); }
+    lamp(x, [R * 0.5, S * 0.6, R * 0.6], K.fire, true, 0.8);
     return;
   }
-  // turret with a charging barrel (laser / railgun)
-  const rot = x.ph / 2, k = D.depth([0, 9, 0]);
-  cyl(x, 0, 0, 10, 0, 6, K.base, K.trim);
-  domeRoof(x, 0, 0, 6, 8, 7, K.wall, k + 0.05);
-  const tip: V3 = [Math.sin(rot) * 24, 12, Math.cos(rot) * 24];
-  D.cap([0, 10.5, 0], tip, 1.8, 1.1, K.metal, D.depth([tip[0] / 2, 11, tip[2] / 2]) + 0.06);
-  const ch = (Math.sin(x.ph * 2) + 1) / 2;
-  lamp(x, tip, e === 7 ? K.glow2 : K.fire2, false, 0.6 + ch * 1.2);
-  for (let i = 0; i < 3; i++) { const t = (i / 3) * Math.PI * 2 + 0.4; cyl(x, Math.sin(t) * 10, Math.cos(t) * 10, 1, 0, 3, K.metal, K.glow2); }
+  // shielded bunker: a low dome ringed by emitters under a shimmering field
+  const v = cyl(x, 0, 0, R * 0.8, 0, S * 0.5, K.wall, null);
+  domeRoof(x, 0, 0, S * 0.5, R * 0.8, R * 0.5, K.trim, v.key + 0.02);
+  onWall(x, v, 0, 0, S * 0.25, 5, S * 0.45, 'round', K.glow2);
+  for (let i = 0; i < 5; i++) { const t = (i / 5) * Math.PI * 2 + 0.3; cyl(x, Math.sin(t) * (R + 3), Math.cos(t) * (R + 3), 1.2, 0, 7, K.metal, K.trim); lamp(x, [Math.sin(t) * (R + 3), 7.8, Math.cos(t) * (R + 3)], K.glow2, true, 0.8); }
+  domeRoof(x, 0, 0, 0, R + 4, R * 0.9, K.field, 1e5);
 }
 
 function fortress(x: Ctx) {
@@ -266,7 +264,7 @@ export const MILITARY: StructType[] = [
   { id: 'wall', cat: 'military', sizes: ['small', 'medium', 'large', 'giant'], name: 'Muralha', eraNames: ['Paliçada', 'Muralha', 'Muralha', 'Muralha', 'Barreira de concreto', 'Barreira', 'Cerca de energia', 'Cerca de energia'], blurb: 'Trecho de defesa; do médio em diante tem portão, do grande em diante, torres.', build: wall },
   { id: 'barracks', cat: 'military', sizes: ['medium', 'large'], name: 'Quartel', blurb: 'Alojamentos, pátio de formatura, bonecos e alvos.', build: barracks },
   { id: 'training', cat: 'military', sizes: ['small', 'medium', 'large'], name: 'Campo de treino', eraNames: ['Roda de luta', 'Campo de treino', 'Campo de treino', 'Campo de treino', 'Campo de treino', 'Centro de treinamento', 'Centro de treinamento', 'Centro de treinamento'], blurb: 'Bonecos, alvos, pista de obstáculos e de corrida.', build: training },
-  { id: 'battery', cat: 'military', sizes: ['small', 'medium'], name: 'Bateria de defesa', eraNames: ['Funda e pedras', 'Trabuco', 'Trabuco', 'Bateria de canhões', 'Ninho de artilharia', 'Lançador de mísseis', 'Torreta de laser', 'Canhão de trilho'], blurb: 'Armas fixas de defesa da época.', build: battery },
+  { id: 'bunker', cat: 'military', sizes: ['small', 'medium'], name: 'Reduto', eraNames: ['Cerca de estacas', 'Reduto de pedra', 'Reduto de pedra', 'Baluarte', 'Casamata', 'Bunker', 'Bunker blindado', 'Bunker com escudo'], blurb: 'Posição fortificada: só a estrutura, sem armas (armas são equipamentos).', build: bunker },
   { id: 'fortress', cat: 'military', sizes: ['large', 'giant'], name: 'Fortaleza', eraNames: ['Forte de colina', 'Castelo', 'Castelo', 'Forte', 'Base fortificada', 'Base fortificada', 'Cidadela de energia', 'Cidadela com escudo'], blurb: 'Muralhas, torres e o reduto central.', build: fortress },
 ];
 void cyl; void roofOn; void antenna; void lamp;

@@ -155,15 +155,8 @@ function warehouse(x: Ctx) {
   if (e >= 4) {
     const cols: Mat[] = [K.accent, K.accent2, K.cloth, blend(K.accent, K.trim, 0.4)];
     for (let i = 0; i < (large ? 6 : 4); i++) { const a = -W / 2 + 4 + (i % 3) * 13, lvl = Math.floor(i / 3); box(x, a, Dd / 2 + 3, a + 12, Dd / 2 + 8, lvl * 5, lvl * 5 + 5, cols[i % 4], cols[i % 4], lvl * 0.01); }
-    // gantry crane moving a container
-    const t = Math.sin(x.ph) * 0.5 + 0.5, ca = -W / 2 + 4 + t * 30;
-    for (const s of [-1, 1]) D.cap([W / 2 + 8, 0, Dd / 2 + 6 + s * 5], [W / 2 + 8, S * 2.2, Dd / 2 + 6 + s * 5], 0.8, 0.8, K.accent2, D.depth([W / 2 + 8, 8, Dd / 2 + 6]));
-    D.cap([-W / 2, S * 2.2, Dd / 2 + 6], [W / 2 + 8, S * 2.2, Dd / 2 + 6], 1, 1, K.accent2, 1e4);
-    D.cap([ca + 6, S * 2.2, Dd / 2 + 6], [ca + 6, 13, Dd / 2 + 6], 0.2, 0.2, K.rope, 1e4 + 0.01);
-    box(x, ca, Dd / 2 + 3.5, ca + 12, Dd / 2 + 8.5, 11, 14, K.accent, K.accent, 1e4 - D.depth([ca, 12, Dd / 2 + 6]));
   } else {
     for (let i = 0; i < 8; i++) (i % 3 === 0 ? barrel : i % 3 === 1 ? crate : sack)(x, -W / 2 + 3 + (i % 4) * 4, Dd / 2 + 4 + Math.floor(i / 4) * 4, 0, 3.2, i % 3 === 2 ? K.cloth2 : K.wood);
-    if (e >= 1) { const t = x.t, a = -W / 2 - 4 + t * (W + 16); box(x, a - 4, Dd / 2 + 10, a + 4, Dd / 2 + 13, 1.5, 4, K.wood, K.wood); for (const s of [-1, 1]) cyl(x, a + s * 3, Dd / 2 + 13.2, 1.5, 0, 0.6, K.wood, K.wood); }
   }
   void tree; void chance; void D; void ([] as V3[]);
 }

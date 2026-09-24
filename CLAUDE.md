@@ -85,4 +85,15 @@ Owner's rules - keep them:
   draws all 8 civilisation eras. **New types** = one builder + one entry in `cat/<category>.ts` (the registry is
   `registry.ts`); the owner will ask for more (target: 100+ types), so keep builders self-contained and reuse
   `parts.ts` / `core.ts` (`house()` is the generic storeyed body with the culture's plan, windows, door and roof).
+- **Structures, never equipment**: no weapons (catapults, trebuchets, cannons, turrets), vehicles (carts, trucks,
+  drones, hovercraft) or machines-as-objects (cranes, robot arms). Those will be separate equipment assets. Fortified
+  positions are drawn as the building only (walls, embrasures, blast doors, shield emitters).
+- **Two LODs** (`LOD_K` in `render.ts`): *gameplay* (k 4.5) is sized against the creatures at their gameplay scale
+  (`CREATURE_K` 0.4, ~40 px tall): a citizen fits the door, a storey is ~1.7 citizens tall. *Regional* (k 1) is the
+  same drawing 4.5x smaller for the regional map. Texture units are screen pixels, so bricks/planks keep their pixel
+  size at both LODs. The gameplay LOD is rendered in `struct.worker.ts` (`structAsync.ts`).
+- The generator shows, in gameplay LOD, a civilised citizen of a species made from the same seed/world, wearing the
+  clothes of the era, next to the structure (scale + who built it).
+- **Walls**: in gameplay, walls/towers will be a modular system (small segments, corners, gates and towers joined
+  together); today's `wall` type (a whole stretch per size) is a placeholder for that system.
 - Menu → "Gerador de Estruturas" (`#estruturas` opens it directly).

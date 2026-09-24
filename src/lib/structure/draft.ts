@@ -58,7 +58,8 @@ export class Draft {
       const eu = [su[0] - so[0], su[1] - so[1]], ev = [sv[0] - so[0], sv[1] - so[1]];
       const det = eu[0] * ev[1] - eu[1] * ev[0];
       if (Math.abs(det) > 1e-6) {
-        const Lu = Math.hypot(U[0] - O[0], U[1] - O[1], U[2] - O[2]), Lv = Math.hypot(V[0] - O[0], V[1] - O[1], V[2] - O[2]);
+        // texture units are screen pixels, so bricks, planks and tiles keep their pixel size at every LOD
+        const Lu = Math.hypot(U[0] - O[0], U[1] - O[1], U[2] - O[2]) * this.k, Lv = Math.hypot(V[0] - O[0], V[1] - O[1], V[2] - O[2]) * this.k;
         const a = (ev[1] / det) * Lu, b = (-ev[0] / det) * Lu, d = (-eu[1] / det) * Lv, e = (eu[0] / det) * Lv;
         part.uv = [a, b, -(a * so[0] + b * so[1]), d, e, -(d * so[0] + e * so[1])];
       }
