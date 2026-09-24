@@ -14,7 +14,9 @@ export type Tex =
   | 'metal' | 'glass' | 'gel' | 'bone' | 'wood' | 'compound' | 'glow' | 'hair' | 'wool' | 'knit' | 'silk'
   // architecture (structures): u runs along the wall, v up it when a part carries a `uv` mapping
   | 'brick' | 'stone' | 'ashlar' | 'plank' | 'log' | 'thatch' | 'shingle' | 'tile' | 'adobe' | 'concrete' | 'panel'
-  | 'corrugated' | 'glazing' | 'hex' | 'leafy' | 'crop' | 'soil' | 'snow' | 'paving' | 'grid' | 'water' | 'hide';
+  | 'corrugated' | 'glazing' | 'hex' | 'leafy' | 'crop' | 'soil' | 'snow' | 'paving' | 'grid' | 'water' | 'hide'
+  // equipment: chain mail rings, quilted padding
+  | 'mail' | 'quilt';
 
 export interface Mat {
   ramp: RGB[];                  // 6 colours, dark -> light
@@ -179,6 +181,8 @@ function texDelta(m: Mat, x: number, y: number, u: number, v: number, nz: number
     }
     case 'grid': return frac(u / (3 * s)) < 0.18 || frac(v / (3 * s)) < 0.18 ? 0.16 : -0.04;
     case 'water': return Math.sin(u * 0.8 + Math.sin(v * 0.5) * 2) > 0.85 ? 0.2 : 0;
+    case 'mail': return (y & 1) === 0 ? ((x + (y >> 1)) % 2 === 0 ? 0.2 : -0.12) : ((x + (y >> 1)) % 2 === 1 ? 0.06 : -0.2);
+    case 'quilt': { const k = 4 * s; return frac((u + v) / k) < 0.14 || frac((u - v) / k) < 0.14 ? -0.16 : (vnoise(x / 3, y / 3, 60) - 0.5) * 0.06; }
     case 'hide': return (vnoise(u / 4, v / 4, 46) - 0.5) * 0.2 + (Math.abs(frac(u / (9 * s)) - 0.5) < 0.03 ? -0.14 : 0);
     default: return 0;
   }

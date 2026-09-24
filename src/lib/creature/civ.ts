@@ -15,11 +15,26 @@ const cloth = (h: number, s: number, l: number, tex: Tex = 'cloth', extra: Parti
 export interface Body {
   U: number; P: V3; C: V3; rP: number; rC: number; H: V3; R: number; head?: HeadInfo;
   legs: { hip: V3; knee: V3; ankle: V3; foot: V3; s: number }[];
-  arms: { sh: V3; el: V3; hand: V3; s: number; holds: boolean; lower: boolean }[];
+  arms: { sh: V3; el: V3; hand: V3; s: number; holds: boolean; lower: boolean; len: number }[];
   serpent: boolean;
 }
 
-export function buildCiv(S: Sketch, k: Kit, g: Genome, stage: Stage, ph: number, blink: boolean, citizen = 0) {
+/**
+ * Hooks used by the equipment generator (src/lib/equipment): the creature is drawn naked or with the given outfit,
+ * its arms re-posed to hold things, and the held items / carried gear drawn on it. The plain civilisation stages
+ * (creature generator, fauna) never pass hooks, so their hands stay free.
+ */
+export interface LoadHooks {
+  /** replaces the era's civil outfit; null = naked */
+  outfit?: Outfit | null;
+  /** moves hands (and recomputes elbows) to hold items */
+  pose?: (B: Body, ph: number, anim: string) => void;
+  /** draws held items and carried gear */
+  draw?: (S: Sketch, B: Body, ph: number) => void;
+}
+export const NAKED: Outfit = { sleevePad: 0, pantsPad: 0 };
+
+export function buildCiv(S: Sketch, k: Kit, g: Genome, stage: Stage, ph: number, blink: boolean, citizen = 0, load?: LoadHooks) {
   const U = 24 * (0.9 + g.size * 0.2);
   const gait = S.anim === 'walk' ? 1 : S.anim === 'run' ? 1.6 : 0;
   const breathe = Math.sin(ph) * 0.4 + Math.abs(Math.sin(ph)) * gait * 1.2;
@@ -49,11 +64,12 @@ export function buildCiv(S: Sketch, k: Kit, g: Genome, stage: Stage, ph: number,
       const holds = false; // hands stay free: no tools, weapons or equipment
       const sw = Math.sin(ph + (s < 0 ? 0 : Math.PI) + pair) * U * (0.04 + gait * 0.2);
       const hand: V3 = add(sh, [U * 0.06 + sw, -len * 1.72 + Math.abs(sw) * 0.3, s * U * 0.12]);
-      arms.push({ sh, el: ik3(sh, hand, len, len * 0.95, [-1, -0.2, s * 0.3]), hand, s, holds, lower: pair > 0 });
+      arms.push({ sh, el: ik3(sh, hand, len, len * 0.95, [-1, -0.2, s * 0.3]), hand, s, holds, lower: pair > 0, len });
     }
   }
   const B: Body = { U, P, C, rP, rC, H, R, legs, arms, serpent };
-  const O = outfit(g, stage, citizen);
+  if (load?.pose) load.pose(B, ph, S.anim);
+  const O = load && 'outfit' in load ? (load.outfit ?? NAKED) : outfit(g, stage, citizen);
 
   // --- behind: capes, back bags, folded wings ---
   O.behind?.(S, B, ph);
@@ -80,6 +96,7 @@ export function buildCiv(S: Sketch, k: Kit, g: Genome, stage: Stage, ph: number,
   B.head = drawHead(S, k, g, H, R, { ph, blink, sapient: true, noHorns: O.hidesHorns, tilt: 0.12 });
   O.headFront?.(S, B, ph);
   O.front?.(S, B, ph);
+  load?.draw?.(S, B, ph);
 }
 
 function arm(S: Sketch, k: Kit, g: Genome, O: Outfit, a: Body['arms'][number], U: number) {
@@ -121,7 +138,7 @@ function leg(S: Sketch, k: Kit, g: Genome, O: Outfit, l: Body['legs'][number], U
 // ---------------------------------------------------------------------------------------------------
 // Wardrobe
 // ---------------------------------------------------------------------------------------------------
-interface Outfit {
+export interface Outfit {
   sleeve?: Mat; sleevePad: number; sleeveFull?: boolean; sleeveMid?: boolean; puff?: Mat; cuff?: Mat;
   pants?: Mat; pantsPad: number; pantsFull?: boolean;
   boot?: Mat; bootHigh?: boolean; bootTrim?: Mat; glove?: Mat; naga?: Mat; hidesHorns?: boolean;
@@ -134,12 +151,12 @@ interface Outfit {
 
 // --- garment primitives -------------------------------------------------------------------------------
 /** torso garment reaching `down` px below the pelvis, flaring by `flare` at the hem (tunic, dress, coat) */
-function garment(S: Sketch, B: Body, m: Mat, pad: number, down: number, flare = 0, o: PO = {}) {
+export function garment(S: Sketch, B: Body, m: Mat, pad: number, down: number, flare = 0, o: PO = {}) {
   S.limb(B.P, B.C, B.rP + pad, B.rC + pad, m, { g: 20, bias: 0.05, ...o });
   if (down > 0) skirt(S, B, m, pad, down, flare, o);
 }
 /** A skirt / robe hem: a flat trapezoid (as drawn by hand) closed by a hem band - it never swallows the feet. */
-function skirt(S: Sketch, B: Body, m: Mat, pad: number, down: number, flare: number, o: PO = {}) {
+export function skirt(S: Sketch, B: Body, m: Mat, pad: number, down: number, flare: number, o: PO = {}) {
   const top = add(B.P, [0, B.rP * 0.35, 0]);
   const d = Math.min(down, B.P[1] - B.U * 0.3);
   const bot = add(B.P, [-flare * 0.1, -d, 0]);
@@ -150,25 +167,25 @@ function skirt(S: Sketch, B: Body, m: Mat, pad: number, down: number, flare: num
   S.blob(bot, [1, 0, 0], w2, w2, m, { g: 20, bias: 0.065, ...o }, Math.max(1.2, w2 * 0.28));
 }
 /** horizontal band around the body at height y (belts, sashes, collars, hat brims) */
-function band(S: Sketch, c: V3, r: number, thick: number, m: Mat, o: PO = {}) { S.blob(c, [1, 0, 0], r, r, m, { bias: 0.08, ...o }, thick); }
-function necklace(S: Sketch, B: Body, m: Mat, n: number, big = 1) {
+export function band(S: Sketch, c: V3, r: number, thick: number, m: Mat, o: PO = {}) { S.blob(c, [1, 0, 0], r, r, m, { bias: 0.08, ...o }, thick); }
+export function necklace(S: Sketch, B: Body, m: Mat, n: number, big = 1) {
   for (let i = 0; i < n; i++) {
     const a = -1.1 + (i / (n - 1)) * 2.2;
     S.ball(add(B.C, [Math.cos(a) * B.rC * 0.72 + B.U * 0.04, B.rC * 0.15 - Math.cos(a) * B.U * 0.08, Math.sin(a) * B.rC * 0.72]), 0.9 * big, m, { bias: 0.12, noLine: n > 7 });
   }
 }
-function cape(S: Sketch, B: Body, m: Mat, down: number, ph: number, width = 1) {
+export function cape(S: Sketch, B: Body, m: Mat, down: number, ph: number, width = 1) {
   const fl = Math.sin(ph) * B.U * 0.05;
   for (const s of [-1, 1]) S.poly([add(B.C, [-B.rC * 0.3, B.rC * 0.2, s * B.rC * 0.9 * width]), add(B.C, [-B.rC * 0.75, B.rC * 0.1, 0]), add(B.P, [-B.U * 0.45 - fl, -down, 0]), add(B.P, [-B.U * 0.3 - fl, -down, s * B.rC * 1.3 * width])], m, { flat: 0.3, bias: -0.5 });
 }
-function hood(S: Sketch, B: Body, m: Mat) { S.ball(add(B.H, [-B.R * 0.45, B.R * 0.05, 0]), B.R * 1.12, m, { bias: -B.R * 0.8 }); }
-function brimHat(S: Sketch, B: Body, brim: Mat, crown: Mat, brimR: number, crownH: number, crownR: number, bandM?: Mat, tilt = 0) {
+export function hood(S: Sketch, B: Body, m: Mat) { S.ball(add(B.H, [-B.R * 0.45, B.R * 0.05, 0]), B.R * 1.12, m, { bias: -B.R * 0.8 }); }
+export function brimHat(S: Sketch, B: Body, brim: Mat, crown: Mat, brimR: number, crownH: number, crownR: number, bandM?: Mat, tilt = 0) {
   const t = add(B.H, [-B.R * 0.1, B.R * 0.72, 0]);
   band(S, t, B.R * brimR, B.R * 0.12, brim, { bias: 0.3 });
   S.limb(add(t, [0, B.R * 0.05, 0]), add(t, [tilt, crownH, 0]), B.R * crownR, B.R * crownR * 0.92, crown, { bias: 0.32 });
   if (bandM) band(S, add(t, [0, B.R * 0.18, 0]), B.R * crownR + 0.5, 1.1, bandM, { bias: 0.34 });
 }
-function cap(S: Sketch, B: Body, m: Mat, visor?: Mat) {
+export function cap(S: Sketch, B: Body, m: Mat, visor?: Mat) {
   S.ball(add(B.H, [-B.R * 0.15, B.R * 0.55, 0]), B.R * 0.78, m, { bias: 0.3 });
   if (visor) S.blob(add(B.H, [B.R * 0.55, B.R * 0.55, 0]), [1, 0, 0], B.R * 0.5, B.R * 0.55, visor, { bias: 0.32 }, B.R * 0.1);
 }
@@ -177,7 +194,7 @@ function cap(S: Sketch, B: Body, m: Mat, visor?: Mat) {
 type Rng = () => number;
 const choose = <T,>(r: Rng, list: T[]): T => list[Math.floor(r() * list.length)];
 
-function outfit(g: Genome, stage: Stage, citizen: number): Outfit {
+export function outfit(g: Genome, stage: Stage, citizen: number): Outfit {
   const r: Rng = mulberry(seedToInt(`${g.seed}:${stage}:${citizen}`));
   const c = g.culture;
   const dye = (h: number, s = c.sat, l = 0.42, tex: Tex = 'cloth', extra: Partial<Mat> = {}) => cloth(h, s, l, tex, extra);

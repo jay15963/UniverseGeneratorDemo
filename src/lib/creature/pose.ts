@@ -24,7 +24,7 @@ export const DIR_SRC: Record<Dir8, [keyof typeof FACINGS, boolean]> = {
 const PITCH = 0.3; // the game's 3/4 camera looks slightly down
 
 /** Animation being drawn. Builders read it to plant, swing or tuck limbs. */
-export type Anim = 'idle' | 'walk' | 'run' | 'fly' | 'swim';
+export type Anim = 'idle' | 'walk' | 'run' | 'fly' | 'swim' | 'use';
 
 export class Sketch {
   private items: { part: Part; key: number; n: number }[] = [];
