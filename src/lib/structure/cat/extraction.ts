@@ -47,7 +47,7 @@ function farm(x: Ctx) {
   for (let i = 0; i < plots; i++) {
     const a = (i % 2) * (fw + 4) - (plots > 1 ? fw / 2 + 2 : 0), f = Math.floor(i / 2) * (fd + 4) + fd / 2 + 6;
     cropRows(x, a - fw / 2, f - fd / 2, a + fw / 2, f + fd / 2, i % 2 ? K.crop2 : K.crop, e === 0 ? 1.4 : 1.8);
-    if (e <= 1) fence(x, [[a - fw / 2, f + fd / 2 + 1], [a + fw / 2, f + fd / 2 + 1]], 2.6, K.wood, 4);
+    if (e <= 1) fence(x, [[a - fw / 2, f + fd / 2 + 1], [a + fw / 2, f + fd / 2 + 1]], 4.5, K.wood, 4);
     if (e <= 2 && i === 0) scarecrow(x, a, f);
   }
   // the farmstead
@@ -73,15 +73,14 @@ function farm(x: Ctx) {
 function orchard(x: Ctx) {
   const { K, e } = x, med = x.size === 'medium';
   const cols = med ? 5 : 3, rows = med ? 3 : 2;
-  ground(x, rect(-cols * 5 - 4, -rows * 5 - 2, cols * 5 + 4, rows * 5 + 6), K.ground, 0, 0.5);
+  ground(x, rect(-cols * 9 - 6, -rows * 9 - 4, cols * 9 + 6, rows * 9 + 10), K.ground, 0, 0.5);
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-    const a = (c - (cols - 1) / 2) * 10, f = (r - (rows - 1) / 2) * 10;
-    tree(x, a, f, 1, x.C.mode === 'alien' ? 2 : 0);
-    for (let k = 0; k < 3; k++) { const t = k * 2.1 + c + r; x.D.ell([a + Math.cos(t) * 2.4, 5.8 + Math.sin(t) * 1.4, f + 1.5], 0.7, 0.7, K.fruit, x.D.depth([a, 6, f]) + 0.01, { g: x.D.group(), noLine: true }); }
+    const a = (c - (cols - 1) / 2) * 18, f = (r - (rows - 1) / 2) * 18;
+    tree(x, a, f, 1, x.C.mode === 'alien' ? 2 : 0, 4);
   }
-  if (e >= 1) fence(x, [[-cols * 5 - 3, rows * 5 + 5], [cols * 5 + 3, rows * 5 + 5]], 3, e >= 4 ? K.metal : K.wood, 4);
-  for (let i = 0; i < 3; i++) (e >= 4 ? crate : barrel)(x, cols * 5 + 7, -4 + i * 3.4, 0, 3, K.wood);
-  if (med) house(x, { a: -cols * 5 - 12, f: -2, w: 12, d: 10, floors: 1, chimney: false });
+  if (e >= 1) fence(x, [[-cols * 9 - 5, rows * 9 + 9], [cols * 9 + 5, rows * 9 + 9]], 5, e >= 4 ? K.metal : K.wood, 5);
+  for (let i = 0; i < 3; i++) (e >= 4 ? crate : barrel)(x, cols * 9 + 10, -4 + i * 5, 0, 3.6, K.wood);
+  if (med) house(x, { a: -cols * 9 - 14, f: -2, w: 14, d: 12, floors: 1, chimney: false });
 }
 
 function mound(x: Ctx, a: number, f: number, r: number, h: number) {
@@ -196,7 +195,7 @@ const frac = (v: number) => v - Math.floor(v);
 function lumber(x: Ctx) {
   const { C, K, e, D } = x, S = C.storey, med = x.size === 'medium';
   ground(x, rect(-34, -20, 34, 20), K.soil, 0, 0.5);
-  for (let i = 0; i < (med ? 5 : 3); i++) { const a = -30 + i * 7, f = -16 + (i % 2) * 5; tree(x, a, f, 1.1, 1); }
+  for (let i = 0; i < (med ? 4 : 3); i++) { const a = -30 + i * 13, f = -18 + (i % 2) * 6; tree(x, a, f, 1.1, 1); }
   for (let i = 0; i < 6; i++) cyl(x, -18 + (i % 3) * 5, 6 + Math.floor(i / 3) * 5, 1.4, 0, 1.2, K.trunk, K.wood);
   for (let r = 0; r < 3; r++) for (let j = 0; j < 4 - r; j++) D.cap([10 + j * 2.4 + r * 1.2, 1.1 + r * 2, -4], [10 + j * 2.4 + r * 1.2, 1.1 + r * 2, 12], 1.2, 1.2, K.trunk, D.depth([10 + j * 2.4, 1 + r * 2, 4]) + r * 0.01);
   if (e <= 1) {

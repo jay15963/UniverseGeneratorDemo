@@ -32,8 +32,8 @@ function stall(x: Ctx) {
     for (let i = 0; i < 2; i++) cyl(x, w / 2 + 3, -1 + i * 3, 1.2, 0, 3.2, K.trim, K.trim);
     return;
   }
-  box(x, -w / 2, -d / 2 + 1, w / 2, d / 2, 0, 3.6, e === 0 ? K.wood : K.wall, K.wood);
-  goods(x, -w / 2 + 1, w / 2 - 1, d / 2 - 1.5, 3.6, kind);
+  box(x, -w / 2, -d / 2 + 1, w / 2, d / 2, 0, 5, e === 0 ? K.wood : K.wall, K.wood);
+  goods(x, -w / 2 + 1, w / 2 - 1, d / 2 - 1.5, 5, kind);
   for (const s of [-1, 1]) for (const f of [-d / 2 + 1, d / 2]) D.cap([s * w / 2, 0, f], [s * w / 2, S * 0.85, f], 0.5, 0.45, K.wood, D.depth([s * w / 2, 4, f]));
   if (e === 0) facet(x, [[-w / 2 - 1, S * 0.85, -d / 2], [w / 2 + 1, S * 0.85, -d / 2], [w / 2 + 1, S * 0.7 + Math.sin(x.ph) * 0.3, d / 2 + 2], [-w / 2 - 1, S * 0.7 + Math.sin(x.ph) * 0.3, d / 2 + 2]], K.wall, D.depth([0, S, 0]) + 0.1, D.group(), null, true);
   else awning(x, -w / 2 - 1, w / 2 + 1, -d / 2 + 1, S * 0.95, d + 1, K.cloth, K.cloth2);
@@ -64,8 +64,8 @@ function shop(x: Ctx) {
   }
   for (let i = 0; i < (med ? 3 : 2); i++) {
     const a = -w / 2 + 3 + i * 7, f = d / 2 + 5.5;
-    cyl(x, a, f, 1.8, 0, 2.6, e <= 3 ? K.wood : K.trim, e <= 3 ? K.wood : K.trim);
-    if (e >= 3 && i === 0) { D.cap([a, 2.6, f], [a, 6.5, f], 0.25, 0.25, K.metal, D.depth([a, 4, f]) + 0.01); D.shape([a, 6.5, f], [-3, 0, 3, 0, 0, -2.2], K.accent, D.depth([a, 6, f]) + 0.02, { g: D.group() }); }
+    cyl(x, a, f, 2.2, 0, 4, e <= 3 ? K.wood : K.trim, e <= 3 ? K.wood : K.trim);
+    if (e >= 3 && i === 0) { D.cap([a, 4, f], [a, 11, f], 0.25, 0.25, K.metal, D.depth([a, 4, f]) + 0.01); D.shape([a, 11, f], [-3, 0, 3, 0, 0, -2.2], K.accent, D.depth([a, 6, f]) + 0.02, { g: D.group() }); }
   }
   if (e === 0) fire(x, [w / 2 + 5, 0, d / 2 + 5], 1.2);
   if (x.night && e >= 3) lamp(x, [-w / 2 - 1, S * 0.8, d / 2 + 1], K.glow, false, 1);
@@ -79,7 +79,7 @@ function market(x: Ctx) {
     const top = pavilion(x, 0, -2, W, Dd, S * 1.4, C.roof === 'flat' ? 'vault' : C.roof === 'dome' ? 'hip' : C.roof, K.roof, e >= 3 ? K.iron : K.trim, large ? 6 : 4);
     for (let i = 0; i < (large ? 4 : 3); i++) for (let j = 0; j < 2; j++) {
       const a = -W / 2 + 8 + i * ((W - 16) / Math.max(1, large ? 3 : 2)), f = -Dd / 2 + 7 + j * (Dd - 10);
-      box(x, a - 4, f - 2, a + 4, f + 2, 0, 3, K.wood, K.wood, -0.5); goods(x, a - 3, a + 3, f + 0.5, 3, (i + j) % 4);
+      box(x, a - 4, f - 2, a + 4, f + 2, 0, 5, K.wood, K.wood, -0.5); goods(x, a - 3, a + 3, f + 0.5, 5, (i + j) % 4);
     }
     if (e >= 3) for (let i = 0; i < 3; i++) lamp(x, [-W / 3 + (i * W) / 3, S * 1.2, Dd / 2 - 2], K.glow, false, 1);
     void top;
@@ -87,8 +87,8 @@ function market(x: Ctx) {
     const n = large ? 8 : 5;
     for (let i = 0; i < n; i++) {
       const t = (i / n) * Math.PI * 2 + 0.3, a = Math.sin(t) * W * 0.36, f = Math.cos(t) * Dd * 0.34, sw = 9;
-      box(x, a - sw / 2, f - 2.5, a + sw / 2, f + 2.5, 0, 2.6, K.wood, K.wood);
-      goods(x, a - sw / 2 + 1, a + sw / 2 - 1, f + 1, 2.6, i % 4);
+      box(x, a - sw / 2, f - 2.5, a + sw / 2, f + 2.5, 0, 5, K.wood, K.wood);
+      goods(x, a - sw / 2 + 1, a + sw / 2 - 1, f + 1, 5, i % 4);
       const sh = Math.sin(x.ph + i) * 0.3;
       for (const s of [-1, 1]) D.cap([a + s * sw / 2, 0, f - 2.5], [a + s * sw / 2, S * 0.95, f - 2.5], 0.4, 0.4, K.wood, D.depth([a, 3, f - 2.5]));
       if (e === 0) facet(x, [[a - sw / 2 - 1, S * 0.95, f - 2.5], [a + sw / 2 + 1, S * 0.95, f - 2.5], [a + sw / 2 + 1, S * 0.7 + sh, f + 4], [a - sw / 2 - 1, S * 0.7 + sh, f + 4]], K.wall, D.depth([a, S * 0.7, f]) + 0.1, D.group(), null, true);
