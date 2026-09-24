@@ -6,6 +6,7 @@ export const CHUNK_PX = TILE * CHUNK;
 /** Screen pixels a tile is raised per terrain level (3/4 view). */
 export const LIFT = 10;
 export const MAX_LEVEL = 24;
+export const LIQUID_FRAMES = 6;
 /** Tiles per planet-map pixel is derived so the walkable world has the same size for any map resolution. */
 export const WORLD_TILES_X = 131072;
 
@@ -76,6 +77,7 @@ export interface TerrainRow {
   y: number;   // world-screen y of the buffer's top edge (row ground y - rowMaxLevel*LIFT)
   h: number;   // buffer height in px
   px: Uint8ClampedArray; // CHUNK_PX x h RGBA
+  anim?: Uint8ClampedArray[]; // looping animation frames (flowing water / lava), same size as px
 }
 
 export interface ChunkData {

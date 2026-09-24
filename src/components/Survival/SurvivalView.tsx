@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Backpack, Map as MapIcon, Hand } from 'lucide-react';
-import type { PlanetSession } from '../../lib/planet-generator/planetClient';
+import type { PlanetSession, TerrainPool } from '../../lib/planet-generator/planetClient';
 import { PlanetType, BiomeType } from '../../lib/planet-generator/generator';
-import { ChunkData, Feature, Feat, CHUNK, CHUNK_PX, TILE, GROUND_INFO, Ground, solidRadius, WORLD_TILES_X, LIFT, MAX_LEVEL, TREES } from '../../lib/terrain/types';
+import { ChunkData, Feature, Feat, CHUNK, CHUNK_PX, TILE, GROUND_INFO, Ground, solidRadius, WORLD_TILES_X, LIFT, MAX_LEVEL, TREES, LIQUID_FRAMES } from '../../lib/terrain/types';
+import { paintTribalPlayer, Dir, PLAYER_AX, PLAYER_AY } from '../../lib/terrain/player';
 import { NatureFx, FxContext } from './natureFx';
 import { BAYER4, seedToInt } from '../../lib/terrain/noise';
-import { SpriteBank, paintPlayer, Dir, Sprite } from '../../lib/terrain/sprites';
+import { SpriteBank, Sprite } from '../../lib/terrain/sprites';
 import { ITEMS, harvestFor, featureName, ItemDef } from '../../lib/terrain/items';
 import { vegetationHueShift, ROCK_NAMES, RockType } from '../../lib/terrain/palettes';
 
@@ -18,7 +19,12 @@ interface Props {
   onExit: () => void;
 }
 
-interface LoadedChunk { data: ChunkData; rows: { c: HTMLCanvasElement; y: number }[]; mini: HTMLCanvasElement; lastUsed: number }
+interface LoadedRow { c: HTMLCanvasElement; y: number; anim: HTMLCanvasElement[] | null }
+interface LoadedChunk {
+  data: ChunkData; rows: LoadedRow[]; mini: HTMLCanvasElement; lastUsed: number;
+  byRow: Feature[][];   // features bucketed by local tile row, pre-sorted by y
+}
+const DRY_GROUND = new Set<Ground>([Ground.SAND, Ground.RED_SAND, Ground.DIRT, Ground.DRY_GRASS, Ground.GRAVEL, Ground.ASH, Ground.REGOLITH, Ground.SALT_FLAT]);
 
 const BIOME_PT: Record<number, string> = {
   [BiomeType.SNOW]: 'Deserto de neve', [BiomeType.TUNDRA]: 'Tundra', [BiomeType.TAIGA]: 'Taiga', [BiomeType.COLD_DESERT]: 'Deserto frio',
@@ -47,14 +53,17 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   const [toast, setToast] = useState<string | null>(null);
 
   const bank = useMemo(() => new SpriteBank(vegetationHueShift(cfg.vegetationHue, cfg.planetType === PlanetType.ALIEN_LIFE)), [cfg]);
-  const player = useMemo(() => paintPlayer(), []);
+  const player = useMemo(() => paintTribalPlayer(), []);
+  const poolRef = useRef<TerrainPool | null>(null);
+  const [perf, setPerf] = useState({ fps: 0, cpu: 0, chunkMs: 0, workers: 1, chunks: 0 });
+  const [perfOn, setPerfOn] = useState(true);
   const fx = useMemo(() => new NatureFx(seedToInt(cfg.seed + '_fx')), [cfg]);
   // Dev-only handle for automated visual checks (time of day, weather...)
   useEffect(() => { if (import.meta.env.DEV) (window as any).__survival = { G, fx }; }, [fx]);
 
   // Mutable game state (kept out of React to avoid per-frame renders)
   const G = useRef({
-    x: 0, y: 0, dir: 'down' as Dir, moving: false, anim: 0, level: 0, lift: 0, camX: 0, camY: 0, lensK: 0,
+    x: 0, y: 0, dir: 'down' as Dir, moving: false, anim: 0, level: 0, lift: 0, camX: 0, camY: 0, lensK: 0, gatherT: 0, stepPhase: 0,
     keys: new Set<string>(), joy: { x: 0, y: 0 },
     zoom: 3,
     chunks: new Map<string, LoadedChunk>(), pending: new Set<string>(),
@@ -106,8 +115,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       G.current.y = ty * TILE + TILE / 2;
       G.current.zoom = window.innerWidth < 700 ? 2 : 3;
       setLoading('Gerando terreno…');
+      // spin up one terrain worker per spare CPU core
+      session.terrainPool(mapX, mapY).then(pool => {
+        if (!alive) { pool.dispose(); return; }
+        poolRef.current = pool;
+      }).catch(() => { /* keep using the session worker */ });
     }).catch(e => setLoading('Falha ao pousar: ' + e.message));
-    return () => { alive = false; };
+    return () => { alive = false; poolRef.current?.dispose(); poolRef.current = null; };
   }, [session, mapX, mapY]);
 
   // ---------------------------------------------------------------------------
@@ -118,28 +132,34 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
     if (!g.x && !g.y) return;
     const pcx = Math.floor(g.x / CHUNK_PX), pcy = Math.floor(g.y / CHUNK_PX);
     const want: [number, number, number][] = [];
-    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) want.push([pcx + dx, pcy + dy, dx * dx + dy * dy]);
+    const pool = poolRef.current;
+    const R = pool ? 3 : 2;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) want.push([pcx + dx, pcy + dy, dx * dx + dy * dy]);
     want.sort((a, b) => a[2] - b[2]);
     for (const [cx, cy] of want) {
       const key = `${cx},${cy}`;
       if (g.chunks.has(key) || g.pending.has(key)) continue;
-      if (g.pending.size >= 2) break;
+      if (g.pending.size >= (pool ? pool.size + 1 : 2)) break;
       g.pending.add(key);
-      session.chunk(cx, cy).then(data => {
+      (pool ?? session).chunk(cx, cy).then(data => {
         g.pending.delete(key);
-        const rows = data.rows.map(r => {
+        const toCanvas = (px: Uint8ClampedArray, h: number) => {
           const c = document.createElement('canvas');
-          c.width = CHUNK_PX; c.height = r.h;
-          c.getContext('2d')!.putImageData(new ImageData(r.px as Uint8ClampedArray<ArrayBuffer>, CHUNK_PX, r.h), 0, 0);
-          return { c, y: r.y };
-        });
+          c.width = CHUNK_PX; c.height = h;
+          c.getContext('2d')!.putImageData(new ImageData(px as Uint8ClampedArray<ArrayBuffer>, CHUNK_PX, h), 0, 0);
+          return c;
+        };
+        const rows: LoadedRow[] = data.rows.map(r => ({ c: toCanvas(r.px, r.h), y: r.y, anim: r.anim ? r.anim.map(a => toCanvas(a, r.h)) : null }));
+        const byRow: Feature[][] = Array.from({ length: CHUNK }, () => []);
+        for (const f of data.features) byRow[Math.max(0, Math.min(CHUNK - 1, Math.floor(f.y / TILE) - data.cy * CHUNK))].push(f);
+        for (const b of byRow) b.sort((a, b2) => (a.t === Feat.LILY_PAD ? a.y - 100 : a.y) - (b2.t === Feat.LILY_PAD ? b2.y - 100 : b2.y));
         data.rows = []; // pixel buffers now live in the canvases
         const mini = document.createElement('canvas');
         mini.width = CHUNK; mini.height = CHUNK;
         mini.getContext('2d')!.putImageData(new ImageData(data.mini as Uint8ClampedArray<ArrayBuffer>, CHUNK, CHUNK), 0, 0);
-        g.chunks.set(key, { data, rows, mini, lastUsed: performance.now() });
-        if (g.chunks.size > 49) {
-          const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - 49);
+        g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow });
+        if (g.chunks.size > 81) {
+          const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - 81);
           for (const [k] of far) g.chunks.delete(k);
         }
         requestChunks();
@@ -226,6 +246,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
     const h = harvestFor(f);
     if (h.kind === 'take' || (h.kind === 'pick' && !g.picked.has(f.id))) {
       if (h.kind === 'take') g.taken.add(f.id); else g.picked.set(f.id, g.time);
+      g.gatherT = 0.5;
+      if (Math.abs(f.x - g.x) > Math.abs(f.y - g.y)) g.dir = f.x < g.x ? 'left' : 'right'; else g.dir = f.y < g.y ? 'up' : 'down';
       addItems(h.items);
       h.items.forEach(([id, n], i) => g.floaters.push({ x: f.x, y: f.y - f.l * LIFT - 14 - i * 9, t: 0, text: `+${n} ${ITEMS[id]?.name ?? id}` }));
     } else if (h.kind === 'pick') flash('Já colhido — os frutos voltam em cerca de um dia');
@@ -243,6 +265,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       if (k === 'e' || k === ' ') { e.preventDefault(); interact(G.current.target); }
       if (k === 'i' || k === 'tab') { e.preventDefault(); setBagOpen(o => !o); }
       if (k === 'm') setMiniOn(o => !o);
+      if (e.key === 'F3' || k === 'p') { e.preventDefault(); setPerfOn(o => !o); }
       e.stopImmediatePropagation();
     };
     const up = (e: KeyboardEvent) => { G.current.keys.delete(e.key.toLowerCase()); };
@@ -284,7 +307,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const ctx = canvas.getContext('2d')!;
+    // opaque, low-latency context: the browser can skip alpha compositing of the whole page layer
+    const ctx = (canvas.getContext('2d', { alpha: false, desynchronized: true }) ?? canvas.getContext('2d'))!;
     const lens = document.createElement('canvas');
     const lctx = lens.getContext('2d')!;
     const LENS = 132; // world px
@@ -293,66 +317,85 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
     let lavaSpots: { x: number; y: number; l: number }[] = [];
     const t0 = performance.now();
 
-    type Item = { y: number; f?: Feature; s?: Sprite };
+    const playerFrame = () => {
+      const g = G.current;
+      if (g.gatherT > 0) return player.gather[g.dir][Math.min(3, Math.floor((1 - g.gatherT / 0.5) * 4))];
+      if (g.moving) return player.walk[g.dir][Math.floor(g.anim) % 6];
+      return player.idle[g.dir][Math.floor(performance.now() / 380) % 4];
+    };
 
     const drawScene = (c2: CanvasRenderingContext2D, x0: number, x1: number, y0: number, y1: number, t: number, stop: { row: number; y: number } | null) => {
       const g = G.current;
       const rowFrom = Math.floor(y0 / TILE) - 1, rowTo = Math.floor((y1 + MAX_LEVEL * LIFT) / TILE) + 1;
-      const byRow = new Map<number, Item[]>();
       const cx0 = Math.floor(x0 / CHUNK_PX), cx1 = Math.floor(x1 / CHUNK_PX);
-      for (let cy = Math.floor(rowFrom / CHUNK); cy <= Math.floor(rowTo / CHUNK); cy++) {
-        for (let cx = cx0; cx <= cx1; cx++) {
-          const c = g.chunks.get(`${cx},${cy}`);
-          if (!c) continue;
-          for (const f of c.data.features) {
-            if (f.x < x0 - 40 || f.x > x1 + 40 || f.y < y0 - 20 || f.y > y1 + MAX_LEVEL * LIFT + 40) continue;
-            if (g.taken.has(f.id)) continue;
-            const r = Math.floor(f.y / TILE);
-            let arr = byRow.get(r); if (!arr) byRow.set(r, arr = []);
-            arr.push({ y: f.t === Feat.LILY_PAD ? f.y - 100 : f.y, f, s: bank.get(f.t, f.v, g.picked.has(f.id)) });
-          }
-        }
-      }
-      if (g.ready) { const r = Math.floor(g.y / TILE); let arr = byRow.get(r); if (!arr) byRow.set(r, arr = []); arr.push({ y: g.y }); }
-      const frames = player[g.dir];
-      const pf = frames[g.moving ? Math.floor(g.anim) % 4 : 0];
+      const pf = playerFrame();
+      const prow = g.ready ? Math.floor(g.y / TILE) : -1e9;
+      const liquidFrame = Math.floor(t * 7) % LIQUID_FRAMES;
+      const nowMs = performance.now();
+      const fx0 = x0 - 40, fx1 = x1 + 40;
+      const drawPlayer = () => c2.drawImage(pf, Math.round(g.x - PLAYER_AX), Math.round(g.y - g.lift - PLAYER_AY));
+      let cyCur = 1e9;
+      const rowChunks: (LoadedChunk | undefined)[] = [];
       for (let r = rowFrom; r <= rowTo; r++) {
         if (stop && r > stop.row) break;
         const cy = Math.floor(r / CHUNK), j = r - cy * CHUNK;
-        for (let cx = cx0; cx <= cx1; cx++) {
-          const c = g.chunks.get(`${cx},${cy}`);
+        if (cy !== cyCur) {
+          cyCur = cy;
+          rowChunks.length = 0;
+          for (let cx = cx0; cx <= cx1; cx++) { const c = g.chunks.get(`${cx},${cy}`); rowChunks.push(c); if (c) c.lastUsed = nowMs; }
+        }
+        // 1. terrain row (animated frame when it holds water / lava)
+        for (let k = 0; k < rowChunks.length; k++) {
+          const c = rowChunks[k];
           if (!c) continue;
           const row = c.rows[j];
-          if (row) c2.drawImage(row.c, cx * CHUNK_PX, row.y);
-          c.lastUsed = t;
+          if (row) c2.drawImage(row.anim ? row.anim[liquidFrame] : row.c, (cx0 + k) * CHUNK_PX, row.y);
         }
-        const items = byRow.get(r);
-        if (!items) continue;
-        items.sort((a, b) => a.y - b.y);
-        // shadows first so neighbours in the same row don't get darkened
-        c2.fillStyle = 'rgba(8,12,6,0.28)';
-        for (const it of items) {
-          const sh = it.s ? it.s.shadow : 5;
-          if (!sh) continue;
-          const x = it.f ? it.f.x : g.x, y = it.f ? it.f.y - it.f.l * LIFT : g.y - g.lift;
-          c2.beginPath(); c2.ellipse(x + sh * 0.25, y, sh, sh * 0.38, 0, 0, Math.PI * 2); c2.fill();
-        }
-        for (const it of items) {
-          if (stop && r === stop.row && it.y > stop.y) break;
-          if (!it.f) { c2.drawImage(pf, Math.round(g.x - 8), Math.round(g.y - g.lift - 22)); continue; }
-          const f = it.f, s = it.s!;
-          const x = f.x - s.ax, y = f.y - f.l * LIFT - s.ay;
-          if (TREES.has(f.t)) {
-            // canopy sways in the wind, trunk stays rooted
-            const dx = fx.sway(t, f.x, f.y, 1.4);
-            const split = Math.max(1, s.c.height - 12);
-            c2.drawImage(s.c, 0, 0, s.c.width, split, x + dx, y, s.c.width, split);
-            c2.drawImage(s.c, 0, split, s.c.width, s.c.height - split, x, y + split, s.c.width, s.c.height - split);
-          } else {
-            const dx = SWAY.has(f.t) ? fx.sway(t * 1.3, f.x, f.y, 1.6) : 0;
-            c2.drawImage(s.c, x + dx, y);
+        // 2. contact shadows of this row, batched into one fill
+        c2.beginPath();
+        let any = false;
+        for (let k = 0; k < rowChunks.length; k++) {
+          const c = rowChunks[k];
+          if (!c) continue;
+          for (const f of c.byRow[j]) {
+            if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id)) continue;
+            const sh = bank.get(f.t, f.v, false).shadow;
+            if (!sh) continue;
+            const y = f.y - f.l * LIFT;
+            c2.moveTo(f.x + sh * 1.25, y);
+            c2.ellipse(f.x + sh * 0.25, y, sh, sh * 0.38, 0, 0, Math.PI * 2);
+            any = true;
           }
         }
+        if (r === prow) { c2.moveTo(g.x + 7, g.y - g.lift); c2.ellipse(g.x + 1, g.y - g.lift, 6, 2.3, 0, 0, Math.PI * 2); any = true; }
+        if (any) { c2.fillStyle = 'rgba(8,12,6,0.28)'; c2.fill(); }
+        // 3. sprites of this row in y order, player merged in
+        let playerDone = r !== prow;
+        for (let k = 0; k < rowChunks.length; k++) {
+          const c = rowChunks[k];
+          if (!c) continue;
+          for (const f of c.byRow[j]) {
+            if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id)) continue;
+            if (!playerDone && f.y > g.y && f.t !== Feat.LILY_PAD) { drawPlayer(); playerDone = true; }
+            if (stop && r === stop.row && f.y > stop.y) continue;
+            const s = bank.get(f.t, f.v, g.picked.has(f.id));
+            const x = f.x - s.ax, y = f.y - f.l * LIFT - s.ay;
+            if (TREES.has(f.t)) {
+              // canopy sways in the wind, trunk stays rooted
+              const dx = fx.sway(t, f.x, f.y, 1.4);
+              if (dx === 0) c2.drawImage(s.c, x, y);
+              else {
+                const split = Math.max(1, s.c.height - 12);
+                c2.drawImage(s.c, 0, 0, s.c.width, split, x + dx, y, s.c.width, split);
+                c2.drawImage(s.c, 0, split, s.c.width, s.c.height - split, x, y + split, s.c.width, s.c.height - split);
+              }
+            } else {
+              const dx = SWAY.has(f.t) ? fx.sway(t * 1.3, f.x, f.y, 1.6) : 0;
+              c2.drawImage(s.c, x + dx, y);
+            }
+          }
+        }
+        if (!playerDone) drawPlayer();
       }
     };
 
@@ -377,7 +420,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       return m;
     };
 
+    let fpsFrames = 0, fpsT = performance.now(), cpuAcc = 0;
     const frame = (now: number) => {
+      const cpu0 = performance.now();
       const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
       const g = G.current;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -409,10 +454,17 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
           const nx = g.x + mx * sp * dt, ny = g.y + my * sp * dt;
           if (!blocked(nx, g.y, g.x, g.y)) g.x = nx;
           if (!blocked(g.x, ny, g.x, g.y)) g.y = ny;
-          g.anim += dt * 8 * (sp / SPEED);
+          g.anim += dt * 9 * (sp / SPEED);
+          // footfalls: dust on dry ground, splashes in water
+          const phase = Math.floor(g.anim / 3);
+          if (phase !== g.stepPhase) {
+            g.stepPhase = phase;
+            if (gr !== null && DRY_GROUND.has(gr)) fx.dust(g.x + (Math.random() - 0.5) * 4, g.y - g.lift, gr === Ground.SAND || gr === Ground.RED_SAND ? '#d8c08a' : gr === Ground.ASH ? '#6a6460' : '#a08a64');
+          }
           // footstep splashes in water
           if (gr !== null && GROUND_INFO[gr].water && Math.random() < dt * 6) fx.ring(g.x, g.y - g.lift, 5, 'rgba(220,240,255,0.6)');
         } else g.anim = 0;
+        if (g.gatherT > 0) g.gatherT = Math.max(0, g.gatherT - dt);
         g.level = levelAt(g.x, g.y) ?? g.level;
         g.lift += (g.level * LIFT - g.lift) * Math.min(1, dt * 12);
         g.time += dt;
@@ -433,7 +485,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
 
       // --- camera ---
       const Z = g.zoom, S = Z * dpr;
-      const camX = Math.round(g.x * S) / S, camY = Math.round((g.y - g.lift - 8) * S) / S;
+      const [shx, shy] = fx.shake();
+      const camX = Math.round((g.x + shx) * S) / S, camY = Math.round((g.y - g.lift - 8 + shy) * S) / S;
       g.camX = camX; g.camY = camY;
       if (g.mouse.x >= 0) { const w = screenToWorld(g.mouse.x, g.mouse.y); g.hover = featureUnder(w.x, w.y); } else g.hover = null;
       const tx0 = Math.round(canvas.width / 2 - camX * S), ty0 = Math.round(canvas.height / 2 - camY * S);
@@ -471,6 +524,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       const info0 = g.ready ? tileInfo(g.x, g.y) : null;
       const fxc: FxContext = {
         t, dt, day, sun, view: { x0, y0, x1, y1 }, player: { x: g.x, y: g.y, lift: g.lift }, visible, waterSpots, lavaSpots, falls,
+        surface: (wx: number, wy: number) => {
+          const q = cellAt(wx, wy);
+          if (!q) return null;
+          const gr = q.c.data.ground[q.k] as Ground;
+          return { water: !!GROUND_INFO[gr].water, lift: q.c.data.level[q.k] * LIFT };
+        },
         climate: { temp: info0?.temp ?? 0.5, moist: 0.5, living: cfg.planetType === PlanetType.EARTH_LIKE || cfg.planetType === PlanetType.ALIEN_LIFE || cfg.planetType === PlanetType.OCEAN_WORLD || cfg.planetType === PlanetType.SWAMP_WORLD, desert: info0?.biome === BiomeType.SUBTROPICAL_DESERT || info0?.biome === BiomeType.COLD_DESERT },
       };
       if (g.ready) fx.update(fxc);
@@ -482,17 +541,6 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       ctx.imageSmoothingEnabled = false;
       drawScene(ctx, x0, x1, y0, y1, t, null);
 
-      // water glints (lifted with their terrace)
-      ctx.fillStyle = 'rgba(220,240,255,0.55)';
-      for (let ty = Math.floor(y0 / TILE); ty <= (y1 + MAX_LEVEL * LIFT) / TILE; ty++) for (let tx = Math.floor(x0 / TILE); tx <= x1 / TILE; tx++) {
-        const q = cellAt(tx * TILE, ty * TILE);
-        if (!q) continue;
-        const gr = q.c.data.ground[q.k];
-        if (gr > Ground.SWAMP_WATER) continue;
-        const h = ((tx * 73856093) ^ (ty * 19349663)) >>> 0;
-        const ph = Math.sin(t * 1.6 + (h % 628) / 100);
-        if (ph > 0.75) ctx.fillRect(tx * TILE + (h % 11) + Math.round(ph * 2), ty * TILE + ((h >> 4) % 13) - q.c.data.level[q.k] * LIFT, 3, 1);
-      }
       fx.drawWorldBelow(ctx, fxc);
       fx.drawWorldAbove(ctx, fxc);
 
@@ -611,6 +659,14 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
         } else setPrompt(null);
       }
 
+      cpuAcc += performance.now() - cpu0;
+      fpsFrames++;
+      if (now - fpsT >= 500) {
+        const pool = poolRef.current;
+        setPerf({ fps: Math.round((fpsFrames * 1000) / (now - fpsT)), cpu: cpuAcc / fpsFrames, chunkMs: pool?.avgMs ?? 0, workers: pool?.size ?? 1, chunks: G.current.chunks.size });
+        fpsFrames = 0; fpsT = now; cpuAcc = 0;
+      }
+      // requestAnimationFrame runs at the display's native refresh rate (60/120/144/240 Hz...) - no extra cap
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
@@ -656,6 +712,15 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
         }}
       />
 
+      {/* Performance overlay (F3 / P) */}
+      {perfOn && !loading && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none bg-black/65 border border-white/10 rounded-lg px-2.5 py-1 font-mono text-[11px] text-neutral-200 tabular-nums flex gap-3">
+          <span className={perf.fps >= 100 ? 'text-emerald-300' : perf.fps >= 55 ? 'text-amber-300' : 'text-red-400'}>{perf.fps} FPS</span>
+          <span title="Tempo de CPU por quadro">{perf.cpu.toFixed(2)} ms CPU</span>
+          <span title="Quadros por segundo possíveis se o monitor permitisse">~{perf.cpu > 0 ? Math.round(1000 / perf.cpu) : 0} máx</span>
+          <span title="Workers de terreno em paralelo / tempo médio por chunk" className="hidden sm:inline">{perf.workers}× núcleos · {perf.chunkMs.toFixed(0)} ms/chunk</span>
+        </div>
+      )}
       {/* Top-left: location */}
       <div className="absolute top-3 left-3 pointer-events-none">
         <div className="bg-black/60 backdrop-blur-md border border-white/10 rounded-xl px-3 py-2 text-white min-w-[200px]">
@@ -741,7 +806,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
                 );
               })}
             </div>
-            <p className="mt-3 text-[10px] text-neutral-500">WASD/setas: andar · E/Espaço/clique: coletar · Roda: zoom · I: mochila · M: minimapa · Esc: sair</p>
+            <p className="mt-3 text-[10px] text-neutral-500">WASD/setas: andar · E/Espaço/clique: coletar · Roda: zoom · I: mochila · M: minimapa · P/F3: desempenho · Esc: sair</p>
           </div>
         </div>
       )}

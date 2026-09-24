@@ -6,6 +6,8 @@
 import type { LayerType, PlanetConfig } from './generator';
 import type { PlanetProbe, WorkerRequest, WorkerResponse } from './workerProtocol';
 import type { ChunkData } from '../terrain/types';
+import { CHUNK, WORLD_TILES_X } from '../terrain/types';
+import type { PlanetFields } from '../terrain/terrainGen';
 
 export type { PlanetProbe };
 
@@ -156,6 +158,8 @@ export interface PlanetSession {
   chunk(cx: number, cy: number): Promise<ChunkData>;
   /** Nearest walkable tile to a map pixel */
   spawn(x: number, y: number): Promise<{ tx: number; ty: number }>;
+  /** Parallel chunk generator (one worker per spare core) around a map point. */
+  terrainPool(x: number, y: number): Promise<TerrainPool>;
   config: PlanetConfig;
   dispose(): void;
 }
@@ -193,7 +197,9 @@ export function openPlanetSession(
 
   const ready = call({ kind: 'open', id: nextId++, sessionId, config }).then((msg) => {
     if (msg.kind !== 'opened') throw new Error('unexpected response');
-    const session: PlanetSession = {
+    // eslint-disable-next-line prefer-const
+    let session: PlanetSession;
+    session = {
       width: config.width,
       height: config.height,
       clouds: msg.clouds ? { width: msg.cloudWidth, height: msg.cloudHeight, data: msg.clouds } : null,
@@ -216,6 +222,13 @@ export function openPlanetSession(
         if (res.kind !== 'spawn') throw new Error('unexpected response');
         return { tx: res.tx, ty: res.ty };
       },
+      terrainPool: async (x, y) => {
+        const res = await call({ kind: 'fields', id: nextId++, sessionId, x, y, size: 256 });
+        if (res.kind !== 'fields') throw new Error('unexpected response');
+        const pool = new TerrainPool(res.fields, (cx, cy) => session.chunk(cx, cy));
+        await pool.ready;
+        return pool;
+      },
       config,
       dispose,
     };
@@ -223,4 +236,79 @@ export function openPlanetSession(
   });
 
   return { ready, cancel: dispose };
+}
+
+
+// ---------------------------------------------------------------------------
+// Terrain pool: chunk generation spread over every spare CPU core
+// ---------------------------------------------------------------------------
+export class TerrainPool {
+  readonly size: number;
+  readonly ready: Promise<void>;
+  private workers: { w: Worker; busy: boolean }[] = [];
+  private queue: { cx: number; cy: number; resolve: (c: ChunkData) => void; reject: (e: Error) => void }[] = [];
+  private waiting = new Map<number, { resolve: (c: ChunkData) => void; reject: (e: Error) => void; slot: { busy: boolean } }>();
+  private nextId = 1;
+  private fields: PlanetFields;
+  private fallback: (cx: number, cy: number) => Promise<ChunkData>;
+  /** Rolling average generation time per chunk (ms), for the perf overlay. */
+  avgMs = 0;
+
+  constructor(fields: PlanetFields, fallback: (cx: number, cy: number) => Promise<ChunkData>) {
+    this.fields = fields;
+    this.fallback = fallback;
+    const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
+    this.size = Math.max(1, Math.min(8, cores - 1));
+    const inits: Promise<void>[] = [];
+    for (let i = 0; i < this.size; i++) {
+      const w = new Worker(new URL('../terrain/terrain.worker.ts', import.meta.url), { type: 'module' });
+      const slot = { w, busy: false };
+      this.workers.push(slot);
+      inits.push(new Promise(res => {
+        w.onmessage = (ev) => {
+          const m = ev.data;
+          if (m.kind === 'ready') { res(); return; }
+          const job = this.waiting.get(m.id);
+          if (!job) return;
+          this.waiting.delete(m.id);
+          slot.busy = false;
+          if (m.kind === 'chunk') { this.avgMs = this.avgMs ? this.avgMs * 0.9 + m.ms * 0.1 : m.ms; job.resolve(m.chunk); }
+          else job.reject(new Error(m.message));
+          this.pump();
+        };
+      }));
+      // each worker gets its own copy of the (small) field window
+      w.postMessage({ kind: 'init', id: 0, fields });
+    }
+    this.ready = Promise.all(inits).then(() => undefined);
+  }
+
+  private covers(cx: number, cy: number) {
+    const F = this.fields, W = F.config.width;
+    const S = WORLD_TILES_X / W;
+    const mx = ((cx + 0.5) * CHUNK) / S, my = ((cy + 0.5) * CHUNK) / S;
+    const lx = (((Math.floor(mx) - F.ox) % W) + W) % W, ly = Math.floor(my) - F.oy;
+    return lx >= 3 && lx < F.fw - 3 && ly >= 3 && ly < F.fh - 3;
+  }
+
+  private pump() {
+    for (const slot of this.workers) {
+      if (slot.busy || !this.queue.length) continue;
+      const job = this.queue.shift()!;
+      const id = this.nextId++;
+      slot.busy = true;
+      this.waiting.set(id, { resolve: job.resolve, reject: job.reject, slot });
+      slot.w.postMessage({ kind: 'chunk', id, cx: job.cx, cy: job.cy });
+    }
+  }
+
+  /** Number of chunk jobs that can start right now without queueing. */
+  get idle() { return this.workers.filter(w => !w.busy).length - this.queue.length; }
+
+  chunk(cx: number, cy: number): Promise<ChunkData> {
+    if (!this.covers(cx, cy)) return this.fallback(cx, cy);
+    return new Promise((resolve, reject) => { this.queue.push({ cx, cy, resolve, reject }); this.pump(); });
+  }
+
+  dispose() { this.workers.forEach(s => s.w.terminate()); this.workers = []; }
 }

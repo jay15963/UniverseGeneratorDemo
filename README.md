@@ -67,9 +67,14 @@ No mapa de superfície de qualquer planeta sólido, clique em **Pousar** e escol
 - **Relevo de verdade**: o terreno tem até 24 níveis de altura. Montanhas são platôs empilhados com **paredões de rocha estratificada** (face sul visível, sombra projetada, cantos arredondados, bordas de grama/neve), picos nevados e encostas de cascalho. Paredões são **intransponíveis** — sobe-se e desce-se apenas por **rampas** naturais. Rios que cruzam um degrau viram **cachoeiras animadas** com névoa.
 - **Lente de visão**: quando um paredão ou uma copa esconde o personagem, abre-se uma janela circular com borda pontilhada que revela o que está atrás, sem precisar girar a câmera.
 - **Natureza viva**: copas balançando com o vento (tronco fixo), capim e juncos ondulando, folhas caindo e se acumulando no chão, borboletas nas flores, bandos de pássaros com sombra, peixes saltando, ondulações na água, pólen no ar, sombras de nuvens, vaga-lumes à noite, lanterna do personagem, brasas de lava, e clima dinâmico (nublado, chuva, tempestade com relâmpagos, neve).
+- **Personagem tribal** pintado por código (cabelo com trança, penas, pintura facial, colete de pele de lobo, colar de osso, lança de pedra) com animações de caminhada (6 quadros), respiração/piscar e coleta, nas 4 direções.
+- **Água viva**: rios correm na direção da descida, lagos ondulam com o vento, pântanos cintilam e lava pulsa (quadros de animação pré-gerados no worker).
+- **Escadarias de pedra** bem visíveis marcam onde subir/descer os paredões (também destacadas no minimapa).
+- **Tempestades**: chuva inclinada pelo vento, gotas criando ondulações na água e respingos no chão, raios ramificados com clarão e trovão que treme a câmera, árvores envergando e folhas/detritos voando.
+- **Desempenho**: terreno gerado em paralelo por um worker por núcleo da CPU; renderização sem limite de FPS além da taxa do monitor; contador de FPS/tempo de CPU (tecla P ou F3).
 - **Coleta e mochila** persistentes por planeta; frutinhas rebrotam após um dia; árvores, pedregulhos e troncos exigem ferramentas (próximo passo: crafting).
 - **Toda a arte é gerada por código** (sem arquivos de imagem): galeria em `#galeria` na URL.
-- Controles: WASD/setas, E/Espaço/clique para coletar, roda para zoom, I mochila, M minimapa, Esc sair; no celular, joystick virtual + botão de ação.
+- Controles: WASD/setas, E/Espaço/clique para coletar, roda para zoom, I mochila, M minimapa, P/F3 desempenho, Esc sair; no celular, joystick virtual + botão de ação.
 
 ### ⌨️ Atalhos no Sistema Solar
 

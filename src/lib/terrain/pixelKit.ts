@@ -105,6 +105,32 @@ export class Pix {
     }
   }
 
+  /**
+   * Rounded limb from (x0,y0) radius r0 to (x1,y1) radius r1, shaded across its width
+   * (lit from the left) and slightly darker towards its end.
+   */
+  capsule(x0: number, y0: number, x1: number, y1: number, r0: number, r1: number, ramp: RGB[], bias = 0, band?: (t: number) => RGB | null) {
+    const minX = Math.floor(Math.min(x0 - r0, x1 - r1)) - 1, maxX = Math.ceil(Math.max(x0 + r0, x1 + r1)) + 1;
+    const minY = Math.floor(Math.min(y0 - r0, y1 - r1)) - 1, maxY = Math.ceil(Math.max(y0 + r0, y1 + r1)) + 1;
+    const dx = x1 - x0, dy = y1 - y0, L2 = dx * dx + dy * dy || 1, L = Math.sqrt(L2);
+    const nx = -dy / L, ny = dx / L; // perpendicular
+    for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
+      const px = x + 0.5, py = y + 0.5;
+      let t = ((px - x0) * dx + (py - y0) * dy) / L2;
+      t = Math.max(0, Math.min(1, t));
+      const cx = x0 + dx * t, cy = y0 + dy * t;
+      const r = r0 + (r1 - r0) * t;
+      const d = Math.hypot(px - cx, py - cy);
+      if (d > r) continue;
+      const u = ((px - cx) * nx + (py - cy) * ny) / Math.max(0.5, r); // -1..1 across
+      const lightSide = nx < 0 ? -u : u; // make the left side of the limb the lit side
+      let v = 0.55 + lightSide * 0.28 - (d / r) * 0.15 - t * 0.08 + bias;
+      const bc = band?.(t);
+      if (bc) { this.set(x, y, [bc[0] * (0.8 + lightSide * 0.2), bc[1] * (0.8 + lightSide * 0.2), bc[2] * (0.8 + lightSide * 0.2)]); continue; }
+      this.set(x, y, this.shade(ramp, v, x, y));
+    }
+  }
+
   rect(x: number, y: number, w: number, h: number, c: RGB) {
     for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) this.set(x + i, y + j, c);
   }

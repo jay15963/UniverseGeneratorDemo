@@ -27,10 +27,12 @@ export class SpriteBank {
 
   private leaf(r: RGB[]) { return this.vegShift ? shiftRamp(r, this.vegShift) : r; }
 
+  private fast = new Map<number, Sprite>(); // numeric keys: no string building in the render loop
+
   get(t: Feat, v: number, empty = false): Sprite {
-    const key = `${t}|${v}|${empty ? 1 : 0}`;
-    let s = this.cache.get(key);
-    if (!s) { s = this.paint(t, v, empty); this.cache.set(key, s); }
+    const key = (t * 4096 + v) * 2 + (empty ? 1 : 0);
+    let s = this.fast.get(key);
+    if (!s) { s = this.paint(t, v, empty); this.fast.set(key, s); }
     return s;
   }
 
@@ -848,70 +850,6 @@ export class SpriteBank {
     this.cache.set(key, s);
     return s.c;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Player: 4 directions x 4 walk frames, 16x24, painted from parts
-// ---------------------------------------------------------------------------
-export type Dir = 'down' | 'up' | 'left' | 'right';
-export function paintPlayer(): Record<Dir, HTMLCanvasElement[]> {
-  const skin = ramp('#6a3a24', '#a0603c', '#d08a5a', '#f0b884');
-  const hair = ramp('#1a0e08', '#3a2010', '#5a3418', '#7a4a24');
-  const jacket = ramp('#5a1e08', '#a83e10', '#e0661c', '#ff9a48');
-  const pants = ramp('#141a2a', '#26304a', '#3a4a6a', '#56688a');
-  const boots = ramp('#120a06', '#2a1a0e', '#44301c');
-  const pack = ramp('#2a2a1a', '#4a4a2a', '#6a6a3a', '#8a8a4e');
-  const out: Record<Dir, HTMLCanvasElement[]> = { down: [], up: [], left: [], right: [] };
-  for (const dir of ['down', 'up', 'left'] as Dir[]) {
-    for (let f = 0; f < 4; f++) {
-      const p = new Pix(16, 24, 5);
-      const step = f === 1 ? 1 : f === 3 ? -1 : 0;
-      const bob = f % 2 === 1 ? 1 : 0;
-      const side = dir === 'left';
-      // legs
-      const legY = 16;
-      if (side) {
-        p.rect(6 + step, legY, 3, 5, pants[2]); p.rect(7 - step, legY, 3, 5, pants[1]);
-        p.rect(6 + step, legY + 5, 4, 2, boots[1]); p.rect(6 - step, legY + 5, 4, 2, boots[0]);
-      } else {
-        p.rect(5, legY - (step > 0 ? 1 : 0), 3, 5 + (step > 0 ? 1 : 0), pants[2]);
-        p.rect(8, legY - (step < 0 ? 1 : 0), 3, 5 + (step < 0 ? 1 : 0), pants[1]);
-        p.rect(5, legY + 5 - (step > 0 ? 1 : 0), 3, 2, boots[1]); p.rect(8, legY + 5 - (step < 0 ? 1 : 0), 3, 2, boots[0]);
-      }
-      // torso
-      const ty = 9 + bob;
-      for (let y = ty; y < 17 + bob; y++) for (let x = side ? 5 : 4; x < (side ? 11 : 12); x++) {
-        const u = (x - 4) / 7;
-        p.set(x, y, p.shade(jacket, 0.85 - u * 0.6 - (y - ty) * 0.03, x, y));
-      }
-      p.rect(side ? 5 : 4, 15 + bob, side ? 6 : 8, 1, ramp('#2a1a0e')[0]); // belt
-      if (dir === 'down') { p.set(7, 10 + bob, jacket[3]); p.set(8, 11 + bob, jacket[0]); p.set(8, 12 + bob, jacket[0]); } // zipper
-      if (dir === 'up') for (let y = ty + 1; y < ty + 6; y++) for (let x = 5; x < 11; x++) p.set(x, y, p.shade(pack, 0.7 - (x - 5) * 0.08, x, y));
-      // arms swing
-      if (side) { p.rect(7 - step, ty + 1, 2, 5, jacket[1]); p.set(7 - step, ty + 6, skin[2]); }
-      else { p.rect(2, ty + 1 - step, 2, 5, jacket[2]); p.rect(12, ty + 1 + step, 2, 5, jacket[1]); p.set(2, ty + 6 - step, skin[2]); p.set(13, ty + 6 + step, skin[1]); }
-      // head
-      const hy = 2 + bob;
-      for (let y = hy; y < hy + 7; y++) for (let x = 5; x < 11; x++) p.set(x, y, p.shade(skin, 0.8 - (x - 5) * 0.08, x, y));
-      if (dir === 'up') for (let y = hy; y < hy + 6; y++) for (let x = 5; x < 11; x++) p.set(x, y, p.shade(hair, 0.8 - (x - 5) * 0.1, x, y));
-      else {
-        for (let x = 5; x < 11; x++) { p.set(x, hy, hair[2]); p.set(x, hy + 1, hair[x < 8 ? 3 : 1]); }
-        if (side) { p.rect(8, hy, 3, 5, hair[1]); p.set(5, hy + 3, hair[0]); p.set(6, hy + 4, skin[3]); p.set(6, hy + 3, ramp('#101018')[0]); }
-        else { p.set(6, hy + 3, ramp('#101018')[0]); p.set(9, hy + 3, ramp('#101018')[0]); p.set(5, hy + 2, hair[1]); p.set(10, hy + 2, hair[0]); p.set(7, hy + 5, skin[1]); p.set(8, hy + 5, skin[1]); }
-      }
-      p.selout(0.35);
-      out[dir].push(p.toCanvas());
-    }
-  }
-  // right = mirrored left
-  out.right = out.left.map(c => {
-    const m = document.createElement('canvas');
-    m.width = c.width; m.height = c.height;
-    const ctx = m.getContext('2d')!;
-    ctx.translate(c.width, 0); ctx.scale(-1, 1); ctx.drawImage(c, 0, 0);
-    return m;
-  });
-  return out;
 }
 
 export { mixRGB };

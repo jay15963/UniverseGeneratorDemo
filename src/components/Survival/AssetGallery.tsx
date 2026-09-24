@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
-import { SpriteBank, paintPlayer } from '../../lib/terrain/sprites';
+import { SpriteBank } from '../../lib/terrain/sprites';
+import { paintTribalPlayer } from '../../lib/terrain/player';
 import { Feat } from '../../lib/terrain/types';
 import { featureName } from '../../lib/terrain/items';
 
@@ -28,9 +29,9 @@ export function AssetGallery() {
     items.push({ s: bank.get(Feat.BERRY_BLUE, 0, true), label: 'Arbusto colhido' });
     const perRow = Math.max(1, Math.floor((window.innerWidth - 40) / colW));
     const rowH = 90 * Z;
-    const player = paintPlayer();
+    const player = paintTribalPlayer();
     c.width = perRow * colW + pad * 2;
-    c.height = Math.ceil(items.length / perRow) * rowH + 140 * Z / 2 + pad * 2;
+    c.height = Math.ceil(items.length / perRow) * rowH + 12 * 34 * 4 + pad * 2;
     const ctx = c.getContext('2d')!;
     ctx.fillStyle = '#4a6a34'; ctx.fillRect(0, 0, c.width, c.height);
     ctx.imageSmoothingEnabled = false;
@@ -40,8 +41,14 @@ export function AssetGallery() {
       ctx.drawImage(it.s.c, cx - it.s.ax * Z, by - it.s.ay * Z, it.s.c.width * Z, it.s.c.height * Z);
       ctx.fillStyle = '#fff'; ctx.fillText(it.label, cx, by + 20);
     });
-    const py = c.height - 80 * Z / 2 - pad;
-    (['down', 'up', 'left', 'right'] as const).forEach((d, di) => player[d].forEach((f, fi) => ctx.drawImage(f, pad + (di * 4 + fi) * 20 * Z, py, 16 * Z, 24 * Z)));
+    // player sheet: rows = animation x direction, drawn big
+    const PZ = 4;
+    let row = 0;
+    const sheetY = Math.ceil(items.length / perRow) * rowH + pad;
+    for (const a of ['walk', 'idle', 'gather'] as const) for (const d of ['down', 'up', 'left', 'right'] as const) {
+      player[a][d].forEach((f, fi) => ctx.drawImage(f, pad + fi * 26 * PZ, sheetY + row * 34 * PZ, 22 * PZ, 32 * PZ));
+      row++;
+    }
   }, []);
   return <div className="min-h-screen bg-neutral-900 p-4 overflow-auto"><canvas ref={ref} style={{ imageRendering: 'pixelated' }} /></div>;
 }

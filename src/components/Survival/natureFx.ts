@@ -26,7 +26,11 @@ export interface FxContext {
   lavaSpots: { x: number; y: number; l: number }[];
   falls: { x: number; y: number; w: number; h: number }[];
   climate: { temp: number; moist: number; living: boolean; desert: boolean };
+  /** Terrain probe for rain hits: null = not loaded. */
+  surface: (x: number, y: number) => { water: boolean; lift: number } | null;
 }
+
+interface Bolt { pts: [number, number][]; branches: [number, number][][]; life: number }
 
 const LEAF_COLS: Record<number, string[]> = {
   [Feat.OAK]: ['#5b9a3a', '#86bd4f', '#3f7a31'],
@@ -55,6 +59,10 @@ export class NatureFx {
   private cloud: HTMLCanvasElement;
   private darkCanvas: HTMLCanvasElement;
   private lightningFlash = 0;
+  private bolts: Bolt[] = [];
+  private shakeT = 0;
+  private thunderIn = -1;
+  private glow: HTMLCanvasElement = bakeGlow();
 
   constructor(seed: number) {
     this.rng = mulberry(seed);
@@ -103,7 +111,7 @@ export class NatureFx {
       L.life += dt;
       if (L.z > 0) {
         L.z -= dt * (5 + Math.sin(L.ph + t * 3) * 2);
-        L.x += (L.vx + this.wind * 9 + Math.sin(L.ph + t * 2.2) * 8) * dt;
+        L.x += (L.vx + this.wind * (this.weather === 'storm' ? 40 : 9) + Math.sin(L.ph + t * 2.2) * 8) * dt;
         L.y += Math.cos(L.ph + t * 1.7) * 3 * dt;
         if (L.z < 0) L.z = 0;
       } else if (L.life > 14) this.leaves.splice(i, 1);
@@ -172,21 +180,34 @@ export class NatureFx {
       if (f.t > 0.7) { this.ring(f.x + f.dir * 10, f.y - f.l * LIFT, 7, 'rgba(220,240,255,0.7)'); this.splash(f.x + f.dir * 10, f.y - f.l * LIFT, 5); this.fish.splice(i, 1); }
     }
 
-    // --- rain splashes / ripples ---
-    if (this.rainy && this.intensity > 0.3) {
-      for (let k = 0; k < 4; k++) if (R() < dt * 30 * this.intensity) {
+    // --- raindrops hitting the ground: rings on water, tiny crowns on land ---
+    if (this.rainy && this.intensity > 0.2) {
+      const hits = Math.min(40, dt * 260 * this.intensity * (this.weather === 'storm' ? 1.6 : 1));
+      for (let k = 0; k < hits; k++) {
         const x = x0 + R() * (x1 - x0), y = y0 + R() * (y1 - y0);
-        this.ring(x, y, 3 + R() * 2, 'rgba(200,220,255,0.45)');
+        const sfc = c.surface(x, y);
+        if (!sfc) continue;
+        if (sfc.water) this.ring(x, y - sfc.lift, 2.5 + R() * 2.5, 'rgba(225,240,255,0.6)');
+        else if (R() < 0.5) {
+          const yy = y - sfc.lift;
+          this.motes.push({ x, y: yy, vx: -6, vy: -10, life: 0, max: 0.18, col: 'rgba(210,225,255,0.8)', size: 1 });
+          this.motes.push({ x, y: yy, vx: 6, vy: -10, life: 0, max: 0.18, col: 'rgba(210,225,255,0.8)', size: 1 });
+        }
       }
-      for (const w of c.waterSpots) if (R() < dt * 4 * this.intensity) this.ring(w.x + (R() - 0.5) * 16, w.y - w.l * LIFT + (R() - 0.5) * 10, 4, 'rgba(220,240,255,0.5)');
+    }
+    // --- storm: flying leaves & debris hugging the ground ---
+    if (this.weather === 'storm' && this.intensity > 0.5 && c.climate.living) {
+      for (let k = 0; k < 3; k++) if (R() < dt * 12) {
+        this.leaves.push({ x: x0 - 10, y: y0 + R() * (y1 - y0), z: 2 + R() * 18, vx: 70 + R() * 60, ph: R() * 6, col: ['#5b9a3a', '#86bd4f', '#9a7a4a', '#c9692a'][Math.floor(R() * 4)], life: 0, l: 0 });
+      }
     }
     // ambient still-water ripples
     for (const w of c.waterSpots) if (R() < dt * 0.15) this.ring(w.x, w.y - w.l * LIFT, 5 + R() * 4, 'rgba(210,235,255,0.35)');
 
     for (let i = this.rings.length - 1; i >= 0; i--) {
       const r = this.rings[i];
-      r.life += dt; r.r = r.max * Math.min(1, r.life / 0.9);
-      if (r.life > 0.9) this.rings.splice(i, 1);
+      r.life += dt; r.r = r.max * Math.min(1, r.life / 0.7);
+      if (r.life > 0.7) this.rings.splice(i, 1);
     }
 
     // --- lava embers ---
@@ -208,19 +229,58 @@ export class NatureFx {
     }
 
     // lightning
-    if (this.weather === 'storm' && this.intensity > 0.7 && R() < dt * 0.08) this.lightningFlash = 1;
-    this.lightningFlash = Math.max(0, this.lightningFlash - dt * 3);
+    if (this.weather === 'storm' && this.intensity > 0.7 && R() < dt * 0.12) this.strike();
+    this.lightningFlash = Math.max(0, this.lightningFlash - dt * 2.5);
+    for (let i = this.bolts.length - 1; i >= 0; i--) { this.bolts[i].life -= dt; if (this.bolts[i].life <= 0) this.bolts.splice(i, 1); }
+    if (this.thunderIn > 0) { this.thunderIn -= dt; if (this.thunderIn <= 0) this.shakeT = 0.9; }
+    this.shakeT = Math.max(0, this.shakeT - dt);
   }
 
-  ring(x: number, y: number, max: number, col: string) { if (this.rings.length < 80) this.rings.push({ x, y, r: 0, max, life: 0, col }); }
+  /** Lightning: a jagged bolt (normalised screen coords) with side branches, flash, delayed thunder. */
+  strike() {
+    const R = this.rng;
+    const pts: [number, number][] = [];
+    let x = 0.15 + R() * 0.7, y = -0.05;
+    const endY = 0.45 + R() * 0.4;
+    while (y < endY) { pts.push([x, y]); y += 0.03 + R() * 0.05; x += (R() - 0.5) * 0.06; }
+    pts.push([x, endY]);
+    const branches: [number, number][][] = [];
+    for (let b = 0; b < 3; b++) {
+      const start = pts[1 + Math.floor(R() * (pts.length - 2))];
+      const br: [number, number][] = [start];
+      let bx = start[0], by = start[1];
+      const dir = R() < 0.5 ? -1 : 1;
+      for (let k = 0; k < 4; k++) { bx += dir * (0.01 + R() * 0.03); by += 0.02 + R() * 0.03; br.push([bx, by]); }
+      branches.push(br);
+    }
+    this.bolts.push({ pts, branches, life: 0.28 });
+    this.lightningFlash = 1;
+    this.thunderIn = 0.4 + R() * 0.8;
+  }
+
+  ring(x: number, y: number, max: number, col: string) { if (this.rings.length < 220) this.rings.push({ x, y, r: 0, max, life: 0, col }); }
   splash(x: number, y: number, n: number) {
     for (let k = 0; k < n; k++) this.motes.push({ x, y, vx: (this.rng() - 0.5) * 30, vy: -20 - this.rng() * 20, life: 0, max: 0.4, col: 'rgba(230,245,255,0.9)', size: 1 });
   }
 
   /** Sway offset (px) for vegetation at a world position. */
   sway(t: number, x: number, y: number, k = 1): number {
-    const v = Math.sin(t * (1.1 + this.wind * 0.9) + x * 0.045 + y * 0.021) * this.wind * k;
-    return v > 0.55 ? 1 : v < -0.75 ? -1 : 0;
+    const w = this.wind;
+    const v = Math.sin(t * (1.1 + w * 1.4) + x * 0.045 + y * 0.021) * w * k;
+    // storms bend everything downwind (+x) and whip harder
+    const lean = w > 1.2 ? Math.min(2, (w - 1.2) * 2.5) : 0;
+    return Math.round(lean + (v > 0.55 ? 1 : v < -0.75 ? -1 : 0) * (w > 1.4 ? 2 : 1));
+  }
+
+  dust(x: number, y: number, col: string) {
+    for (let k = 0; k < 3; k++) this.motes.push({ x: x + (this.rng() - 0.5) * 4, y: y - 1, vx: (this.rng() - 0.5) * 10 + this.wind * 4, vy: -4 - this.rng() * 5, life: 0, max: 0.35 + this.rng() * 0.3, col, size: this.rng() < 0.3 ? 2 : 1 });
+  }
+
+  /** Camera shake offset (world px) after a thunder strike. */
+  shake(): [number, number] {
+    if (this.shakeT <= 0) return [0, 0];
+    const a = this.shakeT * 3;
+    return [(this.rng() - 0.5) * a, (this.rng() - 0.5) * a];
   }
 
   // ---------------------------------------------------------------------------
@@ -243,11 +303,19 @@ export class NatureFx {
       for (let x = 0; x < f.w; x += 2) if (Math.sin(t * 9 + x) > 0) ctx.fillRect(f.x + x, f.y + f.h - 2 + Math.round(Math.sin(t * 7 + x * 3)), 2, 1);
     }
     // ripples
-    for (const r of this.rings) {
-      ctx.strokeStyle = r.col;
-      ctx.globalAlpha = 1 - r.life / 0.9;
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.ellipse(r.x, r.y, r.r, r.r * 0.45, 0, 0, Math.PI * 2); ctx.stroke();
+    // ripples batched into 3 opacity buckets -> 3 strokes instead of hundreds
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgb(225,240,255)';
+    for (let bucket = 0; bucket < 3; bucket++) {
+      ctx.beginPath();
+      let any = false;
+      for (const r of this.rings) {
+        if (Math.min(2, Math.floor((r.life / 0.7) * 3)) !== bucket) continue;
+        ctx.moveTo(r.x + r.r, r.y);
+        ctx.ellipse(r.x, r.y, r.r, r.r * 0.45, 0, 0, Math.PI * 2);
+        any = true;
+      }
+      if (any) { ctx.globalAlpha = [0.6, 0.38, 0.16][bucket]; ctx.stroke(); }
     }
     ctx.globalAlpha = 1;
     // fallen leaves on the ground
@@ -337,14 +405,30 @@ export class NatureFx {
     while (this.drops.length < want) this.drops.push({ x: R() * W, y: R() * H, v: snow ? 30 + R() * 30 : 500 + R() * 250, len: snow ? 1 + Math.round(R()) : 6 + R() * 8 });
     if (this.drops.length > want) this.drops.length = want;
     const dt = c.dt;
-    ctx.fillStyle = snow ? 'rgba(255,255,255,0.9)' : 'rgba(200,220,250,0.75)';
-    for (const d of this.drops) {
-      d.y += d.v * dt * S / 3;
-      d.x += (snow ? Math.sin(d.y * 0.02 + d.v) * 12 : 60 * this.wind) * dt * S / 3;
-      if (d.y > H) { d.y = -10; d.x = R() * W; }
-      if (d.x > W) d.x -= W; else if (d.x < 0) d.x += W;
-      if (snow) ctx.fillRect(d.x, d.y, d.len * S / 2, d.len * S / 2);
-      else { ctx.fillRect(d.x, d.y, Math.max(1, Math.round(S / 2)), d.len * S / 2.5); }
+    const vxR = 60 * this.wind + (this.weather === 'storm' ? 280 : 0); // rain drift (px/s at S=3)
+    if (snow) {
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      for (const d of this.drops) {
+        d.y += d.v * dt * S / 3;
+        d.x += (Math.sin(d.y * 0.02 + d.v) * 12 + this.wind * 25) * dt * S / 3;
+        if (d.y > H) { d.y = -10; d.x = R() * W; }
+        if (d.x > W) d.x -= W; else if (d.x < 0) d.x += W;
+        ctx.fillRect(d.x, d.y, d.len * S / 2, d.len * S / 2);
+      }
+    } else if (this.drops.length) {
+      // rain streaks follow their real velocity, so storms slant them hard; one batched stroke
+      ctx.strokeStyle = 'rgba(200,220,250,0.7)';
+      ctx.lineWidth = Math.max(1, Math.round(S / 2.5));
+      ctx.beginPath();
+      for (const d of this.drops) {
+        const k = dt * S / 3;
+        d.y += d.v * k; d.x += vxR * k;
+        if (d.y > H) { d.y = -10; d.x = R() * W; }
+        if (d.x > W) d.x -= W; else if (d.x < 0) d.x += W;
+        const len = d.len * S / 2.5, sx = (vxR / d.v) * len;
+        ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - sx, d.y - len);
+      }
+      ctx.stroke();
     }
 
     // night darkness with a warm lantern around the player
@@ -388,15 +472,34 @@ export class NatureFx {
         if (a < 0.05) continue;
         const [x, y] = toScreen(b.x, b.y - 6);
         const r = 5 * S;
-        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-        g.addColorStop(0, `rgba(230,255,120,${0.55 * a})`); g.addColorStop(1, 'rgba(180,255,80,0)');
-        ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+        ctx.globalAlpha = a;
+        ctx.drawImage(this.glow, x - r, y - r, r * 2, r * 2);
+        ctx.globalAlpha = 1;
         ctx.fillStyle = `rgba(255,255,200,${a})`; ctx.fillRect(x - S / 2, y - S / 2, S, S);
       }
       ctx.globalCompositeOperation = 'source-over';
     }
-    if (this.lightningFlash > 0) { ctx.fillStyle = `rgba(230,235,255,${this.lightningFlash * 0.6})`; ctx.fillRect(0, 0, W, H); }
+    if (this.lightningFlash > 0) { ctx.fillStyle = `rgba(230,235,255,${this.lightningFlash * 0.55})`; ctx.fillRect(0, 0, W, H); }
+    for (const b of this.bolts) {
+      const a = Math.min(1, b.life / 0.1);
+      const flick = Math.sin(b.life * 90) > -0.3 ? 1 : 0.35;
+      const path = (pts: [number, number][]) => { ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x * W, y * H) : ctx.moveTo(x * W, y * H))); ctx.stroke(); };
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = `rgba(150,170,255,${0.35 * a * flick})`; ctx.lineWidth = 7 * S / 3; path(b.pts);
+      ctx.strokeStyle = `rgba(255,255,255,${a * flick})`; ctx.lineWidth = 2 * S / 3; path(b.pts);
+      ctx.lineWidth = 1 * S / 3; for (const br of b.branches) path(br);
+    }
   }
+}
+
+function bakeGlow(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 32;
+  const g = c.getContext('2d')!;
+  const gr = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+  gr.addColorStop(0, 'rgba(255,255,200,1)'); gr.addColorStop(0.18, 'rgba(230,255,120,0.6)'); gr.addColorStop(1, 'rgba(180,255,80,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 32, 32);
+  return c;
 }
 
 function bakeCloudShadow(seed: number): HTMLCanvasElement {
