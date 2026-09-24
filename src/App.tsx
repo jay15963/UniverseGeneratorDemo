@@ -18,13 +18,14 @@ import { useUniverseController } from './hooks/useUniverseController';
 import { GameApplication } from './components/Game/GameApplication';
 import { AssetGallery } from './components/Survival/AssetGallery';
 import { CreatureGenerator } from './components/Creature/CreatureGenerator';
+import { StructureGenerator } from './components/Structure/StructureGenerator';
 import { DemoReel } from './components/Demo/DemoReel';
 import { Trailer } from './components/Trailer/Trailer';
 
 export default function App() {
   const { config, setConfig, bodies, isGenerating, handleGenerate, showZones, setShowZones } = useSolarSystemController();
   
-  const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator' | 'creature-generator' | 'demo' | 'trailer'>(() => (typeof window !== 'undefined' && window.location.hash === '#criaturas' ? 'creature-generator' : typeof window !== 'undefined' && window.location.hash.startsWith('#demo') ? 'demo' : typeof window !== 'undefined' && window.location.hash.startsWith('#trailer') ? 'trailer' : 'menu'));
+  const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator' | 'creature-generator' | 'structure-generator' | 'demo' | 'trailer'>(() => (typeof window !== 'undefined' && window.location.hash === '#criaturas' ? 'creature-generator' : typeof window !== 'undefined' && window.location.hash === '#estruturas' ? 'structure-generator' : typeof window !== 'undefined' && window.location.hash.startsWith('#demo') ? 'demo' : typeof window !== 'undefined' && window.location.hash.startsWith('#trailer') ? 'trailer' : 'menu'));
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   // soundtrack URL when the trailer is being recorded into a video file
   const [trailerRecord, setTrailerRecord] = useState<string | undefined>(undefined);
@@ -81,6 +82,7 @@ export default function App() {
         onUniverseStart={() => setCurrentView('universe-generator')}
         onPlay={() => setCurrentView('game')}
         onCreatureStart={() => setCurrentView('creature-generator')}
+        onStructureStart={() => setCurrentView('structure-generator')}
         onDemo={() => setCurrentView('demo')}
         onTrailer={() => { setTrailerRecord(undefined); setCurrentView('trailer'); }}
         onTrailerDownload={url => { setTrailerRecord(url); setCurrentView('trailer'); }}
@@ -97,6 +99,10 @@ export default function App() {
   if (currentView === 'demo') {
     const m = /^#demo=(\d+)$/.exec(window.location.hash);
     return <DemoReel onExit={() => { if (window.location.hash.startsWith('#demo')) window.location.hash = ''; setCurrentView('menu'); }} startAt={m ? +m[1] : -1} />;
+  }
+
+  if (currentView === 'structure-generator') {
+    return <StructureGenerator onBack={() => { if (window.location.hash === '#estruturas') window.location.hash = ''; setCurrentView('menu'); }} />;
   }
 
   if (currentView === 'creature-generator') {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Rocket, Globe2, Sun, Sparkles, Orbit, Settings, Dna, Clapperboard, Film, Download } from 'lucide-react';
+import { Rocket, Globe2, Sun, Sparkles, Orbit, Settings, Dna, Clapperboard, Film, Download, Castle } from 'lucide-react';
 import { MenuScene } from './MenuScene';
 import { LOCAL_SOUNDTRACK } from './Trailer/Trailer';
 
@@ -10,13 +10,14 @@ interface MainMenuProps {
   onUniverseStart: () => void;
   onPlay: () => void;
   onCreatureStart: () => void;
+  onStructureStart: () => void;
   onDemo: () => void;
   onTrailer: () => void;
   /** record the trailer into a video file, with this soundtrack URL */
   onTrailerDownload: (soundtrack: string) => void;
 }
 
-export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onCreatureStart, onDemo, onTrailer, onTrailerDownload }: MainMenuProps) {
+export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onCreatureStart, onStructureStart, onDemo, onTrailer, onTrailerDownload }: MainMenuProps) {
   // the recording needs the music as a file: the one served with the site, or one the viewer picks
   const [localTrack, setLocalTrack] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -49,7 +50,7 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
         <div className="flex flex-col gap-1.5 w-full max-w-[22rem]">
           <MenuButton label="Jogar" hint="Explore um universo inteiro" icon={<Rocket className="w-5 h-5" />} onClick={onPlay} primary />
           <div className="flex items-stretch gap-1.5">
-            <div className="flex-1 min-w-0"><MenuButton label="Assistir trailer" icon={<Film className="w-4 h-4" />} onClick={onTrailer} badge="NOVO" /></div>
+            <div className="flex-1 min-w-0"><MenuButton label="Assistir trailer" icon={<Film className="w-4 h-4" />} onClick={onTrailer} /></div>
             <button onClick={download}
               title={localTrack ? 'Baixar o trailer em vídeo (grava enquanto ele passa, ~2:30)' : 'Baixar o trailer em vídeo: escolha o arquivo da música "Leaf" (Infraction); ele é gravado enquanto passa (~2:30)'}
               className="group flex items-center gap-1.5 px-3 rounded-xl border border-white/10 bg-white/[0.04] hover:bg-white/[0.1] hover:border-white/25 text-cyan-200/80 hover:text-cyan-100 transition-all">
@@ -61,6 +62,7 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
           </div>
           <MenuButton label="Assistir demo" icon={<Clapperboard className="w-4 h-4" />} onClick={onDemo} />
           <MenuButton label="Gerador de Criaturas" icon={<Dna className="w-4 h-4" />} onClick={onCreatureStart} />
+          <MenuButton label="Gerador de Estruturas" icon={<Castle className="w-4 h-4" />} onClick={onStructureStart} badge="NOVO" />
           <MenuButton label="Gerador de Planeta" icon={<Globe2 className="w-4 h-4" />} onClick={onStart} />
           <MenuButton label="Gerador de Sistema Solar" icon={<Sun className="w-4 h-4" />} onClick={onSolarSystemStart} />
           <MenuButton label="Gerador de Galáxia" icon={<Orbit className="w-4 h-4" />} onClick={onGalaxyStart} />
