@@ -43,7 +43,7 @@ export function buildParts(s: StructSpec, dir: Dir8, frame: number, frames = SFR
   return parts;
 }
 
-function shapeBox(p: Part): [number, number, number, number] {
+export function shapeBox(p: Part): [number, number, number, number] {
   const s = p.s;
   if (s.k === 'e') { const r = Math.max(s.rx, s.ry) + 2; return [s.x - r, s.y - r, s.x + r, s.y + r]; }
   if (s.k === 'c') { const r = Math.max(s.r1, s.r2) + 2; return [Math.min(s.x1, s.x2) - r, Math.min(s.y1, s.y2) - r, Math.max(s.x1, s.x2) + r, Math.max(s.y1, s.y2) + r]; }
@@ -51,7 +51,7 @@ function shapeBox(p: Part): [number, number, number, number] {
   for (let i = 0; i < s.pts.length; i += 2) { x0 = Math.min(x0, s.pts[i]); x1 = Math.max(x1, s.pts[i]); y0 = Math.min(y0, s.pts[i + 1]); y1 = Math.max(y1, s.pts[i + 1]); }
   return [x0 - 1, y0 - 1, x1 + 1, y1 + 1];
 }
-function translate(p: Part, dx: number, dy: number) {
+export function translate(p: Part, dx: number, dy: number) {
   const s = p.s;
   if (s.k === 'e') { s.x += dx; s.y += dy; }
   else if (s.k === 'c') { s.x1 += dx; s.y1 += dy; s.x2 += dx; s.y2 += dy; }
@@ -59,7 +59,7 @@ function translate(p: Part, dx: number, dy: number) {
   if (p.clip) p.clip = [p.clip[0], p.clip[1], p.clip[2] - p.clip[0] * dx - p.clip[1] * dy];
   if (p.uv) { const q = p.uv; q[2] -= q[0] * dx + q[1] * dy; q[5] -= q[3] * dx + q[4] * dy; }
 }
-function flip(px: Uint8ClampedArray, w: number, h: number) {
+export function flip(px: Uint8ClampedArray, w: number, h: number) {
   const o = new Uint8ClampedArray(px.length);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const a = (y * w + x) * 4, b = (y * w + (w - 1 - x)) * 4;
