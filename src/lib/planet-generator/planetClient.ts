@@ -337,5 +337,14 @@ export class TerrainPool {
     return new Promise((resolve, reject) => { this.queue.push({ cx, cy, resolve, reject }); this.pump(); });
   }
 
-  dispose() { this.workers.forEach(s => s.w.terminate()); this.workers = []; }
+  dispose() {
+    this.workers.forEach(s => s.w.terminate());
+    this.workers = [];
+    // settle everything in flight so callers can clean up their bookkeeping
+    const err = new Error('disposed');
+    for (const j of this.waiting.values()) j.reject(err);
+    for (const j of this.queue) j.reject(err);
+    for (const j of this.regionQueue) j.reject(err);
+    this.waiting.clear(); this.queue = []; this.regionQueue = [];
+  }
 }
