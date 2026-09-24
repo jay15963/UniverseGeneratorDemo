@@ -11,7 +11,7 @@ import { buildCiv, LoadHooks } from './civ';
 export const FRAMES = 8;
 export type { Anim };
 
-export const ANIM_PT: Record<Anim, string> = { idle: 'Parado', walk: 'Andando', run: 'Correndo', fly: 'Voando', swim: 'Nadando', use: 'Usando' };
+export const ANIM_PT: Record<Anim, string> = { idle: 'Parado', walk: 'Andando', run: 'Correndo', fly: 'Voando', swim: 'Nadando', use: 'Usando', die: 'Morrendo' };
 
 /** Animations that make sense for a creature at a stage (first = default). */
 export function animsFor(g: Genome, stage: Stage): Anim[] {
@@ -143,4 +143,5 @@ function translate(p: Part, dx: number, dy: number) {
   if (s.k === 'e') { s.x += dx; s.y += dy; }
   else if (s.k === 'c') { s.x1 += dx; s.y1 += dy; s.x2 += dx; s.y2 += dy; }
   else for (let i = 0; i < s.pts.length; i += 2) { s.pts[i] += dx; s.pts[i + 1] += dy; }
+  if (p.clip) p.clip = [p.clip[0], p.clip[1], p.clip[2] - p.clip[0] * dx - p.clip[1] * dy];
 }

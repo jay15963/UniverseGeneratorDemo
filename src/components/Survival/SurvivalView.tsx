@@ -43,15 +43,15 @@ interface LoadedChunk {
   byRow: Feature[][];   // features bucketed by local tile row, pre-sorted by y
   tex: WebGLTexture | null;
 }
-/** Regional LOD block: REGION_N x REGION_N colours sampled every `step` tiles. */
-interface RegionBlock { img: Img; slot: number; step: number; tx: number; ty: number; lastUsed: number }
-const REGION_N = 64;
-const REGION_SLOTS = (2048 / REGION_N) ** 2;
-/** Zoom stops (CSS px per world px). >= 1: gameplay, 1/2..1/128: regional, below: world map. */
-const ZOOMS = [6, 5, 4, 3, 2, 1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64, 1 / 128, 1 / 256, 1 / 512, 1 / 1024, 0];
-type Lod = 'local' | 'regional' | 'world';
-const lodOf = (z: number): Lod => (z >= 0.99 ? 'local' : z >= 1 / 128 - 1e-9 ? 'regional' : 'world');
-const LOD_NAME: Record<Lod, string> = { local: 'LOD 1 · Local', regional: 'LOD 2 · Regional', world: 'LOD 3 · Mapa-múndi' };
+/**
+ * Zoom stops (CSS px per world px). Only two levels of detail: the gameplay world itself (fully detailed, from close-up
+ * down to 1/4, where ~15 x 9 chunks fill a 1080p screen) and the world map. There is no simplified regional level.
+ */
+const ZOOMS = [6, 5, 4, 3, 2, 1, 1 / 2, 1 / 4, 1 / 256, 1 / 512, 1 / 1024, 0];
+const MIN_LOCAL_ZOOM = 1 / 4;
+type Lod = 'local' | 'world';
+const lodOf = (z: number): Lod => (z >= MIN_LOCAL_ZOOM - 1e-9 ? 'local' : 'world');
+const LOD_NAME: Record<Lod, string> = { local: 'Gameplay', world: 'Mapa-múndi' };
 const WORLD_PX = WORLD_TILES_X * TILE;
 
 /** Everything the scene needs to draw, independent of the backend. */
@@ -282,7 +282,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     const pcx = Math.floor(g.x / CHUNK_PX), pcy = Math.floor(g.y / CHUNK_PX);
     const want: [number, number, number][] = [];
     const pool = poolRef.current;
-    const R = pool ? 3 : 2;
+    // stream what the view covers (zoomed out, that is many more chunks), at least the usual 7 x 7 around the player
+    const view = Math.max(window.innerWidth, window.innerHeight) / 2 / Math.max(MIN_LOCAL_ZOOM, g.zoomView);
+    const R = Math.min(9, Math.max(pool ? 3 : 2, Math.ceil(view / CHUNK_PX) + 1));
     for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) want.push([pcx + dx, pcy + dy, dx * dx + dy * dy]);
     // a scripted camera also streams in the place of its next cut
     const pre = preloadRef.current;
@@ -312,7 +314,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         mini.getContext('2d')!.putImageData(new ImageData(data.mini as Uint8ClampedArray<ArrayBuffer>, CHUNK, CHUNK), 0, 0);
         g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow, tex });
         fauna.spawnChunk(data.cx, data.cy, world);
-        const cap = cine ? 150 : 64;
+        const zv = Math.max(window.innerWidth, window.innerHeight) / 2 / Math.max(MIN_LOCAL_ZOOM, G.current.zoomView) / CHUNK_PX + 2;
+        const cap = Math.max(cine ? 150 : 64, Math.ceil((2 * zv + 1) ** 2) + 16);
         if (g.chunks.size > cap) {
           const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - cap);
           for (const [k, c] of far) { g.chunks.delete(k); fauna.removeChunk(k); if (c.tex) glRef.current?.deleteTexture(c.tex); }
@@ -529,13 +532,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     const t0 = performance.now();
     let lodShown: Lod | null = null, zoomShown = -1;
 
-    // --- regional LOD blocks & world map ---
-    const regions = new Map<string, RegionBlock>();
-    const regionPending = new Set<string>();
-    const freeSlots: number[] = [];
-    const regionTex = gl ? gl.newTexture(2048, 2048) : null;
-    for (let i = REGION_SLOTS - 1; i >= 0; i--) freeSlots.push(i);
-    let regionStep = 0;
+    // --- world map ---
     let mapImg: Img | null = null, mapLoading = false;
     const worldTilesY = WORLD_TILES_X * (session.height / session.width);
 
@@ -557,73 +554,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       }).catch(() => { mapLoading = false; });
     };
 
-    const requestRegions = (step: number, x0: number, y0: number, x1: number, y1: number, cx: number, cy: number) => {
-      const pool = poolRef.current;
-      if (!pool) return;
-      if (step !== regionStep) { pool.clearRegions(); regionStep = step; }
-      const span = REGION_N * step, spanPx = span * TILE;
-      const want: [number, number, number][] = [];
-      for (let by = Math.floor(y0 / spanPx); by <= Math.floor(y1 / spanPx); by++) {
-        if (by * span >= worldTilesY || (by + 1) * span <= 0) continue;
-        for (let bx = Math.floor(x0 / spanPx); bx <= Math.floor(x1 / spanPx); bx++) {
-          const k = `${step}:${bx}:${by}`;
-          const hit = regions.get(k);
-          if (hit) { hit.lastUsed = performance.now(); continue; }
-          if (regionPending.has(k)) continue;
-          want.push([bx, by, ((bx + 0.5) * spanPx - cx) ** 2 + ((by + 0.5) * spanPx - cy) ** 2]);
-        }
-      }
-      want.sort((a, b) => a[2] - b[2]);
-      for (const [bx, by] of want) {
-        if (regionPending.size >= pool.size * 2) break;
-        if (!pool.coversTile(bx * span + span / 2, by * span + span / 2)) continue;
-        const k = `${step}:${bx}:${by}`;
-        regionPending.add(k);
-        pool.region(bx * span, by * span, step, REGION_N).then(px => {
-          regionPending.delete(k);
-          if (!aliveRef.current) return;
-          let img: Img, slot = -1;
-          const evict = () => {
-            let oldK = '', oldT = Infinity;
-            for (const [kk, b] of regions) if (b.lastUsed < oldT) { oldT = b.lastUsed; oldK = kk; }
-            const b = regions.get(oldK);
-            if (b) { regions.delete(oldK); if (b.slot >= 0) freeSlots.push(b.slot); }
-          };
-          if (gl && regionTex) {
-            if (!freeSlots.length) evict();
-            slot = freeSlots.pop()!;
-            const per = 2048 / REGION_N;
-            const sx = (slot % per) * REGION_N, sy = Math.floor(slot / per) * REGION_N;
-            gl.upload(regionTex, sx, sy, REGION_N, REGION_N, px);
-            img = { reg: { tex: regionTex, x: sx, y: sy, w: REGION_N, h: REGION_N, tw: 2048, th: 2048 }, w: REGION_N, h: REGION_N };
-          } else {
-            if (regions.size >= 600) evict();
-            img = canvasImg(px, REGION_N, REGION_N);
-          }
-          regions.set(k, { img, slot, step, tx: bx * span, ty: by * span, lastUsed: performance.now() });
-        }).catch(() => regionPending.delete(k));
-      }
-    };
-
     const drawMap = (p: Painter, x0: number, x1: number) => {
       if (!mapImg) return;
       const H = WORLD_PX * (session.height / session.width);
       for (let k = Math.floor(x0 / WORLD_PX); k <= Math.floor(x1 / WORLD_PX); k++) p.blit(mapImg, 0, 0, mapImg.w, mapImg.h, k * WORLD_PX, 0, WORLD_PX, H);
     };
-    const drawRegions = (p: Painter, step: number, x0: number, y0: number, x1: number, y1: number) => {
-      // coarser blocks first (they fill the gaps while finer ones stream in), then the current resolution
-      const list: RegionBlock[] = [];
-      for (const b of regions.values()) {
-        if (b.step < step || b.step > step * 16) continue;
-        const s = REGION_N * b.step * TILE;
-        const dx = b.tx * TILE, dy = b.ty * TILE;
-        if (dx > x1 || dx + s < x0 || dy > y1 || dy + s < y0) continue;
-        list.push(b);
-      }
-      list.sort((a, b) => b.step - a.step);
-      for (const b of list) { const s = REGION_N * b.step * TILE; p.blit(b.img, 0, 0, REGION_N, REGION_N, b.tx * TILE, b.ty * TILE, s, s); }
-    };
-
     const playerFrame = () => {
       const g = G.current;
       if (g.gatherT > 0) return player.gather[g.dir][Math.min(3, Math.floor((1 - g.gatherT / 0.5) * 4))];
@@ -974,7 +909,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           const c = g.chunks.get(`${cx},${cy}`);
           if (!c) continue;
           for (const f of c.data.falls) if (f.x < x1 && f.x + f.w > x0 && f.y < y1 && f.y + f.h > y0) falls.push(f);
-          if (visible.length < 400) for (const f of c.data.features) if (f.x > x0 && f.x < x1 && f.y > y0 && f.y < y1 && !g.taken.has(f.id)) visible.push(f);
+          if (visible.length < (Z < 1 ? 3000 : 400)) for (const f of c.data.features) if (f.x > x0 && f.x < x1 && f.y > y0 && f.y < y1 && !g.taken.has(f.id)) visible.push(f);
         }
         const info0 = g.ready ? tileInfo(g.x, g.y) : null;
         fxc = {
@@ -990,10 +925,6 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         if (g.ready) { fx.update(fxc); fauna.update(dt, g.x, g.y, world, fx, Math.random); }
       } else {
         if (!mapImg) loadMap();
-        if (lod === 'regional' && g.ready) {
-          const step = 2 ** Math.ceil(Math.log2(Math.max(1, 3 / (TILE * zt))));
-          requestRegions(step, x0, y0, x1, y1, camX, camY);
-        }
       }
 
       // --- vision lens: when terrain or a tree hides the player, cut a dithered window through it ---
@@ -1033,7 +964,6 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
         } else {
           drawMap(painter, x0, x1);
-          if (lod === 'regional') drawRegions(painter, regionStep || 1, x0, y0, x1, y1);
         }
         gl.flush();
       } else if (ctx) {
@@ -1062,7 +992,6 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
         } else {
           drawMap(painter, x0, x1);
-          if (lod === 'regional') drawRegions(painter, regionStep || 1, x0, y0, x1, y1);
         }
       }
 
@@ -1267,7 +1196,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5">
           <button onClick={() => zoomStep(-1)} title="Aproximar (roda / +)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><ZoomIn className="w-4 h-4" /></button>
           <div className="flex flex-col gap-1 py-1">
-            {(['local', 'regional', 'world'] as Lod[]).map(l => (
+            {(['local', 'world'] as Lod[]).map(l => (
               <div key={l} title={LOD_NAME[l]} className={`w-2 h-2 rounded-full mx-auto ${lodLabel.lod === l ? 'bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]' : 'bg-white/25'}`} />
             ))}
           </div>
@@ -1278,7 +1207,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         <div className={`absolute left-1/2 -translate-x-1/2 ${spectator ? 'bottom-[70px]' : 'bottom-[76px]'} pointer-events-none bg-black/70 border border-white/15 rounded-lg px-3 py-1.5 text-center`}>
           <div className="text-white font-bold text-sm tracking-wide">{LOD_NAME[lodLabel.lod]}</div>
           <div className="text-[11px] font-mono text-neutral-400">
-            {lodLabel.lod === 'regional' ? `1 px ≈ ${(1 / (TILE * lodLabel.zoom)).toFixed(lodLabel.zoom > 1 / 32 ? 1 : 0)} m · a região ao redor` : 'superfície do planeta inteiro'} · roda para voltar
+            superfície do planeta inteiro · roda para voltar
           </div>
         </div>
       )}
@@ -1386,7 +1315,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
                 );
               })}
             </div>
-            <p className="mt-3 text-[10px] text-neutral-500">WASD/setas: andar · E/Espaço/clique: coletar · Roda ou +/-: zoom (local → regional → mapa-múndi) · I: mochila · M: minimapa · P/F3: desempenho · Esc: sair</p>
+            <p className="mt-3 text-[10px] text-neutral-500">WASD/setas: andar · E/Espaço/clique: coletar · Roda ou +/-: zoom (gameplay → mapa-múndi) · I: mochila · M: minimapa · P/F3: desempenho · Esc: sair</p>
           </div>
         </div>
       )}

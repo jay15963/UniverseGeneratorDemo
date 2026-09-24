@@ -95,10 +95,10 @@ Owner's rules - keep them:
 - **Structures, never equipment**: no weapons (catapults, trebuchets, cannons, turrets), vehicles (carts, trucks,
   drones, hovercraft) or machines-as-objects (cranes, robot arms). Those will be separate equipment assets. Fortified
   positions are drawn as the building only (walls, embrasures, blast doors, shield emitters).
-- **Two LODs** (`LOD_K` in `render.ts`): *gameplay* (k 4.5) is sized against the creatures at their gameplay scale
-  (`CREATURE_K` 0.4, ~40 px tall): a citizen fits the door, a storey is ~1.7 citizens tall. *Regional* (k 1) is the
-  same drawing 4.5x smaller for the regional map. Texture units are screen pixels, so bricks/planks keep their pixel
-  size at both LODs. The gameplay LOD is rendered in `struct.worker.ts` (`structAsync.ts`).
+- **One LOD: gameplay** (`LOD_K.gameplay` 4.5 in `render.ts`), sized against the creatures at their gameplay scale
+  (`CREATURE_K` 0.4, ~40 px tall): a citizen fits the door, a storey is ~1.7 citizens tall. (`LOD_K.regional` only
+  serves thumbnails; the game has no regional map any more.) Texture units are screen pixels. The gameplay render
+  runs in `struct.worker.ts` (`structAsync.ts`).
 - The generator shows, in gameplay LOD, a civilised citizen of a species made from the same seed/world, wearing the
   clothes of the era, next to the structure (scale + who built it).
 - **Walls**: in gameplay, walls/towers will be a modular system (small segments, corners, gates and towers joined
@@ -124,4 +124,25 @@ Owner's rules - keep them:
   the era, simple clothes, padded, hides, leather, bone, lamellar, mail, scale, plate, tactical, exo, force field;
   pieces (head/torso/arms/hands/legs/feet/cloak) switch off one by one. Closed helms are drawn over the face.
 - New types = one builder + one catalogue entry in `hand.ts` / `aux.ts` / `wear.ts`.
+- **Shields are big** (a round one ~half the bearer's height, viking style); no small shields/bucklers.
+- Guns show their shot: black-powder smoke clouds (muskets), star flashes, smoke wisps and spent casings (modern,
+  bursts), bolts / plasma balls (future); loosed arrows and crossbow bolts fly off. The shot lands on the loop's
+  frames 4-5 (8-frame loops: time windows must contain a frame).
+- Always the detailed view (no small "gameplay LOD" preview).
 - Menu → "Gerador de Equipamentos" (`#equipamentos`).
+
+## Death animations (`src/lib/creature/death.ts`)
+- Civilised bodies are drawn in named **sections** (`back`, `torso`, `head`, `arm0..`, `leg0..`, `tail`, `misc`;
+  held items `item<arm>`, gear `aux:back|belt`) through `Sketch.section`; a death gives each section a rigid placement
+  (`Xf`), two placements with a cutting plane (a body cut in half; the plane becomes a per-part screen clip in
+  `raster.ts`) or none (blown apart). Still flat 2D pieces - never meshes.
+- Deaths (16 frames, played once): fall forward / backward (common: thrust, plain cut - a little blood pooling),
+  and the brutal ones with lots of gore: head, each arm and each leg severed (flying piece, stump caps, pulsing
+  fountains), cut in half horizontally and vertically (cut faces with spine, ribs, organs, brain), upper body or legs
+  exploding (gibs: meat with skin, bones, organs, eyes, guts). **Every death spreads blood on the ground** (pools,
+  splats where drops and gibs land). Blood takes the species' glow hue in Alien-like worlds.
+- Held items are dropped, fly with a severed arm or are flung by an explosion.
+
+## Gameplay map zoom (`SurvivalView.tsx`)
+- Only two levels: the **gameplay world** (full detail) from close-up down to 1/4 (chunks streamed for the whole view)
+  and the **world map**. The simplified regional LOD was removed at the owner's request.

@@ -9,6 +9,7 @@ import { AUX_TYPES, auxById } from '../../lib/equipment/aux';
 import { WEAR_STYLES, wearById, PIECES, Piece } from '../../lib/equipment/wear';
 import { matById, clsName } from '../../lib/equipment/materials';
 import { Loadout, ItemSel, WearSel, equippedData, itemData, matsFor, eraStage } from '../../lib/equipment/loadout';
+import { DEATHS, Death, DEATH_FRAMES } from '../../lib/creature/death';
 
 interface Props { onBack: () => void }
 const randomSeed = () => Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -85,8 +86,8 @@ export function EquipmentGenerator({ onBack }: Props) {
   const [mode, setMode] = useState<ColorMode>('earth');
   const [era, setEra] = useState(1);
   const [anim, setAnim] = useState<Anim>('use');
+  const [death, setDeath] = useState<Death | null>(null);
   const [dir, setDir] = useState<Dir8>('SE');
-  const [lod, setLod] = useState<'close' | 'gameplay'>('close');
   const [tab, setTab] = useState<Tab>('main');
   const [load, setLoad] = useState<Loadout>({
     main: { type: 'sword', mat: 'bronze', variant: 0 }, off: { type: 'shield', mat: 'wood', variant: 0 }, two: null,
@@ -101,11 +102,11 @@ export function EquipmentGenerator({ onBack }: Props) {
   useEffect(() => { const id = setTimeout(() => setLive({ seed, params, mode }), 80); return () => clearTimeout(id); }, [seed, params, mode]);
   const g = useMemo(() => makeGenome(live.seed, live.params, live.mode), [live]);
   const eff = useMemo(() => adapt(load, era), [load, era]);
-  const k = lod === 'gameplay' ? 0.4 : 1;
+  const k = 1; // always the detailed level, like everything in the game
   const sprite = useMemo(() => {
-    const d = equippedData(g, era, eff, dir, anim, 8, k);
+    const d = equippedData(g, era, eff, dir, anim, 8, k, death ?? undefined);
     return { frames: d.frames.map(f => toCanvas(f, d.w, d.h)), w: d.w, h: d.h, ax: d.ax, ay: d.ay };
-  }, [g, era, eff, dir, anim, k]);
+  }, [g, era, eff, dir, anim, k, death]);
 
   const W = Math.max(200, Math.ceil((sprite.w + 60) / 16) * 16), H = Math.max(Math.round(W * 9 / 16), sprite.h + 40);
   useEffect(() => {
@@ -123,7 +124,7 @@ export function EquipmentGenerator({ onBack }: Props) {
       const t = Math.max(0, (now - t0) / 1000);
       if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
       drawBackdrop(ctx, W, H, eraStage(era), g, t);
-      const gy = GROUND_Y(H) + 3, img = sprite.frames[Math.floor(t * (anim === 'use' ? 9 : 7)) % sprite.frames.length];
+      const gy = GROUND_Y(H) + 3, img = sprite.frames[death ? Math.min(DEATH_FRAMES - 1, Math.floor((t % 3.6) * 7.5)) : Math.floor(t * (anim === 'use' ? 9 : 7)) % sprite.frames.length]; // a death plays once, holds, then replays
       ctx.fillStyle = 'rgba(0,0,0,0.28)';
       ctx.beginPath(); ctx.ellipse(W / 2, gy, Math.min(sprite.w * 0.3, 40), 3, 0, 0, Math.PI * 2); ctx.fill();
       ctx.drawImage(img, Math.round(W / 2 - sprite.ax), gy - sprite.ay);
@@ -131,7 +132,7 @@ export function EquipmentGenerator({ onBack }: Props) {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [sprite, W, H, g, era, anim]);
+  }, [sprite, W, H, g, era, anim, death]);
 
   // the focused item alone, 8 facings (like inventory icons)
   const focus: ItemSel | null = tab === 'main' ? eff.main ?? null : tab === 'off' ? eff.off ?? null : tab === 'two' ? eff.two ?? null : null;
@@ -255,13 +256,15 @@ export function EquipmentGenerator({ onBack }: Props) {
       out.width = W * 4; out.height = H * 4; o.imageSmoothingEnabled = false; o.drawImage(c, 0, 0, W * 4, H * 4);
     } else if (what === 'sheet') {
       // gameplay sheet: per animation, one row per facing (E, SE, S, SW, W, NW, N, NE) x 8 frames, 1:1 pixels
-      const rows = ANIMS.flatMap(([a]) => DIRS.map(d => equippedData(g, era, eff, d, a, 8, k)));
+      // with a death selected: that death in 8 facings x 16 frames; otherwise every animation
+      const rows = death ? DIRS.map(d => equippedData(g, era, eff, d, 'die', DEATH_FRAMES, k, death)) : ANIMS.flatMap(([a]) => DIRS.map(d => equippedData(g, era, eff, d, a, 8, k)));
+      const nf = death ? DEATH_FRAMES : 8;
       const cw = Math.max(...rows.map(r => r.w)), ch = Math.max(...rows.map(r => r.h));
-      out.width = cw * 8; out.height = ch * rows.length;
+      out.width = cw * nf; out.height = ch * rows.length;
       rows.forEach((r, i) => r.frames.forEach((f, j) => o.drawImage(toCanvas(f, r.w, r.h), j * cw + (cw - r.w) / 2, i * ch + (ch - r.h))));
     } else {
       if (!focus) return;
-      const rows = DIRS.map(d => itemData(g, era, focus, d, 8, lod === 'gameplay' ? 0.4 : 1));
+      const rows = DIRS.map(d => itemData(g, era, focus, d, 8, 1));
       const cw = Math.max(...rows.map(r => r.w)), ch = Math.max(...rows.map(r => r.h));
       out.width = cw * 8; out.height = ch * 8;
       rows.forEach((r, i) => r.frames.forEach((f, j) => o.drawImage(toCanvas(f, r.w, r.h), j * cw + (cw - r.w) / 2, i * ch + (ch - r.h) / 2)));
@@ -329,10 +332,11 @@ export function EquipmentGenerator({ onBack }: Props) {
             <div className="absolute top-3 left-3 bg-black/60 border border-white/10 rounded-lg px-2.5 py-1 text-[11px] font-mono"><span className="text-orange-300">{meta.name.toUpperCase()}</span> <span className="text-neutral-400">· {meta.years} · povo {people}</span></div>
             <div className="absolute top-3 right-3 flex flex-col items-end gap-1.5">
               <div className="flex gap-1 bg-black/60 border border-white/10 rounded-xl p-1">
-                {ANIMS.map(([a, n]) => <button key={a} onClick={() => setAnim(a)} className={`px-2 py-1 rounded-md text-[11px] font-bold ${anim === a ? 'bg-orange-400 text-black' : 'text-neutral-300 hover:bg-white/10'}`}>{n}</button>)}
-              </div>
-              <div className="flex gap-1 bg-black/60 border border-white/10 rounded-xl p-1">
-                {([['close', 'Detalhe'], ['gameplay', 'LOD gameplay']] as const).map(([l, n]) => <button key={l} onClick={() => setLod(l)} className={`px-2 py-1 rounded-md text-[11px] font-bold ${lod === l ? 'bg-amber-300 text-black' : 'text-neutral-300 hover:bg-white/10'}`}>{n}</button>)}
+                {ANIMS.map(([a, n]) => <button key={a} onClick={() => { setAnim(a); setDeath(null); }} className={`px-2 py-1 rounded-md text-[11px] font-bold ${anim === a && !death ? 'bg-orange-400 text-black' : 'text-neutral-300 hover:bg-white/10'}`}>{n}</button>)}
+                <select value={death ?? ''} onChange={e => setDeath((e.target.value || null) as Death | null)} title="Animações de morte" className={`rounded-md text-[11px] font-bold px-1 ${death ? 'bg-red-600 text-white' : 'bg-transparent text-neutral-300'}`}>
+                  <option value="" className="bg-neutral-900">Morte…</option>
+                  {DEATHS.map(d => <option key={d.id} value={d.id} className="bg-neutral-900">{d.brutal ? '☠ ' : ''}{d.name}</option>)}
+                </select>
               </div>
             </div>
             {itemBig && <div className="absolute bottom-3 left-3 bg-black/60 border border-white/10 rounded-xl p-2 flex flex-col items-center" title="O item sozinho">

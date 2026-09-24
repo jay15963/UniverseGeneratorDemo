@@ -56,6 +56,7 @@ function translate(p: Part, dx: number, dy: number) {
   if (s.k === 'e') { s.x += dx; s.y += dy; }
   else if (s.k === 'c') { s.x1 += dx; s.y1 += dy; s.x2 += dx; s.y2 += dy; }
   else for (let i = 0; i < s.pts.length; i += 2) { s.pts[i] += dx; s.pts[i + 1] += dy; }
+  if (p.clip) p.clip = [p.clip[0], p.clip[1], p.clip[2] - p.clip[0] * dx - p.clip[1] * dy];
   if (p.uv) { const q = p.uv; q[2] -= q[0] * dx + q[1] * dy; q[5] -= q[3] * dx + q[4] * dy; }
 }
 function flip(px: Uint8ClampedArray, w: number, h: number) {

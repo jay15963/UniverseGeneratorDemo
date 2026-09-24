@@ -57,7 +57,8 @@ export function StructureGenerator({ onBack }: Props) {
   const [variant, setVariant] = useState(0);
   const [dir, setDir] = useState<Dir8>('SE');
   const [night, setNight] = useState(false);
-  const [lod, setLod] = useState<Lod>('gameplay');
+  // one level of detail only: the gameplay world (the regional map was removed from the game)
+  const lod: Lod = 'gameplay';
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(2);
@@ -288,11 +289,6 @@ export function StructureGenerator({ onBack }: Props) {
               <span className="text-amber-300">{CATEGORIES.find(c => c.id === cat)!.name.toUpperCase()}</span> <span className="text-neutral-400">· {SIZES.find(s => s.id === size)!.name} · {meta.name}{meta.years ? ` · ${meta.years}` : ''}</span>
             </div>
             <div className="absolute top-3 right-3 flex gap-1.5">
-              <div className="flex gap-1 bg-black/60 border border-white/10 rounded-xl p-1" title="Nível de detalhe: gameplay (escala da criatura) ou mapa regional (4,5× menor)">
-                {(['gameplay', 'regional'] as Lod[]).map(l => (
-                  <button key={l} onClick={() => setLod(l)} className={`px-2 py-1 rounded-md text-[11px] font-bold ${lod === l ? 'bg-amber-300 text-black' : 'text-neutral-300 hover:bg-white/10'}`}>{l === 'gameplay' ? 'LOD gameplay' : 'LOD regional'}</button>
-                ))}
-              </div>
               <button onClick={() => setNight(n => !n)} className="flex items-center gap-1.5 bg-black/60 border border-white/10 rounded-xl px-2.5 py-1.5 text-[11px] font-bold hover:bg-white/10">
                 {night ? <Sun className="w-3.5 h-3.5 text-amber-300" /> : <Moon className="w-3.5 h-3.5 text-sky-300" />} {night ? 'Dia' : 'Noite'}
               </button>

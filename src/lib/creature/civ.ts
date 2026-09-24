@@ -29,8 +29,10 @@ export interface LoadHooks {
   outfit?: Outfit | null;
   /** moves hands (and recomputes elbows) to hold items */
   pose?: (B: Body, ph: number, anim: string) => void;
-  /** draws held items and carried gear */
+  /** draws held items and carried gear (and, for deaths, blood and gore) */
   draw?: (S: Sketch, B: Body, ph: number) => void;
+  /** set up once the body is known, before anything is drawn (death animations place the sections) */
+  begin?: (S: Sketch, B: Body, ph: number) => void;
 }
 export const NAKED: Outfit = { sleevePad: 0, pantsPad: 0 };
 
@@ -71,31 +73,39 @@ export function buildCiv(S: Sketch, k: Kit, g: Genome, stage: Stage, ph: number,
   if (load?.pose) load.pose(B, ph, S.anim);
   const O = load && 'outfit' in load ? (load.outfit ?? NAKED) : outfit(g, stage, citizen);
 
+  load?.begin?.(S, B, ph);
+  // The body is drawn in named sections (torso, head, arm0.., leg0.., tail) so death animations can move, cut or
+  // hide each one; standing, every section is drawn as built.
   // --- behind: capes, back bags, folded wings ---
-  O.behind?.(S, B, ph);
-  if (g.wings !== 'none') {
-    const w = g.wings === 'insect' ? { ...k.membrane, alpha: 0.55 } : g.wings === 'feather' ? { ...k.body, tex: 'feathers' as const, belly: undefined } : { ...k.membrane };
-    for (const s of [-1, 1]) S.poly([add(C, [-rC * 0.6, rC * 0.1, s * rC * 0.5]), add(C, [-U * 0.75, U * 0.2, s * rC * 0.9]), add(P, [-U * 0.6, -U * 0.45, s * rC * 0.8]), add(P, [-rC * 0.4, 0, s * rC * 0.4])], w, { flat: 0.4 });
-  }
+  S.section('back', () => {
+    O.behind?.(S, B, ph);
+    if (g.wings !== 'none') {
+      const w = g.wings === 'insect' ? { ...k.membrane, alpha: 0.55 } : g.wings === 'feather' ? { ...k.body, tex: 'feathers' as const, belly: undefined } : { ...k.membrane };
+      for (const s of [-1, 1]) S.poly([add(C, [-rC * 0.6, rC * 0.1, s * rC * 0.5]), add(C, [-U * 0.75, U * 0.2, s * rC * 0.9]), add(P, [-U * 0.6, -U * 0.45, s * rC * 0.8]), add(P, [-rC * 0.4, 0, s * rC * 0.4])], w, { flat: 0.4 });
+    }
+  });
   // --- limbs, tail, torso ---
-  for (const l of legs) leg(S, k, g, O, l, U, digit);
-  if (!serpent && g.tail !== 'none' && g.tailLen > 0.3) {
-    const tp = S.chain(add(P, [-rP * 0.6, -rP * 0.2, 0]), Math.PI, -0.9, 6, U * (0.3 + g.tailLen * 1.1), rP * 0.55, 1, i => [0.15 + Math.sin(ph - i * 0.6) * 0.05, 0], k.body, { g: 3 });
-    if (g.tail === 'tuft' || g.tail === 'bushy') S.ball(tp[6], U * 0.17, k.tuft);
-  }
-  if (serpent) {
-    const pts = S.chain(P, 0.3, -1.3, 10, U * 2.4 * g.length, rP * 1.05, 1.2, i => [i < 3 ? 0.42 : 0.05, i < 3 ? 0 : 0.42], O.naga ?? k.body, { g: 1 });
-    void pts;
-  }
-  S.limb(P, C, rP, rC, k.body, { g: 1 });
-  S.limb(add(C, [U * 0.06, 0, 0]), add(H, [-R * 0.2, -R * 0.55, 0]), rC * 0.42, rC * 0.38, k.body, { g: 1 });
-  O.torso?.(S, B, ph);
-  for (const a of arms) arm(S, k, g, O, a, U);
+  legs.forEach((l, i) => S.section('leg' + i, () => leg(S, k, g, O, l, U, digit)));
+  S.section('tail', () => {
+    if (!serpent && g.tail !== 'none' && g.tailLen > 0.3) {
+      const tp = S.chain(add(P, [-rP * 0.6, -rP * 0.2, 0]), Math.PI, -0.9, 6, U * (0.3 + g.tailLen * 1.1), rP * 0.55, 1, i => [0.15 + Math.sin(ph - i * 0.6) * 0.05, 0], k.body, { g: 3 });
+      if (g.tail === 'tuft' || g.tail === 'bushy') S.ball(tp[6], U * 0.17, k.tuft);
+    }
+    if (serpent) S.chain(P, 0.3, -1.3, 10, U * 2.4 * g.length, rP * 1.05, 1.2, i => [i < 3 ? 0.42 : 0.05, i < 3 ? 0 : 0.42], O.naga ?? k.body, { g: 1 });
+  });
+  S.section('torso', () => {
+    S.limb(P, C, rP, rC, k.body, { g: 1 });
+    S.limb(add(C, [U * 0.06, 0, 0]), add(H, [-R * 0.2, -R * 0.55, 0]), rC * 0.42, rC * 0.38, k.body, { g: 1 });
+    O.torso?.(S, B, ph);
+  });
+  arms.forEach((a, i) => S.section('arm' + i, () => arm(S, k, g, O, a, U)));
   // --- head ---
-  O.headBack?.(S, B, ph);
-  B.head = drawHead(S, k, g, H, R, { ph, blink, sapient: true, noHorns: O.hidesHorns, tilt: 0.12 });
-  O.headFront?.(S, B, ph);
-  O.front?.(S, B, ph);
+  S.section('head', () => {
+    O.headBack?.(S, B, ph);
+    B.head = drawHead(S, k, g, H, R, { ph, blink, sapient: true, noHorns: O.hidesHorns, tilt: 0.12 });
+    O.headFront?.(S, B, ph);
+  });
+  S.section('misc', () => O.front?.(S, B, ph));
   load?.draw?.(S, B, ph);
 }
 
@@ -161,9 +171,9 @@ export function skirt(S: Sketch, B: Body, m: Mat, pad: number, down: number, fla
   const d = Math.min(down, B.P[1] - B.U * 0.3);
   const bot = add(B.P, [-flare * 0.1, -d, 0]);
   const [tx, ty] = S.P(top), [bx, by] = S.P(bot);
-  const dx = (bx - tx) / S.k, dy = (by - ty) / S.k;
+  const dx = (bx - tx) / S.k, dy = (by - ty) / S.k, dl = Math.hypot(dx, dy) || 1, px = dy / dl, py = -dx / dl;
   const w1 = B.rP + pad, w2 = B.rP + pad + flare * 0.8;
-  S.poly2(top, [-w1, 0, w1, 0, dx + w2, dy, dx - w2, dy], m, { g: 20, bias: 0.07, flat: 0.35, ...o });
+  S.poly2(top, [-w1 * px, -w1 * py, w1 * px, w1 * py, dx + w2 * px, dy + w2 * py, dx - w2 * px, dy - w2 * py], m, { g: 20, bias: 0.07, flat: 0.35, ...o });
   S.blob(bot, [1, 0, 0], w2, w2, m, { g: 20, bias: 0.065, ...o }, Math.max(1.2, w2 * 0.28));
 }
 /** horizontal band around the body at height y (belts, sashes, collars, hat brims) */
