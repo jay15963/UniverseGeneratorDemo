@@ -168,8 +168,15 @@ export function roofOn(x: Ctx, v: Vol, type: Roof, m: Mat, end: Mat, o: { pitch?
   const D = x.D, y = v.y1, key = v.key + 0.02, g = D.group();
   const pitch = o.pitch ?? x.C.roofPitch, ov = o.over ?? x.C.overhang * 2.5;
   if (v.kind === 'round' || v.ring.length !== 4 || type === 'dome' || type === 'onion' || type === 'mushroom' || type === 'cone') {
-    const b = v.kind === 'round' ? { a: v.a, f: v.f, r: v.rt } : (() => { const q = bounds(v.top); return { a: (q.a0 + q.a1) / 2, f: (q.f0 + q.f1) / 2, r: Math.min(q.a1 - q.a0, q.f1 - q.f0) / 2 }; })();
+    const b = v.kind === 'round' ? { a: v.a, f: v.f, r: v.rt, out: v.rt } : (() => {
+      const q = bounds(v.top), a = (q.a0 + q.a1) / 2, f = (q.f0 + q.f1) / 2;
+      // r: the circle that fits inside the top (cupolas sit on it); out: the circle through its corners (anything that
+      // must cover the whole wall top - cones, caps - is sized on this one, or the corners poke out of the roof)
+      return { a, f, r: Math.min(q.a1 - q.a0, q.f1 - q.f0) / 2, out: Math.max(...v.top.map(([pa, pf]) => Math.hypot(pa - a, pf - f))) };
+    })();
     const polyN = v.kind === 'prism' && v.ring.length !== 4 ? v.ring.length : 0;
+    // a straight-walled volume gets a lid under a roof that does not reach its corners (cupolas, onions)
+    if (v.kind === 'prism' && type !== 'flat') facet(x, v.top.map(([a, f]) => [a, y, f] as V3), x.K.roof2, v.key + 0.015, D.group(), [b.a, y - 1, b.f]);
     switch (type) {
       case 'flat': case 'terrace': case 'shed': case 'vault': case 'gable': case 'hip': case 'saddle':
         if (v.kind === 'round') { cyl(x, b.a, b.f, b.r + 0.8, y, y + 1.4, x.K.trim, m, { bias: 0.02 }); return y + 1.4; }
@@ -178,10 +185,13 @@ export function roofOn(x: Ctx, v: Vol, type: Roof, m: Mat, end: Mat, o: { pitch?
       case 'pyramid': case 'spire':
         if (polyN) return polyRoof(x, v as Vol & { kind: 'prism' }, y, pitch * (type === 'spire' ? 3 : 1), ov, m, key, g);
         return coneRoof(x, b.a, b.f, y, b.r + ov * 0.5, b.r * (type === 'spire' ? 3.2 : 1.3) * pitch, m, key);
-      case 'cone': return coneRoof(x, b.a, b.f, y, b.r + ov * 0.6, b.r * 1.6 * pitch + 2, m, key);
+      case 'cone':
+        // a faceted tower gets a faceted roof: the eaves follow its corners
+        if (v.kind === 'prism') return polyRoof(x, v as Vol & { kind: 'prism' }, y, pitch * 1.6, ov * 0.6 + 0.5, m, key, g);
+        return coneRoof(x, b.a, b.f, y, b.r + ov * 0.6, b.r * 1.6 * pitch + 2, m, key);
       case 'dome': return domeRoof(x, b.a, b.f, y, b.r * 0.98, b.r * (0.7 + x.C.tall * 0.4), m, key);
       case 'onion': return onionRoof(x, b.a, b.f, y, b.r * 0.9, b.r * 1.9, m, key);
-      case 'mushroom': return mushroomRoof(x, b.a, b.f, y, b.r * 1.45 + ov, b.r * 0.75, m, key);
+      case 'mushroom': return mushroomRoof(x, b.a, b.f, y, Math.max(b.out * 1.12, b.r * 1.45) + ov, b.r * 0.75, m, key);
     }
   }
   const q = bounds(v.top);
@@ -251,6 +261,7 @@ export function roofOn(x: Ctx, v: Vol, type: Roof, m: Mat, end: Mat, o: { pitch?
       return y + H;
     }
     case 'terrace': {
+      facet(x, v.top.map(([a, f]) => [a, y, f] as V3), x.K.wall, key - 0.005, D.group(), inside);
       let yy = y, s = 1;
       for (let i = 0; i < 2; i++) {
         s -= 0.28;
@@ -365,22 +376,28 @@ export function lamp(x: Ctx, p: V3, m?: Mat, blink = false, r = 0.9) {
   if (blink && frac(x.t * 2 + p[0] * 0.13) > 0.5) return;
   x.D.ell(p, r, r, m ?? x.K.glow, x.D.depth(p) + 0.06, { g: x.D.group() });
 }
-/** a tree: earth-like crowns follow the climate; alien ones are bulbs and spirals */
-export function tree(x: Ctx, a: number, f: number, s: number, kind = 0) {
-  const D = x.D, K = x.K, key = D.depth([a, s * 4, f]), sw = Math.sin(x.ph + a * 0.3) * 0.25;
+/** a tree: earth-like crowns follow the climate; alien ones are bulbs and spirals. `fruit`: how many hang in the crown
+ * (placed relative to the swaying crown, so they move with it) */
+export function tree(x: Ctx, a: number, f: number, s0: number, kind = 0, fruit = 0, y0 = 0) {
+  // s0 = 1 is a grown tree about 2.5 citizens tall (a citizen is ~9 units)
+  const s = s0 * 2.2, D = x.D, K = x.K, key = D.depth([a, y0 + s * 4, f]), sw = Math.sin(x.ph + a * 0.3) * 0.35 * s;
   const cold = x.C.params.temperature < 0.35, dry = x.C.params.water < 0.35;
-  D.cap([a, 0, f], [a + sw, s * 5, f], s * 0.5, s * 0.3, K.trunk, key, { g: D.group() });
+  D.cap([a, y0, f], [a + sw, y0 + s * 5, f], s * 0.5, s * 0.3, K.trunk, key, { g: D.group() });
   const k = kind % 3;
   if (x.C.mode === 'alien' && k === 2) {
-    for (let i = 0; i < 3; i++) D.ell([a + sw + (i - 1) * s * 0.8, s * (5.5 + (i % 2) * 1.5), f], s * 1.1, s * 1.3, i === 1 ? K.leaf2 : K.leaf, key + 0.001 * i, { g: D.group() });
-    D.ell([a + sw, s * 8, f], s * 0.6, s * 0.6, K.fruit, key + 0.01, { g: D.group() });
+    for (let i = 0; i < 3; i++) D.ell([a + sw + (i - 1) * s * 0.8, y0 + s * (5.5 + (i % 2) * 1.5), f], s * 1.1, s * 1.3, i === 1 ? K.leaf2 : K.leaf, key + 0.001 * i, { g: D.group() });
+    D.ell([a + sw, y0 + s * 8, f], s * 0.6, s * 0.6, K.fruit, key + 0.01, { g: D.group() });
   } else if (cold || k === 1) {
-    for (let i = 0; i < 3; i++) D.shape([a + sw, s * (3 + i * 2.2), f], [-s * (2.6 - i * 0.6), 0, s * (2.6 - i * 0.6), 0, 0, -s * 3.2], i === 2 ? K.leaf2 : K.leaf, key + 0.001 * i, { g: D.group(), flat: 0.3 });
+    for (let i = 0; i < 3; i++) D.shape([a + sw, y0 + s * (3 + i * 2.2), f], [-s * (2.6 - i * 0.6), 0, s * (2.6 - i * 0.6), 0, 0, -s * 3.2], i === 2 ? K.leaf2 : K.leaf, key + 0.001 * i, { g: D.group(), flat: 0.3 });
   } else if (dry && k === 2) {
-    for (let i = 0; i < 5; i++) { const t = (i / 5) * Math.PI * 2 + x.ph * 0.05; D.cap([a + sw, s * 5, f], [a + sw + Math.cos(t) * s * 3, s * 4 + Math.sin(t) * s * 0.8 - s * 0.6, f + Math.sin(t) * s], s * 0.6, s * 0.2, K.leaf, key + 0.002, { g: D.group() }); }
+    for (let i = 0; i < 5; i++) { const t = (i / 5) * Math.PI * 2; D.cap([a + sw, y0 + s * 5, f], [a + sw + Math.cos(t) * s * 3, y0 + s * 4 + Math.sin(t) * s * 0.8 - s * 0.6, f + Math.sin(t) * s], s * 0.6, s * 0.2, K.leaf, key + 0.002, { g: D.group() }); }
   } else {
-    D.ell([a + sw, s * 6.2, f], s * 2.3, s * 2, K.leaf, key + 0.001, { g: D.group() });
-    D.ell([a + sw - s * 0.6, s * 6.9, f], s * 1.2, s * 1, K.leaf2, key + 0.002, { g: D.group(), noLine: true });
+    D.ell([a + sw, y0 + s * 6.2, f], s * 2.3, s * 2, K.leaf, key + 0.001, { g: D.group() });
+    D.ell([a + sw - s * 0.6, y0 + s * 6.9, f], s * 1.2, s * 1, K.leaf2, key + 0.002, { g: D.group(), noLine: true });
+  }
+  for (let i = 0; i < fruit; i++) {
+    const t = i * 2.1 + a * 0.7 + f * 0.3;
+    D.ell([a + sw + Math.cos(t) * s * 1.5, y0 + s * (6.1 + Math.sin(t) * 0.9), f + s * 1.2], s * 0.42, s * 0.42, K.fruit, key + 0.01 + i * 0.0001, { g: D.group(), noLine: true });
   }
 }
 /** a fence or rail along a path of [a, f] points */
@@ -408,7 +425,7 @@ export function merlons(x: Ctx, a0: number, f0: number, a1: number, f1: number, 
   }
 }
 export function crate(x: Ctx, a: number, f: number, y: number, s: number, m: Mat) { return box(x, a - s / 2, f - s / 2, a + s / 2, f + s / 2, y, y + s, m, m); }
-export function barrel(x: Ctx, a: number, f: number, y: number, s: number, m: Mat) { return cyl(x, a, f, s * 0.45, y, y + s, m, m); }
+export function barrel(x: Ctx, a: number, f: number, y: number, s: number, m: Mat) { return cyl(x, a, f, s * 0.55, y, y + s * 1.4, m, m); }
 export function sack(x: Ctx, a: number, f: number, y: number, s: number, m: Mat) { x.D.ell([a, y + s * 0.45, f], s * 0.5, s * 0.45, m, x.D.depth([a, y, f]), { g: x.D.group() }); }
 /** antenna mast with a blinking beacon */
 export function antenna(x: Ctx, p: V3, h: number) {
@@ -452,15 +469,15 @@ export function sign(x: Ctx, v: Vol, s: number, u: number, y: number, w: number,
   }
 }
 /** crop rows on a plot; plants sway */
-export function cropRows(x: Ctx, a0: number, f0: number, a1: number, f1: number, m: Mat, tall = 1.6) {
-  const D = x.D;
+export function cropRows(x: Ctx, a0: number, f0: number, a1: number, f1: number, m: Mat, tall0 = 1.6) {
+  const D = x.D, tall = tall0 * 2.5; // 1.6 = a waist-high crop next to a citizen
   ground(x, rect(a0, f0, a1, f1), x.K.soil, 0.05, 1);
-  const rows = Math.max(2, Math.floor((f1 - f0) / 3));
+  const rows = Math.max(2, Math.floor((f1 - f0) / Math.max(3, tall * 0.9)));
   for (let i = 0; i < rows; i++) {
-    const f = f0 + ((f1 - f0) * (i + 0.5)) / rows, n = Math.max(2, Math.floor((a1 - a0) / 2.2));
+    const f = f0 + ((f1 - f0) * (i + 0.5)) / rows, n = Math.max(2, Math.floor((a1 - a0) / Math.max(2.2, tall * 0.55)));
     for (let j = 0; j < n; j++) {
       const a = a0 + ((a1 - a0) * (j + 0.5)) / n, sw = Math.sin(x.ph + a * 0.4 + f * 0.2) * 0.35;
-      D.ell([a + sw, tall * 0.6, f], 1.1, tall * 0.7, m, D.depth([a, 0, f]) - 5e3, { g: D.group(), noLine: j % 2 === 1 });
+      D.ell([a + sw * tall * 0.4, tall * 0.6, f], Math.max(1.1, tall * 0.28), tall * 0.7, m, D.depth([a, 0, f]) - 5e3, { g: D.group(), noLine: j % 2 === 1 });
     }
   }
 }

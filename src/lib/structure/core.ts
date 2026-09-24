@@ -66,12 +66,13 @@ export function house(x: Ctx, o: HouseOpt): House {
     for (let i = 0; i <= n; i++) onWall(x, v, s, (L * i) / n, y + H / 2, 1.1, H, 'rect', K.wood, 0.004);
     for (let f = 0; f <= o.floors; f++) onWall(x, v, s, L / 2, y + Math.min(H - 0.6, Math.max(0.6, f * S)), L, 1.1, 'rect', K.wood, 0.005);
   }
-  if (C.bands && o.floors > 1) for (let f = 1; f < o.floors; f++) {
+  // (a pod curves, so a straight band would stick out of it like a ring)
+  if (C.bands && o.floors > 1 && plan !== 'pod') for (let f = 1; f < o.floors; f++) {
     if (v.kind === 'round') cyl(x, v.a, v.f, v.r + 0.5, y + f * S - 0.6, y + f * S + 0.6, K.trim, null, { bias: 0.004 });
     else for (let s = 0; s < v.ring.length; s++) onWall(x, v, s, sideLen(v, s) / 2, y + f * S, sideLen(v, s) + 0.8, 1.2, 'rect', K.trim, 0.004);
   }
   // door
-  const dw = S * 0.38, dh = S * 0.66;
+  const dw = S * 0.42, dh = S * 0.8; // a citizen (~9 units) walks through with room to spare
   const doorShape: WinShape = e === 0 ? (plan === 'box' ? 'rect' : 'arch') : C.win === 'arch' || (C.ornament > 0.6 && e <= 3) ? 'arch' : C.win === 'round' && e >= 6 ? 'round' : 'rect';
   if (o.door !== false) {
     const du = v.kind === 'round' ? 0 : sideLen(v, front) / 2;
@@ -108,7 +109,9 @@ export function house(x: Ctx, o: HouseOpt): House {
   else peak = y + H * 1.25;
   // era details
   const top = y + H;
-  if ((o.chimney ?? (e >= 1 && e <= 4 && C.r[52] < 0.75 && plan === 'box')) && roof !== 'flat') {
+  // chimneys only rise from sloped roofs; through a cupola, an onion or a cap they would pierce it
+  const sloped: Roof[] = ['gable', 'hip', 'shed', 'saddle', 'pyramid', 'vault', 'terrace'];
+  if ((o.chimney ?? (e >= 1 && e <= 4 && C.r[52] < 0.75 && plan === 'box')) && sloped.includes(roof)) {
     const ca = o.a + hw * 0.45, cf = o.f - hd * 0.25, chH = peak - top + 3;
     const ch = box(x, ca - 1.4, cf - 1.4, ca + 1.4, cf + 1.4, top - 1, top + chH, e >= 3 ? K.wall2 : K.stone, K.dark);
     void ch;
@@ -118,7 +121,7 @@ export function house(x: Ctx, o: HouseOpt): House {
     const k = x.r();
     if (e === 4) { barrel(x, o.a + hw * 0.4, o.f - hd * 0.3, top + 1.2, 4, K.wood); if (k < 0.5) box(x, o.a - hw * 0.5, o.f - hd * 0.4, o.a - hw * 0.2, o.f - hd * 0.1, top + 1.2, top + 3, K.wall2, K.metal); }
     if (e === 5) { for (let i = 0; i < Math.min(4, Math.floor(o.w / 7)); i++) solarPanel(x, o.a - hw + 4 + i * 6, o.f - hd * 0.2, top + 1.2, 4.6, 3.6); if (k < 0.6) box(x, o.a + hw * 0.4, o.f + hd * 0.2, o.a + hw * 0.4 + 3, o.f + hd * 0.2 + 3, top + 1.2, top + 3.4, K.metal, K.metal); }
-    if (e === 6) { for (let i = 0; i < 3; i++) tree(x, o.a - hw * 0.5 + i * hw * 0.5, o.f - hd * 0.2 + (i % 2) * hd * 0.3, 0.55, i); void top; }
+    if (e === 6) { for (let i = 0; i < 3; i++) tree(x, o.a - hw * 0.5 + i * hw * 0.5, o.f - hd * 0.2 + (i % 2) * hd * 0.3, 0.45, i, 0, top + 1.2); void top; }
     if (e === 7) { if (k < 0.5) dish(x, [o.a + hw * 0.4, top + 1.2, o.f - hd * 0.3], 3); else antenna(x, [o.a + hw * 0.4, top + 1.2, o.f - hd * 0.3], 10); }
   }
   if (e === 0 && o.floors === 1 && C.r[54] < 0.4 && o.y0 === undefined) fire(x, [o.a + hw + 4, 0, o.f + hd + 3], 1.2);

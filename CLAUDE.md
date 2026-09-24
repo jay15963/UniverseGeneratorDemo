@@ -85,6 +85,12 @@ Owner's rules - keep them:
   draws all 8 civilisation eras. **New types** = one builder + one entry in `cat/<category>.ts` (the registry is
   `registry.ts`); the owner will ask for more (target: 100+ types), so keep builders self-contained and reuse
   `parts.ts` / `core.ts` (`house()` is the generic storeyed body with the culture's plan, windows, door and roof).
+- **Every piece must sit on what carries it**, at every LOD, facing and frame. Roofs cover the whole wall top (size
+  them on the circle through the corners, not the inner one); faceted walls get faceted roofs, round walls round
+  ones; straight-walled volumes get a lid under cupolas/onions; no straight bands around curved pods; chimneys only
+  from sloped roofs. Anything hung on a moving part (fruit on a swaying crown, a bucket on a rope, a sail on a hub) is
+  placed relative to that part so it moves with it. Audit new types with several cultures (box/hex/oct/round/pod
+  plans x every roof) before shipping.
 - **Structures, never equipment**: no weapons (catapults, trebuchets, cannons, turrets), vehicles (carts, trucks,
   drones, hovercraft) or machines-as-objects (cranes, robot arms). Those will be separate equipment assets. Fortified
   positions are drawn as the building only (walls, embrasures, blast doors, shield emitters).

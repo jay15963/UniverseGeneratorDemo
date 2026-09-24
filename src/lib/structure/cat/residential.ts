@@ -38,13 +38,13 @@ function yard(x: Ctx, w: number, d: number) {
     D.cap([fx - 3, 6, -d / 4], [fx + 3, 6, -d / 4], 0.4, 0.4, K.wood, D.depth([fx, 6, -d / 4]) + 0.01);
     facet(x, [[fx - 2.5, 6, -d / 4], [fx + 2.5, 6, -d / 4], [fx + 2.2, 2, -d / 4 + Math.sin(x.ph) * 0.4], [fx - 2.2, 2.3, -d / 4 + Math.sin(x.ph) * 0.4]], K.cloth2, D.depth([fx, 4, -d / 4]) + 0.02, D.group(), null, true);
   } else if (e <= 3) {
-    fence(x, [[-w / 2 - 9, d / 2 + 5], [-3, d / 2 + 5]], 3.2, e >= 3 ? K.frame : K.wood, 3);
-    fence(x, [[3, d / 2 + 5], [w / 2 + 9, d / 2 + 5]], 3.2, e >= 3 ? K.frame : K.wood, 3);
+    fence(x, [[-w / 2 - 9, d / 2 + 5], [-4, d / 2 + 5]], 5, e >= 3 ? K.frame : K.wood, 3.5);
+    fence(x, [[4, d / 2 + 5], [w / 2 + 9, d / 2 + 5]], 5, e >= 3 ? K.frame : K.wood, 3.5);
     if (chance(x, 0.7)) tree(x, fx, -d / 4, 0.9, Math.floor(x.r() * 3));
     if (chance(x, 0.6)) barrel(x, -side * (w / 2 + 3), d / 2 + 1, 0, 3.4, K.wood);
   } else if (e <= 5) {
-    box(x, -w / 2 - 8, d / 2 + 4, -3, d / 2 + 6, 0, 2.6, K.leaf, K.leaf2);
-    box(x, 3, d / 2 + 4, w / 2 + 8, d / 2 + 6, 0, 2.6, K.leaf, K.leaf2);
+    box(x, -w / 2 - 8, d / 2 + 4, -4, d / 2 + 6.5, 0, 5, K.leaf, K.leaf2);
+    box(x, 4, d / 2 + 4, w / 2 + 8, d / 2 + 6.5, 0, 5, K.leaf, K.leaf2);
     if (chance(x, 0.8)) tree(x, fx, -d / 4, 1, Math.floor(x.r() * 3));
     D.cap([side * 6, 0, d / 2 + 6.5], [side * 6, 3, d / 2 + 6.5], 0.4, 0.4, K.metal, D.depth([side * 6, 1, d / 2 + 6.5]));
     box(x, side * 6 - 1, d / 2 + 5.8, side * 6 + 1, d / 2 + 7.2, 3, 4.4, K.accent, K.accent);
@@ -82,7 +82,7 @@ function compound(x: Ctx) {
   for (let i = 0; i < back; i++) house(x, { a: -R + hw / 2 + 2 + (i * (2 * R - hw - 4)) / Math.max(1, back - 1), f: -R + hd / 2 + 1, w: hw * rnd(x, 0.9, 1.15), d: hd, floors: e === 0 ? 1 : 1 + (chance(x, 0.4) ? 1 : 0) });
   for (const s of [-1, 1]) house(x, { a: s * (R - hd / 2 - 1), f: 0, w: hd, d: hw * 1.2, floors: e >= 2 && chance(x, 0.5) ? 2 : 1, door: false, plan: C.plan === 'pod' && e < 6 ? 'round' : undefined });
   // the enclosure with a gate
-  const wallM = e === 0 ? K.wood : e <= 3 ? K.stone : e <= 5 ? K.wall2 : K.trim, wh = e === 0 ? 5 : 4.5;
+  const wallM = e === 0 ? K.wood : e <= 3 ? K.stone : e <= 5 ? K.wall2 : K.trim, wh = e === 0 ? 11 : 10; // above a citizen's head
   if (e === 0) { fence(x, [[-R - 3, R + 3], [-4, R + 3]], wh, wallM, 1.6, true); fence(x, [[4, R + 3], [R + 3, R + 3]], wh, wallM, 1.6, true); fence(x, [[-R - 3, -R - 3], [-R - 3, R + 3]], wh, wallM, 1.6, true); fence(x, [[R + 3, -R - 3], [R + 3, R + 3]], wh, wallM, 1.6, true); fence(x, [[-R - 3, -R - 3], [R + 3, -R - 3]], wh, wallM, 1.6, true); }
   else {
     box(x, -R - 4, -R - 4, R + 4, -R - 2.5, 0, wh, wallM, K.trim);
@@ -145,7 +145,7 @@ function block(x: Ctx) {
     let y = 0, w = W, d = Dd * 1.3;
     for (let i = 0; i < 4 + (giant ? 1 : 0); i++) {
       const h = house(x, { a: 0, f: -i * 3, w, d, floors: 2, y0: y, roof: 'flat', door: i === 0, clutter: false, plinth: false, stilts: false });
-      for (let j = 0; j < 4; j++) tree(x, -w / 2 + 4 + j * (w - 8) / 3, h.top === 0 ? 0 : -i * 3 + d / 2 - 1.5, 0.55, j);
+      for (let j = 0; j < 3; j++) tree(x, -w / 2 + 5 + j * (w - 10) / 2, -i * 3 + d / 2 - 3, 0.5, j, 0, h.top + 1.2);
       y = h.top + 1.2; w *= 0.8; d *= 0.8;
     }
     return;
@@ -215,7 +215,7 @@ function tower(x: Ctx) {
       const rg = polyRing(0, 0, w * 0.62, w * 0.62, 4, Math.PI / 4 + i * 0.09);
       const v = prism(x, rg, y, y + S, i % 3 === 2 ? K.leaf : K.wall, K.trim, { bias: i * 0.001 });
       for (let s = 0; s < 4; s++) windowRow(x, v, s, y + S * 0.55, 4, S * 0.5, 'band', 8);
-      if (i % 3 === 2) for (let s = 0; s < 3; s++) tree(x, -w * 0.3 + s * w * 0.3, 0, 0.45, s), void 0;
+      if (i % 3 === 2) for (let s = 0; s < 3; s++) tree(x, -w * 0.3 + s * w * 0.3, w * 0.3, 0.4, s, 0, y);
       y += S;
     }
     roofOn(x, { kind: 'prism', ring: polyRing(0, 0, w * 0.62, w * 0.62, 4, Math.PI / 4 + n * 0.09), top: polyRing(0, 0, w * 0.62, w * 0.62, 4, Math.PI / 4 + n * 0.09), y0: y - S, y1: y, key: D.depth([0, y, 0]) }, 'dome', blend(K.win, K.trim, 0.2), K.trim);

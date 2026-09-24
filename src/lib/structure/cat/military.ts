@@ -12,7 +12,7 @@ function defTower(x: Ctx, a: number, f: number, r: number, h: number, beacon = t
     for (const [pa, pf] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) D.cap([a + pa * r, 0, f + pf * r], [a + pa * r * 0.7, h, f + pf * r * 0.7], 0.8, 0.6, K.wood, D.depth([a + pa * r, h / 2, f + pf * r]));
     for (let i = 1; i < 3; i++) for (const pf of [-1, 1]) D.cap([a - r * (1 - 0.1 * i), (h * i) / 3, f + pf * r * (1 - 0.1 * i)], [a + r * (1 - 0.1 * i), (h * i) / 3 + 2, f + pf * r * (1 - 0.1 * i)], 0.4, 0.4, K.wood, D.depth([a, h / 2, f + pf * r]) + pf * 0.01);
     box(x, a - r, f - r, a + r, f + r, h, h + 1, K.wood, K.wood);
-    fence(x, [[a - r, f + r], [a + r, f + r]], 3, K.wood, 2.4, true);
+    fence(x, [[a - r, f + r], [a + r, f + r]], 5, K.wood, 2.4, true);
     roofOn(x, box(x, a - r * 0.1, f - r * 0.1, a + r * 0.1, f + r * 0.1, h + 1, h + 6, K.wood, null), 'pyramid', K.roof, K.roof, { over: r * 0.9, pitch: 0.6 });
     if (beacon) fire(x, [a, h + 1, f + r * 0.5], 1.2);
     return h + 8;
@@ -107,7 +107,7 @@ function dummy(x: Ctx, a: number, f: number) {
   D.cap([a, 0, f], [a + hit, 7, f], 0.5, 0.5, K.wood, D.depth([a, 3, f]));
   D.cap([a - 2.5 + hit, 5.5, f], [a + 2.5 + hit, 5.5, f], 0.5, 0.5, K.wood, D.depth([a, 5, f]) + 0.001);
   D.ell([a + hit, 4.5, f], 1.8, 2.4, K.cloth2, D.depth([a, 4, f]) + 0.002, { g: D.group() });
-  D.ell([a + hit * 1.2, 8, f], 1.3, 1.3, K.cloth2, D.depth([a, 8, f]) + 0.003, { g: D.group() });
+  D.ell([a + hit, 8, f], 1.3, 1.3, K.cloth2, D.depth([a, 8, f]) + 0.003, { g: D.group() });
 }
 function target(x: Ctx, a: number, f: number) {
   const { K, D } = x, k = D.depth([a, 3, f]) + 0.1;
@@ -220,7 +220,7 @@ function fortress(x: Ctx) {
     x.D.hull([...ring(0, 0, 0, R, 24), ...ring(0, 0, 8, R * 0.7, 24)], K.soil, -8e4, { g: D.group(), flat: 0.1 });
     const pr = R * 0.72;
     const path: [number, number][] = Array.from({ length: 17 }, (_, i) => { const t = (i / 16) * Math.PI * 2 + 0.2; return [Math.sin(t) * pr, Math.cos(t) * pr * 0.9]; });
-    fence(x, path.filter(p => p[1] < pr * 0.8), 6, K.wood, 1.7, true);
+    fence(x, path.filter(p => p[1] < pr * 0.8), 12, K.wood, 1.7, true);
     for (let i = 0; i < 3; i++) house(x, { a: -14 + i * 14, f: -6 + (i % 2) * 8, w: 11, d: 9, floors: 1, y0: 8, stilts: false, plinth: false, chimney: false });
     defTower(x, 0, pr * 0.9, 3, 12);
     return;
