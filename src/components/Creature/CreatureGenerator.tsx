@@ -1,11 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Dices, Dna, Download, Sparkles, Layers, Users, Grid3x3, GitBranch } from 'lucide-react';
+import { ArrowLeft, Dices, Dna, Download, Sparkles, Layers, Users, Grid3x3, GitBranch, Play } from 'lucide-react';
 import { makeGenome, describe, STAGES, Stage, CreatureParams, DEFAULT_PARAMS, Locomotion, Covering, LegType, Genome, ColorMode, isCiv } from '../../lib/creature/genome';
-import { renderCreature, CreatureSprite, FRAMES } from '../../lib/creature/render';
+import { renderCreature, CreatureSprite, FRAMES, animsFor, ANIM_PT, Anim, spriteSheet, toCanvas } from '../../lib/creature/render';
 import { drawBackdrop, GROUND_Y } from '../../lib/creature/backdrop';
 import { Dir8, DIRS, DIR_PT } from '../../lib/creature/pose';
 
-interface Props { onBack: () => void }
+export interface PickMode {
+  /** landing: the player designs their species and plays its tribal era */
+  params: CreatureParams; mode: ColorMode; planetName: string;
+  onPick: (g: Genome, citizen: number) => void;
+}
+interface Props { onBack: () => void; pick?: PickMode }
 
 const randomSeed = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
@@ -53,25 +58,27 @@ function applyOverrides(g: Genome, loco: Locomotion | 'auto', cover: Covering | 
 }
 
 /** Draws the diorama + creature for a stage into ctx (logical pixels). */
-function paintStage(ctx: CanvasRenderingContext2D, W: number, H: number, st: Stage, g: Genome, sp: CreatureSprite, t: number, frame: number) {
+function paintStage(ctx: CanvasRenderingContext2D, W: number, H: number, st: Stage, g: Genome, sp: CreatureSprite, t: number, frame: number, anim: Anim = 'walk') {
   drawBackdrop(ctx, W, H, st, g, t);
   const n = sp.frames.length, img = sp.frames[((frame % n) + n) % n];
   if (sp.grounded) {
     const gy = GROUND_Y(H) + 3;
-    ctx.fillStyle = 'rgba(0,0,0,0.28)';
-    ctx.beginPath(); ctx.ellipse(W / 2, gy, Math.min(sp.w * 0.42, 70), 3, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.drawImage(img, Math.round(W / 2 - sp.ax), gy - sp.ay);
+    const alt = anim === 'fly' ? Math.round(22 + Math.sin(t * 2.2) * 3) : 0;
+    ctx.fillStyle = `rgba(0,0,0,${alt ? 0.18 : 0.28})`;
+    ctx.beginPath(); ctx.ellipse(W / 2, gy, Math.min(sp.w * (alt ? 0.3 : 0.42), 70), alt ? 2 : 3, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.drawImage(img, Math.round(W / 2 - sp.ax), gy - sp.ay - alt);
   } else {
     const bob = Math.round(Math.sin(t * 1.3) * 3);
     ctx.drawImage(img, Math.round(W / 2 - sp.ax), Math.round(H / 2 - sp.ay + bob));
   }
 }
 
-export function CreatureGenerator({ onBack }: Props) {
+export function CreatureGenerator({ onBack, pick }: Props) {
   const [seed, setSeed] = useState(randomSeed);
-  const [params, setParams] = useState<CreatureParams>(DEFAULT_PARAMS);
-  const [mode, setMode] = useState<ColorMode>('earth');
-  const [step, setStep] = useState(4);
+  const [params, setParams] = useState<CreatureParams>(pick?.params ?? DEFAULT_PARAMS);
+  const [mode, setMode] = useState<ColorMode>(pick?.mode ?? 'earth');
+  const [step, setStep] = useState(pick ? 5 : 4);
+  const [animSel, setAnimSel] = useState<Anim | null>(null);
   const [giant, setGiant] = useState(false);
   const [dir, setDir] = useState<Dir8>('E');
   const [citizen, setCitizen] = useState(0);
@@ -82,7 +89,7 @@ export function CreatureGenerator({ onBack }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(3);
-  const stage: Stage = giant && STEPS[step][1] !== null ? STEPS[step][1]! : STEPS[step][0];
+  const stage: Stage = pick ? Stage.TRIBAL : giant && STEPS[step][1] !== null ? STEPS[step][1]! : STEPS[step][0];
 
   // debounced parameters so dragging a slider stays fluid
   const [live, setLive] = useState({ seed, params, loco, cover, legs, mutation, mode });
@@ -94,7 +101,9 @@ export function CreatureGenerator({ onBack }: Props) {
     if (live.mutation) { const o = makeGenome(live.seed, live.params, live.mode); Object.assign(base, { name: o.name, primary: o.primary, secondary: o.secondary, belly: o.belly, pattern: o.pattern }); }
     return applyOverrides(base, live.loco, live.cover, live.legs);
   }, [live]);
-  const sprite = useMemo(() => renderCreature(genome, stage, dir, citizen), [genome, stage, dir, citizen]);
+  const anims = useMemo(() => animsFor(genome, stage), [genome, stage]);
+  const anim: Anim = animSel && anims.includes(animSel) ? animSel : (anims[stage === Stage.LAND || isCiv(stage) ? 1 : 0] ?? anims[0]);
+  const sprite = useMemo(() => renderCreature(genome, stage, dir, citizen, FRAMES, anim), [genome, stage, dir, citizen, anim]);
   const info = useMemo(() => describe(genome, stage), [genome, stage]);
   const meta = nameOf(stage);
 
@@ -123,7 +132,7 @@ export function CreatureGenerator({ onBack }: Props) {
     const loop = (now: number) => {
       const t = Math.max(0, (now - t0) / 1000);
       if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
-      paintStage(ctx, W, H, stage, genome, sprite, t, Math.floor(t * 7));
+      paintStage(ctx, W, H, stage, genome, sprite, t, Math.floor(t * 7), anim);
       if (flash.current > 0) {
         ctx.fillStyle = `rgba(255,255,255,${flash.current * 0.5})`; ctx.fillRect(0, 0, W, H);
         flash.current = Math.max(0, flash.current - (now - last) / 350);
@@ -133,7 +142,7 @@ export function CreatureGenerator({ onBack }: Props) {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [genome, sprite, stage, W, H]);
+  }, [genome, sprite, stage, W, H, anim]);
 
   // evolution strip, rendered progressively (main line + giant branch)
   const [thumbs, setThumbs] = useState<Record<number, HTMLCanvasElement>>({});
@@ -162,13 +171,13 @@ export function CreatureGenerator({ onBack }: Props) {
     const run = () => {
       if (cancelled || i >= DIRS.length) return;
       const d = DIRS[i++];
-      out[d] = renderCreature(genome, stage, d, citizen).frames[0];
+      out[d] = renderCreature(genome, stage, d, citizen, FRAMES, anim).frames[0];
       setDirThumbs({ ...out });
       setTimeout(run, 0);
     };
     const id = setTimeout(run, 120);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [genome, stage, citizen]);
+  }, [genome, stage, citizen, anim]);
 
   const setParam = (k: keyof CreatureParams, v: number) => setParams(p => ({ ...p, [k]: v }));
   const randomWorld = () => setParams({ gravity: Math.random() * 0.8, temperature: Math.random(), water: Math.random(), atmosphere: Math.random(), star: Math.random(), diet: Math.random(), exotic: Math.random() * 0.9, size: Math.random() });
@@ -181,14 +190,14 @@ export function CreatureGenerator({ onBack }: Props) {
       const k = 4;
       out.width = W * k; out.height = H * k;
       const c = document.createElement('canvas'); c.width = W; c.height = H;
-      paintStage(c.getContext('2d')!, W, H, stage, genome, sprite, 0, 0);
+      paintStage(c.getContext('2d')!, W, H, stage, genome, sprite, 0, 0, anim);
       o.drawImage(c, 0, 0, W * k, H * k);
     } else if (what === 'sheet') {
-      // gameplay sprite sheet: one row per facing, one column per animation frame (1:1 pixels)
-      const sps = DIRS.map(d => renderCreature(genome, stage, d, citizen));
-      const cw = Math.max(...sps.map(s => s.w)), chh = Math.max(...sps.map(s => s.h));
-      out.width = cw * FRAMES; out.height = chh * DIRS.length;
-      sps.forEach((sp, row) => sp.frames.forEach((f, col) => o.drawImage(f, col * cw + Math.round(cw / 2 - sp.ax), row * chh + (sp.grounded ? chh - (sp.h - sp.ay) - sp.ay : Math.round((chh - sp.h) / 2)))));
+      // gameplay sprite sheet: one row per facing (E, SE, S, SW, W, NW, N, NE), one column per frame, every animation stacked
+      const sheets = anims.map(a => spriteSheet(genome, stage, a, 1, citizen));
+      out.width = Math.max(...sheets.map(sh => sh.cw * sh.frames)); out.height = sheets.reduce((s2, sh) => s2 + sh.ch * DIRS.length, 0);
+      let y = 0;
+      for (const sh of sheets) { o.drawImage(toCanvas(sh.data, sh.cw * sh.frames, sh.ch * DIRS.length), 0, y); y += sh.ch * DIRS.length; }
     } else {
       const list = [...STEPS.map(s => s[0]), ...STEPS.filter(s => s[1] !== null).map(s => s[1]!)];
       const sps = list.map(s => renderCreature(genome, s, 'E', citizen));
@@ -215,7 +224,12 @@ export function CreatureGenerator({ onBack }: Props) {
         <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-neutral-400 hover:text-white"><ArrowLeft className="w-4 h-4" /> Menu</button>
         <div className="w-px h-5 bg-white/10" />
         <Dna className="w-5 h-5 text-fuchsia-300" />
-        <h1 className="font-black tracking-[0.18em] text-sm sm:text-base bg-gradient-to-r from-white to-fuchsia-300 bg-clip-text text-transparent">GERADOR DE CRIATURAS</h1>
+        <h1 className="font-black tracking-[0.18em] text-sm sm:text-base bg-gradient-to-r from-white to-fuchsia-300 bg-clip-text text-transparent">{pick ? `CRIE SUA ESPÉCIE · ${pick.planetName.toUpperCase()}` : 'GERADOR DE CRIATURAS'}</h1>
+        {pick && (
+          <button onClick={() => pick.onPick(genome, citizen)} className="ml-3 flex items-center gap-2 px-4 py-1.5 rounded-lg font-bold text-sm text-black bg-gradient-to-r from-amber-300 to-orange-400 hover:from-amber-200 shadow-[0_0_24px_rgba(251,191,36,0.35)]">
+            <Play className="w-4 h-4" /> Jogar com esta espécie
+          </button>
+        )}
         <div className="ml-auto text-right hidden sm:block">
           <div className="italic font-serif text-lg leading-none text-amber-100">{info.title}</div>
           <div className="text-[10px] font-mono tracking-[0.25em] text-neutral-500 mt-1">SEMENTE {seed}{mutation ? ` · MUTAÇÃO ${mutation}` : ''}</div>
@@ -278,6 +292,11 @@ export function CreatureGenerator({ onBack }: Props) {
             <div className="absolute top-3 left-3 bg-black/60 border border-white/10 rounded-lg px-2.5 py-1 text-[11px] font-mono">
               <span className={GROUP_COL[meta.group]}>{meta.group.toUpperCase()}</span> <span className="text-neutral-400">· {meta.name}{meta.years ? ` · ${meta.years}` : ''} · {meta.scale}</span>
             </div>
+            <div className="absolute top-3 right-3 flex gap-1 bg-black/60 border border-white/10 rounded-xl p-1">
+              {anims.map(a => (
+                <button key={a} onClick={() => setAnimSel(a)} className={`px-2 py-1 rounded-md text-[11px] font-bold ${anim === a ? 'bg-fuchsia-400 text-black' : 'text-neutral-300 hover:bg-white/10'}`}>{ANIM_PT[a]}</button>
+              ))}
+            </div>
             {/* compass */}
             {stage !== Stage.CELL && (
               <div className="absolute bottom-3 right-3 grid grid-cols-3 gap-1 bg-black/60 border border-white/10 rounded-xl p-1.5" title="Direção (para o mapa de gameplay)">
@@ -289,7 +308,11 @@ export function CreatureGenerator({ onBack }: Props) {
           </div>
 
           {/* evolution timeline */}
-          <div className="bg-black/40 border border-white/5 rounded-2xl px-4 pt-3 pb-2">
+          {pick ? (
+            <div className="bg-black/40 border border-amber-300/20 rounded-2xl px-4 py-3 text-sm text-amber-100/90">
+              Você joga com a <b>era tribal</b> da sua espécie por enquanto. Ajuste o mundo natal, a semente e as mutações até gostar — as roupas mudam em <b>Outro cidadão</b>.
+            </div>
+          ) : <div className="bg-black/40 border border-white/5 rounded-2xl px-4 pt-3 pb-2">
             <div className="flex items-center justify-between text-[10px] font-mono tracking-[0.2em] mb-1">
               {(['Célula', 'Oceano', 'Terra', 'Civilização'] as const).map(gp => <span key={gp} className={GROUP_COL[gp]}>{gp.toUpperCase()}</span>)}
             </div>
@@ -310,7 +333,7 @@ export function CreatureGenerator({ onBack }: Props) {
                 </div>
               ))}
             </div>
-          </div>
+          </div>}
         </main>
 
         {/* species card */}

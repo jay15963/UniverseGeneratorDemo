@@ -41,7 +41,8 @@ function fish(S: Sketch, k: Kit, g: Genome, ph: number, blink: boolean, U: numbe
   const Wd = H * (eel ? 0.9 : fb === 'deep' ? 0.35 : fb === 'puffer' ? 0.95 : fb === 'boxy' ? 0.85 : 0.55);
   const n = eel ? 14 : 9;
   const sp: V3[] = [];
-  for (let i = 0; i <= n; i++) { const t = i / n; sp.push([len / 2 - t * len, 0, Math.sin(ph - t * (eel ? 7 : 4)) * U * (eel ? 0.25 : 0.14) * t * t]); }
+  const amp = S.anim === 'idle' ? 0.35 : S.anim === 'run' ? 1.4 : 1;
+  for (let i = 0; i <= n; i++) { const t = i / n; sp.push([len / 2 - t * len, 0, Math.sin(ph - t * (eel ? 7 : 4)) * U * (eel ? 0.25 : 0.14) * t * t * amp]); }
   const prof = (t: number) => (fb === 'puffer' ? Math.sin(Math.min(1, t * 1.05 + 0.05) * Math.PI) * 0.9 + 0.1 : t < 0.22 ? 0.62 + (t / 0.22) * 0.38 : 1 - Math.pow((t - 0.22) / 0.78, 1.25) * (eel ? 0.8 : 0.86));
   const tailP = sp[n], pre = sp[n - 1];
   const F = U * (eel ? 0.5 : 0.8) * (giant ? 1.1 : 1);
@@ -397,7 +398,7 @@ function biped(S: Sketch, k: Kit, g: Genome, ph: number, blink: boolean, U: numb
   const fly = g.locomotion === 'flyer', hop = g.locomotion === 'hopper';
   const bodyR = U * 0.4 * g.girth * (fly ? 0.75 : 1);
   const L = U * g.legLen * (hop ? 0.75 : fly ? 0.7 : 1.0);
-  const tilt = hop ? 0.95 : fly ? 0.65 : 0.5;
+  const tilt = hop ? 0.95 : fly ? (S.anim === 'fly' ? 0.12 : 0.65) : 0.5;
   const tl = U * 0.95 * g.length * (fly ? 0.8 : 1);
   const hip: V3 = [-U * 0.25, L + bodyR * 0.1, 0];
   const ch: V3 = add(hip, [Math.cos(tilt) * tl, Math.sin(tilt) * tl, 0]);

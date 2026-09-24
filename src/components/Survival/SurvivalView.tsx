@@ -11,6 +11,10 @@ import { SpriteBank, Sprite } from '../../lib/terrain/sprites';
 import { ITEMS, harvestFor, featureName, ItemDef } from '../../lib/terrain/items';
 import { vegetationHueShift, ROCK_NAMES, RockType } from '../../lib/terrain/palettes';
 import { GLWorld, TexRegion, rgba } from '../../lib/render/glWorld';
+import { planetFauna } from '../../lib/fauna/species';
+import { SpriteStore } from '../../lib/fauna/spriteStore';
+import { Fauna, World, AnimalDraw } from './fauna';
+import { Genome, Stage as CStage } from '../../lib/creature/genome';
 import { LayerType } from '../../lib/planet-generator/generator';
 
 interface Props {
@@ -21,6 +25,8 @@ interface Props {
   onExit: () => void;
   /** Free camera instead of the character: no collisions, speed grows as the zoom widens, drag to pan. */
   spectator?: boolean;
+  /** the player's own species (drawn in its tribal era); falls back to the painted tribal hunter */
+  playerCreature?: { genome: Genome; citizen: number } | null;
 }
 
 /** A drawable image: a GPU texture region (WebGL path) or a canvas (Canvas2D fallback). */
@@ -131,10 +137,12 @@ const BIOME_PT: Record<number, string> = {
 };
 const SWAY = new Set<Feat>([Feat.TALL_GRASS, Feat.REEDS, Feat.CATTAIL, Feat.FLAX, Feat.FLOWER, Feat.FERN, Feat.WILD_CROP]);
 const DAY_SECONDS = 360;
+/** player species sprite scale: the tribal figure ends up ~34 px tall, like the painted hunter */
+const PLAYER_K = 0.4;
 const REACH = 26;
 const SPEED = 74;
 
-export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = false }: Props) {
+export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = false, playerCreature = null }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const miniRef = useRef<HTMLCanvasElement>(null);
   const cfg = session.config;
@@ -150,6 +158,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
   const [toast, setToast] = useState<string | null>(null);
 
   const bank = useMemo(() => new SpriteBank(vegetationHueShift(cfg.vegetationHue, cfg.planetType === PlanetType.ALIEN_LIFE)), [cfg]);
+  // wildlife: 200+ species for living worlds, sprites rendered by workers on demand
+  const store = useMemo(() => new SpriteStore(), []);
+  useEffect(() => () => store.dispose(), [store]);
+  const fauna = useMemo(() => new Fauna(planetFauna(cfg), store, cfg.seed), [cfg, store]);
   const player = useMemo(() => paintTribalPlayer(), []);
   const poolRef = useRef<TerrainPool | null>(null);
   const glRef = useRef<GLWorld | null>(null);
@@ -163,13 +175,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
   const [perfOn, setPerfOn] = useState(true);
   const fx = useMemo(() => new NatureFx(seedToInt(cfg.seed + '_fx')), [cfg]);
   // Dev-only handle for automated visual checks (time of day, weather...)
-  useEffect(() => { if (import.meta.env.DEV) (window as any).__survival = { G, fx }; }, [fx]);
+  useEffect(() => { if (import.meta.env.DEV) (window as any).__survival = { G, fx, fauna, store }; }, [fx]);
 
   // Mutable game state (kept out of React to avoid per-frame renders)
   const G = useRef({
     x: 0, y: 0, dir: 'down' as Dir, moving: false, anim: 0, level: 0, lift: 0, camX: 0, camY: 0, lensK: 0, gatherT: 0, stepPhase: 0,
     keys: new Set<string>(), joy: { x: 0, y: 0 },
-    zoom: 3, zoomView: 3, zoomIdx: 3,
+    zoom: 3, zoomView: 3, zoomIdx: 3, dir8: 2,
     chunks: new Map<string, LoadedChunk>(), pending: new Set<string>(),
     taken: new Set<string>(), picked: new Map<string, number>(),
     target: null as Feature | null, hover: null as Feature | null,
@@ -279,9 +291,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
         mini.width = CHUNK; mini.height = CHUNK;
         mini.getContext('2d')!.putImageData(new ImageData(data.mini as Uint8ClampedArray<ArrayBuffer>, CHUNK, CHUNK), 0, 0);
         g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow, tex });
+        fauna.spawnChunk(data.cx, data.cy, world);
         if (g.chunks.size > 64) {
           const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - 64);
-          for (const [k, c] of far) { g.chunks.delete(k); if (c.tex) glRef.current?.deleteTexture(c.tex); }
+          for (const [k, c] of far) { g.chunks.delete(k); fauna.removeChunk(k); if (c.tex) glRef.current?.deleteTexture(c.tex); }
         }
         requestChunks();
       }).catch(() => g.pending.delete(key));
@@ -342,6 +355,16 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
     if (!d) return false;
     const dx = Math.floor(lo.x / TILE) - Math.floor(up.x / TILE), dy = Math.floor(lo.y / TILE) - Math.floor(up.y / TILE);
     return (d === 1 && dy === 1 && dx === 0) || (d === 2 && dy === -1 && dx === 0) || (d === 3 && dx === 1 && dy === 0) || (d === 4 && dx === -1 && dy === 0);
+  };
+  /** What the wildlife needs to know about the terrain. */
+  const world: World = {
+    tile: (wx, wy) => {
+      const q = cellAt(wx, wy);
+      if (!q) return null;
+      const d = q.c.data, gr = d.ground[q.k] as Ground, info = GROUND_INFO[gr];
+      return { water: !!info.water, deep: gr === Ground.DEEP_WATER, blocking: !!info.blocking, level: d.level[q.k], biome: d.biome[q.k], color: [d.mini[q.k * 4], d.mini[q.k * 4 + 1], d.mini[q.k * 4 + 2]] };
+    },
+    canStep: (fx0, fy0, tx, ty) => canStep(fx0, fy0, tx, ty),
   };
   const blocked = (wx: number, wy: number, fromX: number, fromY: number) => {
     const g = groundAt(wx, wy);
@@ -594,7 +617,26 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
       const liquidFrame = Math.floor(t * 7) % LIQUID_FRAMES;
       const nowMs = performance.now();
       const fx0 = x0 - 40, fx1 = x1 + 40;
-      const drawPlayer = () => p.sprite(pf, 0, 0, pf.width, pf.height, Math.round(g.x - PLAYER_AX), Math.round(g.y - g.lift - PLAYER_AY));
+      const own = playerCreature ? store.get(`player:${g.moving ? 'walk' : 'idle'}`, playerCreature.genome, CStage.TRIBAL, g.moving ? 'walk' : 'idle', PLAYER_K, playerCreature.citizen, true) : null;
+      const drawPlayer = () => {
+        if (own) {
+          const fr = Math.floor(g.moving ? g.anim * 1.35 : performance.now() / 160) % own.frames;
+          p.sprite(own.canvas, fr * own.cw, g.dir8 * own.ch, own.cw, own.ch, Math.round(g.x - own.ax), Math.round(g.y - g.lift - own.ay));
+        } else p.sprite(pf, 0, 0, pf.width, pf.height, Math.round(g.x - PLAYER_AX), Math.round(g.y - g.lift - PLAYER_AY));
+      };
+      // wildlife bucketed by tile row (sorted by y inside)
+      const animals = new Map<number, AnimalDraw[]>();
+      for (const d of animalDraws) { const rr = Math.floor(d.a.y / TILE); if (!animals.has(rr)) animals.set(rr, []); animals.get(rr)!.push(d); }
+      const drawAnimal = (d: AnimalDraw) => {
+        const sh = d.sheet;
+        if (d.clip > 0) {
+          // surfacing swimmer: only what sticks out of the water, cut at the water line
+          const vis = Math.max(0, Math.min(sh.ch, Math.round(sh.ch * (1 - d.clip) * 1.25)));
+          if (vis > 0) p.sprite(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, vis, Math.round(d.x - sh.ax), Math.round(d.y - vis));
+          return;
+        }
+        p.sprite(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.x - sh.ax), Math.round(d.y - sh.ay));
+      };
       let cyCur = 1e9;
       const rowChunks: (LoadedChunk | undefined)[] = [];
       for (let r = rowFrom; r <= rowTo; r++) {
@@ -625,7 +667,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
           }
         }
         if (r === prow) p.shadow(g.x - 0.5, g.y - g.lift, 6);
+        const rowAnimals = animals.get(r);
+        if (rowAnimals) for (const d of rowAnimals) if (d.clip === 0) p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY, Math.max(3, d.sheet.cw * 0.28));
         p.flushShadows();
+        let ai = 0;
         // 3. sprites of this row in y order, player merged in
         let playerDone = r !== prow;
         for (let k = 0; k < rowChunks.length; k++) {
@@ -633,6 +678,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
           if (!c) continue;
           for (const f of c.byRow[j]) {
             if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id)) continue;
+            while (rowAnimals && ai < rowAnimals.length && rowAnimals[ai].a.y < f.y && f.t !== Feat.LILY_PAD) drawAnimal(rowAnimals[ai++]);
             if (!playerDone && f.y > g.y && f.t !== Feat.LILY_PAD) { drawPlayer(); playerDone = true; }
             if (stop && r === stop.row && f.y > stop.y) continue;
             const s = bank.get(f.t, f.v, g.picked.has(f.id));
@@ -653,9 +699,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
             }
           }
         }
+        if (rowAnimals) while (ai < rowAnimals.length) drawAnimal(rowAnimals[ai++]);
         if (!playerDone) drawPlayer();
       }
     };
+    let animalDraws: AnimalDraw[] = [];
 
     const maskCache = new Map<number, HTMLCanvasElement>();
     const lensMask = (k: number) => {
@@ -779,6 +827,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
         if (g.moving) {
           mx /= Math.max(1, len); my /= Math.max(1, len);
           if (Math.abs(mx) > Math.abs(my)) g.dir = mx < 0 ? 'left' : 'right'; else g.dir = my < 0 ? 'up' : 'down';
+          g.dir8 = ((Math.round(Math.atan2(my, mx) / (Math.PI / 4)) % 8) + 8) % 8;
           const gr = groundAt(g.x, g.y);
           const sp = SPEED * (gr !== null ? GROUND_INFO[gr].speed || 0.4 : 1);
           const nx = g.x + mx * sp * dt, ny = g.y + my * sp * dt;
@@ -879,7 +928,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
           },
           climate: { temp: info0?.temp ?? 0.5, moist: 0.5, living: cfg.planetType === PlanetType.EARTH_LIKE || cfg.planetType === PlanetType.ALIEN_LIFE || cfg.planetType === PlanetType.OCEAN_WORLD || cfg.planetType === PlanetType.SWAMP_WORLD, desert: info0?.biome === BiomeType.SUBTROPICAL_DESERT || info0?.biome === BiomeType.COLD_DESERT },
         };
-        if (g.ready) fx.update(fxc);
+        if (g.ready) { fx.update(fxc); fauna.update(dt, g.x, g.y, world, fx, Math.random); }
       } else {
         if (!mapImg) loadMap();
         if (lod === 'regional' && g.ready) {
@@ -911,6 +960,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
       const lensX = g.x, lensY = g.y - g.lift - 10;
       const lensStop = { row: Math.floor(g.y / TILE), y: g.y };
 
+      animalDraws = local && g.ready ? fauna.collect(x0, y0, x1, y1) : [];
       // --- render the world ---
       if (gl) {
         gl.begin(camX, camY, S, [0.02, 0.027, 0.047]);
@@ -1084,7 +1134,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
       glRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bank, player, fx]);
+  }, [bank, player, fx, fauna, store, playerCreature]);
 
   // ---------------------------------------------------------------------------
   // Touch joystick
@@ -1181,6 +1231,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = f
           <div className="text-[11px] text-neutral-400 font-mono">
             {hud.temp > 0 ? '+' : ''}{hud.temp}°C · alt. {hud.alt} m · {Math.abs(hud.lat).toFixed(2)}°{hud.lat >= 0 ? 'N' : 'S'} {Math.abs(hud.lon).toFixed(2)}°{hud.lon >= 0 ? 'L' : 'O'}
           </div>
+          {fauna.species.length > 0 && <div className="text-[11px] text-emerald-300/80 font-mono">fauna: {fauna.species.length} espécies · {fauna.count} animais por perto</div>}
         </div>
       </div>
 
