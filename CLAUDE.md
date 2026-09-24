@@ -131,6 +131,26 @@ Owner's rules - keep them:
 - Always the detailed view (no small "gameplay LOD" preview).
 - Menu → "Gerador de Equipamentos" (`#equipamentos`).
 
+## Vehicle generator (`src/lib/vehicle/`, `src/components/Vehicle/`)
+Owner's rules - keep them:
+- Same art as the structures/creatures: flat 2D pieces drafted per facing (`structure/draft.ts`), painted by
+  `creature/raster.ts`; 8 facings (5 drawn, 3 mirrored), 8 frames per animation: idle (Parado), move (Andando /
+  Navegando / Voando) and use (the type's action: fire, throw, ram, drop the bridge, dive, transform, bomb).
+- Domains **land / naval / air**; sizes small / medium / large like the structures, shown beside a citizen of the
+  builders' species in the era's clothes. **Naval is always twice the size of land/air at the same tier**
+  (`tierZ` in `catalog.ts`). Beast-drawn carts change only a little between tiers (more cargo, not a bigger cart).
+- Every era is covered, but a type may not exist in an era (`names[era] === ''`): no tanks before the industrial
+  era, aircraft only from the industrial era on. Siege: ballista small only, catapult single size, trebuchet is a
+  large vehicle; from the industrial era they turn into artillery.
+- Carts/carriages/war carts are pulled by creatures coupled in gameplay: **no animals in the asset**. The builder
+  sets `x.hitch`; the preview alone draws a placeholder beast there.
+- Tanks and every gun mount use `turret()` (`vparts.ts`): a separate turret with its own yaw, independent of the body.
+- Not fixed on human tech: culture plan/exotic pick forms (pods, hex turrets), running gear (wheels, tracks,
+  mechanical legs, hover pads) and palette; design numbers (`d`, seed + type + variant) keep a design recognisable
+  across eras. Classes: civil, siege, light / medium / heavy war, transform.
+- New types = one builder (`land.ts` / `naval.ts` / `air.ts`) + one entry in `catalog.ts`.
+- Menu → "Gerador de Veículos" (`#veiculos`).
+
 ## Death animations (`src/lib/creature/death.ts`)
 - Civilised bodies are drawn in named **sections** (`back`, `torso`, `head`, `arm0..`, `leg0..`, `tail`, `misc`;
   held items `item<arm>`, gear `aux:back|belt`) through `Sketch.section`; a death gives each section a rigid placement
