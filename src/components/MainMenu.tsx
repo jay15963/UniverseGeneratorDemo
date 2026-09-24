@@ -42,7 +42,7 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
       </div>
 
       <div className="absolute bottom-5 left-6 sm:left-12 md:left-20 text-[10px] sm:text-xs text-white/40 tracking-[0.3em] font-mono z-10">
-        v1.0 · ALPHA
+        v{__APP_VERSION__} ALPHA · {__APP_COMMIT__} · {__APP_BUILD__} UTC
       </div>
       <div className="absolute bottom-5 right-6 sm:right-12 text-[10px] sm:text-xs text-white/60 font-bold tracking-[0.3em] cursor-pointer hover:text-white transition-colors z-10">
         DONATE

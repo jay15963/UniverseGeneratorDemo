@@ -10,6 +10,11 @@ ctx.onmessage = (ev: MessageEvent) => {
   const m = ev.data;
   try {
     if (m.kind === 'init') { gen = new TerrainGenerator(m.fields as PlanetFields); ctx.postMessage({ kind: 'ready', id: m.id }); return; }
+    if (m.kind === 'region' && gen) {
+      const px = gen.region(m.tx, m.ty, m.step, m.n);
+      ctx.postMessage({ kind: 'region', id: m.id, px }, [px.buffer]);
+      return;
+    }
     if (m.kind === 'chunk' && gen) {
       const t0 = performance.now();
       const chunk = gen.chunk(m.cx, m.cy);

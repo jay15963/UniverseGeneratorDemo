@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Backpack, Map as MapIcon, Hand } from 'lucide-react';
+import { X, Backpack, Map as MapIcon, Hand, ZoomIn, ZoomOut } from 'lucide-react';
 import type { PlanetSession, TerrainPool } from '../../lib/planet-generator/planetClient';
 import { PlanetType, BiomeType } from '../../lib/planet-generator/generator';
 import { ChunkData, Feature, Feat, CHUNK, CHUNK_PX, TILE, GROUND_INFO, Ground, solidRadius, WORLD_TILES_X, LIFT, MAX_LEVEL, TREES, LIQUID_FRAMES } from '../../lib/terrain/types';
@@ -10,6 +10,8 @@ import { BAYER4, seedToInt } from '../../lib/terrain/noise';
 import { SpriteBank, Sprite } from '../../lib/terrain/sprites';
 import { ITEMS, harvestFor, featureName, ItemDef } from '../../lib/terrain/items';
 import { vegetationHueShift, ROCK_NAMES, RockType } from '../../lib/terrain/palettes';
+import { GLWorld, TexRegion, rgba } from '../../lib/render/glWorld';
+import { LayerType } from '../../lib/planet-generator/generator';
 
 interface Props {
   session: PlanetSession;
@@ -19,11 +21,104 @@ interface Props {
   onExit: () => void;
 }
 
-interface LoadedRow { c: HTMLCanvasElement; y: number; anim: HTMLCanvasElement[] | null }
+/** A drawable image: a GPU texture region (WebGL path) or a canvas (Canvas2D fallback). */
+interface Img { reg?: TexRegion; c?: HTMLCanvasElement; w: number; h: number }
+interface LoadedRow { y: number; h: number; img: Img; anim: Img[] | null }
 interface LoadedChunk {
   data: ChunkData; rows: LoadedRow[]; mini: HTMLCanvasElement; lastUsed: number;
   byRow: Feature[][];   // features bucketed by local tile row, pre-sorted by y
+  tex: WebGLTexture | null;
 }
+/** Regional LOD block: REGION_N x REGION_N colours sampled every `step` tiles. */
+interface RegionBlock { img: Img; slot: number; step: number; tx: number; ty: number; lastUsed: number }
+const REGION_N = 64;
+const REGION_SLOTS = (2048 / REGION_N) ** 2;
+/** Zoom stops (CSS px per world px). >= 1: gameplay, 1/2..1/128: regional, below: world map. */
+const ZOOMS = [6, 5, 4, 3, 2, 1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64, 1 / 128, 1 / 256, 1 / 512, 1 / 1024, 0];
+type Lod = 'local' | 'regional' | 'world';
+const lodOf = (z: number): Lod => (z >= 0.99 ? 'local' : z >= 1 / 128 - 1e-9 ? 'regional' : 'world');
+const LOD_NAME: Record<Lod, string> = { local: 'LOD 1 · Local', regional: 'LOD 2 · Regional', world: 'LOD 3 · Mapa-múndi' };
+const WORLD_PX = WORLD_TILES_X * TILE;
+
+/** Everything the scene needs to draw, independent of the backend. */
+interface Painter {
+  blit(im: Img, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number): void;
+  sprite(c: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number): void;
+  shadow(x: number, y: number, rx: number): void;
+  flushShadows(): void;
+}
+function canvasPainter(ctx: CanvasRenderingContext2D): Painter {
+  let any = false;
+  return {
+    blit: (im, sx, sy, sw, sh, dx, dy, dw, dh) => ctx.drawImage(im.c!, sx, sy, sw, sh, dx, dy, dw, dh),
+    sprite: (c, sx, sy, sw, sh, dx, dy) => (sw === c.width && sh === c.height ? ctx.drawImage(c, dx, dy) : ctx.drawImage(c, sx, sy, sw, sh, dx, dy, sw, sh)),
+    shadow: (x, y, rx) => {
+      if (!any) { ctx.beginPath(); any = true; }
+      ctx.moveTo(x + rx * 1.25, y);
+      ctx.ellipse(x + rx * 0.25, y, rx, rx * 0.38, 0, 0, Math.PI * 2);
+    },
+    flushShadows: () => { if (any) { ctx.fillStyle = 'rgba(8,12,6,0.28)'; ctx.fill(); any = false; } },
+  };
+}
+const SHADOW_COL = rgba(8, 12, 6, 0.28);
+function glPainter(gl: GLWorld, shadowTex: HTMLCanvasElement): Painter {
+  return {
+    blit: (im, sx, sy, sw, sh, dx, dy, dw, dh) => gl.quad(im.reg!, sx, sy, sw, sh, dx, dy, dw, dh),
+    sprite: (c, sx, sy, sw, sh, dx, dy) => { const r = gl.atlas(c); gl.quad(r, sx, sy, sw, sh, dx, dy, sw, sh); },
+    shadow: (x, y, rx) => { const r = gl.atlas(shadowTex); gl.quad(r, 0, 0, r.w, r.h, x - rx * 0.75, y - rx * 0.38, rx * 2, rx * 0.76, SHADOW_COL); },
+    flushShadows: () => { /* drawn immediately */ },
+  };
+}
+/** Pixel-art ellipse used for contact shadows on the GPU path. */
+function shadowSprite() {
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 12;
+  const x = c.getContext('2d')!;
+  const img = x.createImageData(32, 12);
+  for (let j = 0; j < 12; j++) for (let i = 0; i < 32; i++) {
+    const d = ((i + 0.5 - 16) / 16) ** 2 + ((j + 0.5 - 6) / 6) ** 2;
+    if (d <= 1) img.data[(j * 32 + i) * 4 + 3] = 255;
+    img.data[(j * 32 + i) * 4] = img.data[(j * 32 + i) * 4 + 1] = img.data[(j * 32 + i) * 4 + 2] = 255;
+  }
+  x.putImageData(img, 0, 0);
+  return c;
+}
+function canvasImg(px: Uint8ClampedArray, w: number, h: number): Img {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d')!.putImageData(new ImageData(px as Uint8ClampedArray<ArrayBuffer>, w, h), 0, 0);
+  return { c, w, h };
+}
+/** Packs all terrain rows (and liquid animation frames) of a chunk into the columns of a single texture. */
+function packChunkRows(gl: GLWorld, data: ChunkData): { rows: LoadedRow[]; tex: WebGLTexture } {
+  const items: { px: Uint8ClampedArray; h: number; col: number; y: number }[] = [];
+  for (const r of data.rows) { items.push({ px: r.px, h: r.h, col: 0, y: 0 }); if (r.anim) for (const a of r.anim) items.push({ px: a, h: r.h, col: 0, y: 0 }); }
+  let colH = 2048, cols = 1, usedH = 1;
+  for (;;) {
+    let col = 0, y = 0;
+    usedH = 1;
+    for (const it of items) {
+      if (y + it.h > colH) { col++; y = 0; }
+      it.col = col; it.y = y; y += it.h + 1;
+      usedH = Math.max(usedH, y);
+    }
+    cols = col + 1;
+    if (cols * CHUNK_PX <= gl.maxTex || colH >= gl.maxTex) break;
+    colH = Math.min(gl.maxTex, colH * 2);
+  }
+  const TW = cols * CHUNK_PX;
+  const tex = gl.newTexture(TW, usedH);
+  for (const it of items) gl.upload(tex, it.col * CHUNK_PX, it.y, CHUNK_PX, it.h, it.px);
+  const region = (it: typeof items[number]): Img => ({ reg: { tex, x: it.col * CHUNK_PX, y: it.y, w: CHUNK_PX, h: it.h, tw: TW, th: usedH }, w: CHUNK_PX, h: it.h });
+  let k = 0;
+  const rows = data.rows.map(r => {
+    const img = region(items[k++]);
+    const anim = r.anim ? r.anim.map(() => region(items[k++])) : null;
+    return { y: r.y, h: r.h, img, anim };
+  });
+  return { rows, tex };
+}
+
 const DRY_GROUND = new Set<Ground>([Ground.SAND, Ground.RED_SAND, Ground.DIRT, Ground.DRY_GRASS, Ground.GRAVEL, Ground.ASH, Ground.REGOLITH, Ground.SALT_FLAT]);
 
 const BIOME_PT: Record<number, string> = {
@@ -55,7 +150,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   const bank = useMemo(() => new SpriteBank(vegetationHueShift(cfg.vegetationHue, cfg.planetType === PlanetType.ALIEN_LIFE)), [cfg]);
   const player = useMemo(() => paintTribalPlayer(), []);
   const poolRef = useRef<TerrainPool | null>(null);
-  const [perf, setPerf] = useState({ fps: 0, cpu: 0, chunkMs: 0, workers: 1, chunks: 0 });
+  const glRef = useRef<GLWorld | null>(null);
+  const aliveRef = useRef(true);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const [lodLabel, setLodLabel] = useState<{ lod: Lod; zoom: number }>({ lod: 'local', zoom: 3 });
+  const [perf, setPerf] = useState({ fps: 0, cpu: 0, chunkMs: 0, workers: 1, chunks: 0, draws: 0, gpu: false });
   const [perfOn, setPerfOn] = useState(true);
   const fx = useMemo(() => new NatureFx(seedToInt(cfg.seed + '_fx')), [cfg]);
   // Dev-only handle for automated visual checks (time of day, weather...)
@@ -65,7 +164,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   const G = useRef({
     x: 0, y: 0, dir: 'down' as Dir, moving: false, anim: 0, level: 0, lift: 0, camX: 0, camY: 0, lensK: 0, gatherT: 0, stepPhase: 0,
     keys: new Set<string>(), joy: { x: 0, y: 0 },
-    zoom: 3,
+    zoom: 3, zoomView: 3, zoomIdx: 3,
     chunks: new Map<string, LoadedChunk>(), pending: new Set<string>(),
     taken: new Set<string>(), picked: new Map<string, number>(),
     target: null as Feature | null, hover: null as Feature | null,
@@ -113,7 +212,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       if (!alive) return;
       G.current.x = tx * TILE + TILE / 2;
       G.current.y = ty * TILE + TILE / 2;
-      G.current.zoom = window.innerWidth < 700 ? 2 : 3;
+      G.current.zoomIdx = ZOOMS.indexOf(window.innerWidth < 700 ? 2 : 3);
+      G.current.zoomView = ZOOMS[G.current.zoomIdx];
       setLoading('Gerando terreno…');
       // spin up one terrain worker per spare CPU core
       session.terrainPool(mapX, mapY).then(pool => {
@@ -143,13 +243,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       g.pending.add(key);
       (pool ?? session).chunk(cx, cy).then(data => {
         g.pending.delete(key);
-        const toCanvas = (px: Uint8ClampedArray, h: number) => {
-          const c = document.createElement('canvas');
-          c.width = CHUNK_PX; c.height = h;
-          c.getContext('2d')!.putImageData(new ImageData(px as Uint8ClampedArray<ArrayBuffer>, CHUNK_PX, h), 0, 0);
-          return c;
-        };
-        const rows: LoadedRow[] = data.rows.map(r => ({ c: toCanvas(r.px, r.h), y: r.y, anim: r.anim ? r.anim.map(a => toCanvas(a, r.h)) : null }));
+        if (!aliveRef.current) return;
+        const gl = glRef.current;
+        let rows: LoadedRow[], tex: WebGLTexture | null = null;
+        if (gl) ({ rows, tex } = packChunkRows(gl, data));
+        else rows = data.rows.map(r => ({ y: r.y, h: r.h, img: canvasImg(r.px, CHUNK_PX, r.h), anim: r.anim ? r.anim.map(a => canvasImg(a, CHUNK_PX, r.h)) : null }));
         const byRow: Feature[][] = Array.from({ length: CHUNK }, () => []);
         for (const f of data.features) byRow[Math.max(0, Math.min(CHUNK - 1, Math.floor(f.y / TILE) - data.cy * CHUNK))].push(f);
         for (const b of byRow) b.sort((a, b2) => (a.t === Feat.LILY_PAD ? a.y - 100 : a.y) - (b2.t === Feat.LILY_PAD ? b2.y - 100 : b2.y));
@@ -157,10 +255,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
         const mini = document.createElement('canvas');
         mini.width = CHUNK; mini.height = CHUNK;
         mini.getContext('2d')!.putImageData(new ImageData(data.mini as Uint8ClampedArray<ArrayBuffer>, CHUNK, CHUNK), 0, 0);
-        g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow });
-        if (g.chunks.size > 81) {
-          const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - 81);
-          for (const [k] of far) g.chunks.delete(k);
+        g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow, tex });
+        if (g.chunks.size > 64) {
+          const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - 64);
+          for (const [k, c] of far) { g.chunks.delete(k); if (c.tex) glRef.current?.deleteTexture(c.tex); }
         }
         requestChunks();
       }).catch(() => g.pending.delete(key));
@@ -185,6 +283,15 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
     const q = cellAt(wx, wy);
     return q ? q.c.data.level[q.k] : null;
   };
+  /** Continuous ground height (screen px) - interpolated along stairways so the player glides up/down. */
+  const liftAt = (wx: number, wy: number): number => {
+    const q = cellAt(wx, wy);
+    if (!q) return G.current.lift;
+    const L = q.c.data.level[q.k], d = q.c.data.ramp[q.k];
+    const fx = (wx / TILE) - Math.floor(wx / TILE), fy = (wy / TILE) - Math.floor(wy / TILE);
+    const drop = d === 1 ? fy : d === 2 ? 1 - fy : d === 3 ? fx : d === 4 ? 1 - fx : 0;
+    return (L - drop) * LIFT;
+  };
   const tileInfo = (wx: number, wy: number) => {
     const q = cellAt(wx, wy);
     if (!q) return null;
@@ -205,7 +312,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
     const la = a.c.data.level[a.k], lb = b.c.data.level[b.k];
     if (la === lb) return true;
     if (Math.abs(la - lb) !== 1) return false;
-    return lb > la ? b.c.data.ramp[b.k] === 1 : a.c.data.ramp[a.k] === 1;
+    // the upper tile must be a stairway that descends exactly towards the lower tile
+    const up = lb > la ? { q: b, x: tx, y: ty } : { q: a, x: fx, y: fy };
+    const lo = lb > la ? { x: fx, y: fy } : { x: tx, y: ty };
+    const d = up.q.c.data.ramp[up.q.k];
+    if (!d) return false;
+    const dx = Math.floor(lo.x / TILE) - Math.floor(up.x / TILE), dy = Math.floor(lo.y / TILE) - Math.floor(up.y / TILE);
+    return (d === 1 && dy === 1 && dx === 0) || (d === 2 && dy === -1 && dx === 0) || (d === 3 && dx === 1 && dy === 0) || (d === 4 && dx === -1 && dy === 0);
   };
   const blocked = (wx: number, wy: number, fromX: number, fromY: number) => {
     const g = groundAt(wx, wy);
@@ -266,6 +379,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       if (k === 'i' || k === 'tab') { e.preventDefault(); setBagOpen(o => !o); }
       if (k === 'm') setMiniOn(o => !o);
       if (e.key === 'F3' || k === 'p') { e.preventDefault(); setPerfOn(o => !o); }
+      if (k === '-' || k === '_' || k === 'q') zoomStep(1);
+      if (k === '=' || k === '+' || k === 'z') zoomStep(-1);
       e.stopImmediatePropagation();
     };
     const up = (e: KeyboardEvent) => { G.current.keys.delete(e.key.toLowerCase()); };
@@ -275,18 +390,37 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bagOpen, onExit]);
 
+  /** Current zoom target in CSS px per world px (the last stop fits the whole planet on screen). */
+  const zoomTarget = () => {
+    const g = G.current;
+    const z = ZOOMS[g.zoomIdx];
+    if (z) return z;
+    const c = canvasRef.current;
+    const W = c?.clientWidth || window.innerWidth, H = c?.clientHeight || window.innerHeight;
+    return Math.min(W / WORLD_PX, H / (WORLD_PX * (session.height / session.width))) * 0.92;
+  };
+  const zoomStep = (d: number) => { const g = G.current; g.zoomIdx = Math.max(0, Math.min(ZOOMS.length - 1, g.zoomIdx + d)); };
+
   useEffect(() => {
     const c = canvasRef.current!;
-    const onWheel = (e: WheelEvent) => { e.preventDefault(); const g = G.current; g.zoom = Math.max(2, Math.min(6, g.zoom + (e.deltaY < 0 ? 1 : -1))); };
+    let acc = 0;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      acc += e.deltaY;
+      if (Math.abs(acc) < 40 && Math.abs(e.deltaY) < 40) return; // trackpads: accumulate small deltas
+      zoomStep(acc > 0 ? 1 : -1);
+      acc = 0;
+    };
     c.addEventListener('wheel', onWheel, { passive: false });
     return () => c.removeEventListener('wheel', onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /** Screen point -> world-screen coords (x, y as drawn, i.e. y already includes lift). */
   const screenToWorld = (sx: number, sy: number) => {
     const g = G.current;
     const c = canvasRef.current!;
-    return { x: g.camX + (sx - c.clientWidth / 2) / g.zoom, y: g.camY + (sy - c.clientHeight / 2) / g.zoom };
+    return { x: g.camX + (sx - c.clientWidth / 2) / g.zoomView, y: g.camY + (sy - c.clientHeight / 2) / g.zoomView };
   };
   const featureUnder = (wx: number, wy: number): Feature | null => {
     let best: Feature | null = null, bd = 1e9;
@@ -306,16 +440,120 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   // Main loop
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    aliveRef.current = true;
     const canvas = canvasRef.current!;
-    // opaque, low-latency context: the browser can skip alpha compositing of the whole page layer
-    const ctx = (canvas.getContext('2d', { alpha: false, desynchronized: true }) ?? canvas.getContext('2d'))!;
+    const overlay = overlayRef.current!;
+    // WebGL2 batched renderer; Canvas2D only as a fallback for browsers without it
+    let gl: GLWorld | null = null;
+    try { gl = GLWorld.create(canvas); } catch (e) { console.warn('WebGL2 indisponível, usando Canvas2D', e); }
+    glRef.current = gl;
+    const ctx = gl ? null : (canvas.getContext('2d', { alpha: false, desynchronized: true }) ?? canvas.getContext('2d'))!;
+    const octx = overlay.getContext('2d')!;
+    const painter: Painter = gl ? glPainter(gl, shadowSprite()) : canvasPainter(ctx!);
     const lens = document.createElement('canvas');
     const lctx = lens.getContext('2d')!;
+    const lensPainter = canvasPainter(lctx);
     const LENS = 132; // world px
     let raf = 0, last = performance.now(), hudT = 0, spotsT = 0;
     let waterSpots: { x: number; y: number; l: number }[] = [];
     let lavaSpots: { x: number; y: number; l: number }[] = [];
     const t0 = performance.now();
+    let lodShown: Lod | null = null, zoomShown = -1;
+
+    // --- regional LOD blocks & world map ---
+    const regions = new Map<string, RegionBlock>();
+    const regionPending = new Set<string>();
+    const freeSlots: number[] = [];
+    const regionTex = gl ? gl.newTexture(2048, 2048) : null;
+    for (let i = REGION_SLOTS - 1; i >= 0; i--) freeSlots.push(i);
+    let regionStep = 0;
+    let mapImg: Img | null = null, mapLoading = false;
+    const worldTilesY = WORLD_TILES_X * (session.height / session.width);
+
+    const loadMap = () => {
+      if (mapLoading) return;
+      mapLoading = true;
+      session.renderLayer(LayerType.FINAL).then(im => {
+        if (!aliveRef.current) return;
+        const c = document.createElement('canvas');
+        c.width = im.width; c.height = im.height;
+        c.getContext('2d')!.putImageData(im, 0, 0);
+        if (gl) {
+          let src = c;
+          if (c.width > gl.maxTex) { src = document.createElement('canvas'); src.width = gl.maxTex; src.height = Math.round(c.height * gl.maxTex / c.width); src.getContext('2d')!.drawImage(c, 0, 0, src.width, src.height); }
+          const tex = gl.newTexture(src.width, src.height);
+          gl.upload(tex, 0, 0, src.width, src.height, src);
+          mapImg = { reg: { tex, x: 0, y: 0, w: src.width, h: src.height, tw: src.width, th: src.height }, w: src.width, h: src.height };
+        } else mapImg = { c, w: c.width, h: c.height };
+      }).catch(() => { mapLoading = false; });
+    };
+
+    const requestRegions = (step: number, x0: number, y0: number, x1: number, y1: number, cx: number, cy: number) => {
+      const pool = poolRef.current;
+      if (!pool) return;
+      if (step !== regionStep) { pool.clearRegions(); regionStep = step; }
+      const span = REGION_N * step, spanPx = span * TILE;
+      const want: [number, number, number][] = [];
+      for (let by = Math.floor(y0 / spanPx); by <= Math.floor(y1 / spanPx); by++) {
+        if (by * span >= worldTilesY || (by + 1) * span <= 0) continue;
+        for (let bx = Math.floor(x0 / spanPx); bx <= Math.floor(x1 / spanPx); bx++) {
+          const k = `${step}:${bx}:${by}`;
+          const hit = regions.get(k);
+          if (hit) { hit.lastUsed = performance.now(); continue; }
+          if (regionPending.has(k)) continue;
+          want.push([bx, by, ((bx + 0.5) * spanPx - cx) ** 2 + ((by + 0.5) * spanPx - cy) ** 2]);
+        }
+      }
+      want.sort((a, b) => a[2] - b[2]);
+      for (const [bx, by] of want) {
+        if (regionPending.size >= pool.size * 2) break;
+        if (!pool.coversTile(bx * span + span / 2, by * span + span / 2)) continue;
+        const k = `${step}:${bx}:${by}`;
+        regionPending.add(k);
+        pool.region(bx * span, by * span, step, REGION_N).then(px => {
+          regionPending.delete(k);
+          if (!aliveRef.current) return;
+          let img: Img, slot = -1;
+          const evict = () => {
+            let oldK = '', oldT = Infinity;
+            for (const [kk, b] of regions) if (b.lastUsed < oldT) { oldT = b.lastUsed; oldK = kk; }
+            const b = regions.get(oldK);
+            if (b) { regions.delete(oldK); if (b.slot >= 0) freeSlots.push(b.slot); }
+          };
+          if (gl && regionTex) {
+            if (!freeSlots.length) evict();
+            slot = freeSlots.pop()!;
+            const per = 2048 / REGION_N;
+            const sx = (slot % per) * REGION_N, sy = Math.floor(slot / per) * REGION_N;
+            gl.upload(regionTex, sx, sy, REGION_N, REGION_N, px);
+            img = { reg: { tex: regionTex, x: sx, y: sy, w: REGION_N, h: REGION_N, tw: 2048, th: 2048 }, w: REGION_N, h: REGION_N };
+          } else {
+            if (regions.size >= 600) evict();
+            img = canvasImg(px, REGION_N, REGION_N);
+          }
+          regions.set(k, { img, slot, step, tx: bx * span, ty: by * span, lastUsed: performance.now() });
+        }).catch(() => regionPending.delete(k));
+      }
+    };
+
+    const drawMap = (p: Painter, x0: number, x1: number) => {
+      if (!mapImg) return;
+      const H = WORLD_PX * (session.height / session.width);
+      for (let k = Math.floor(x0 / WORLD_PX); k <= Math.floor(x1 / WORLD_PX); k++) p.blit(mapImg, 0, 0, mapImg.w, mapImg.h, k * WORLD_PX, 0, WORLD_PX, H);
+    };
+    const drawRegions = (p: Painter, step: number, x0: number, y0: number, x1: number, y1: number) => {
+      // coarser blocks first (they fill the gaps while finer ones stream in), then the current resolution
+      const list: RegionBlock[] = [];
+      for (const b of regions.values()) {
+        if (b.step < step || b.step > step * 16) continue;
+        const s = REGION_N * b.step * TILE;
+        const dx = b.tx * TILE, dy = b.ty * TILE;
+        if (dx > x1 || dx + s < x0 || dy > y1 || dy + s < y0) continue;
+        list.push(b);
+      }
+      list.sort((a, b) => b.step - a.step);
+      for (const b of list) { const s = REGION_N * b.step * TILE; p.blit(b.img, 0, 0, REGION_N, REGION_N, b.tx * TILE, b.ty * TILE, s, s); }
+    };
 
     const playerFrame = () => {
       const g = G.current;
@@ -324,7 +562,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       return player.idle[g.dir][Math.floor(performance.now() / 380) % 4];
     };
 
-    const drawScene = (c2: CanvasRenderingContext2D, x0: number, x1: number, y0: number, y1: number, t: number, stop: { row: number; y: number } | null) => {
+    const drawScene = (p: Painter, x0: number, x1: number, y0: number, y1: number, t: number, stop: { row: number; y: number } | null) => {
       const g = G.current;
       const rowFrom = Math.floor(y0 / TILE) - 1, rowTo = Math.floor((y1 + MAX_LEVEL * LIFT) / TILE) + 1;
       const cx0 = Math.floor(x0 / CHUNK_PX), cx1 = Math.floor(x1 / CHUNK_PX);
@@ -333,7 +571,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       const liquidFrame = Math.floor(t * 7) % LIQUID_FRAMES;
       const nowMs = performance.now();
       const fx0 = x0 - 40, fx1 = x1 + 40;
-      const drawPlayer = () => c2.drawImage(pf, Math.round(g.x - PLAYER_AX), Math.round(g.y - g.lift - PLAYER_AY));
+      const drawPlayer = () => p.sprite(pf, 0, 0, pf.width, pf.height, Math.round(g.x - PLAYER_AX), Math.round(g.y - g.lift - PLAYER_AY));
       let cyCur = 1e9;
       const rowChunks: (LoadedChunk | undefined)[] = [];
       for (let r = rowFrom; r <= rowTo; r++) {
@@ -349,26 +587,22 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
           const c = rowChunks[k];
           if (!c) continue;
           const row = c.rows[j];
-          if (row) c2.drawImage(row.anim ? row.anim[liquidFrame] : row.c, (cx0 + k) * CHUNK_PX, row.y);
+          if (!row) continue;
+          const im = row.anim ? row.anim[liquidFrame] : row.img;
+          p.blit(im, 0, 0, im.w, im.h, (cx0 + k) * CHUNK_PX, row.y, im.w, im.h);
         }
-        // 2. contact shadows of this row, batched into one fill
-        c2.beginPath();
-        let any = false;
+        // 2. contact shadows of this row
         for (let k = 0; k < rowChunks.length; k++) {
           const c = rowChunks[k];
           if (!c) continue;
           for (const f of c.byRow[j]) {
             if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id)) continue;
             const sh = bank.get(f.t, f.v, false).shadow;
-            if (!sh) continue;
-            const y = f.y - f.l * LIFT;
-            c2.moveTo(f.x + sh * 1.25, y);
-            c2.ellipse(f.x + sh * 0.25, y, sh, sh * 0.38, 0, 0, Math.PI * 2);
-            any = true;
+            if (sh) p.shadow(f.x, f.y - f.l * LIFT, sh);
           }
         }
-        if (r === prow) { c2.moveTo(g.x + 7, g.y - g.lift); c2.ellipse(g.x + 1, g.y - g.lift, 6, 2.3, 0, 0, Math.PI * 2); any = true; }
-        if (any) { c2.fillStyle = 'rgba(8,12,6,0.28)'; c2.fill(); }
+        if (r === prow) p.shadow(g.x - 0.5, g.y - g.lift, 6);
+        p.flushShadows();
         // 3. sprites of this row in y order, player merged in
         let playerDone = r !== prow;
         for (let k = 0; k < rowChunks.length; k++) {
@@ -379,19 +613,20 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
             if (!playerDone && f.y > g.y && f.t !== Feat.LILY_PAD) { drawPlayer(); playerDone = true; }
             if (stop && r === stop.row && f.y > stop.y) continue;
             const s = bank.get(f.t, f.v, g.picked.has(f.id));
+            const W = s.c.width, H = s.c.height;
             const x = f.x - s.ax, y = f.y - f.l * LIFT - s.ay;
             if (TREES.has(f.t)) {
               // canopy sways in the wind, trunk stays rooted
-              const dx = fx.sway(t, f.x, f.y, 1.4);
-              if (dx === 0) c2.drawImage(s.c, x, y);
+              const dx = Math.round(fx.sway(t, f.x, f.y, 1.4));
+              if (dx === 0) p.sprite(s.c, 0, 0, W, H, x, y);
               else {
-                const split = Math.max(1, s.c.height - 12);
-                c2.drawImage(s.c, 0, 0, s.c.width, split, x + dx, y, s.c.width, split);
-                c2.drawImage(s.c, 0, split, s.c.width, s.c.height - split, x, y + split, s.c.width, s.c.height - split);
+                const split = Math.max(1, H - 12);
+                p.sprite(s.c, 0, 0, W, split, x + dx, y);
+                p.sprite(s.c, 0, split, W, H - split, x, y + split);
               }
             } else {
-              const dx = SWAY.has(f.t) ? fx.sway(t * 1.3, f.x, f.y, 1.6) : 0;
-              c2.drawImage(s.c, x + dx, y);
+              const dx = SWAY.has(f.t) ? Math.round(fx.sway(t * 1.3, f.x, f.y, 1.6)) : 0;
+              p.sprite(s.c, 0, 0, W, H, x + dx, y);
             }
           }
         }
@@ -420,6 +655,30 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       return m;
     };
 
+    /** Pulsing "you are here" marker for the zoomed-out views (overlay, device px). */
+    const drawPlayerMarker = (sx: number, sy: number, t: number, dpr: number, big: boolean) => {
+      const pulse = (t * 1.2) % 1;
+      octx.save();
+      octx.lineWidth = 2 * dpr;
+      octx.strokeStyle = `rgba(255,90,58,${1 - pulse})`;
+      octx.beginPath(); octx.arc(sx, sy, (6 + pulse * (big ? 26 : 16)) * dpr, 0, Math.PI * 2); octx.stroke();
+      octx.fillStyle = '#ff5a3a'; octx.strokeStyle = '#fff';
+      octx.beginPath(); octx.arc(sx, sy, 4.5 * dpr, 0, Math.PI * 2); octx.fill(); octx.stroke();
+      // heading arrow
+      const g = G.current;
+      const a = g.dir === 'up' ? -Math.PI / 2 : g.dir === 'down' ? Math.PI / 2 : g.dir === 'left' ? Math.PI : 0;
+      octx.translate(sx, sy); octx.rotate(a);
+      octx.fillStyle = '#fff';
+      octx.beginPath(); octx.moveTo(13 * dpr, 0); octx.lineTo(8 * dpr, -3.5 * dpr); octx.lineTo(8 * dpr, 3.5 * dpr); octx.fill();
+      octx.restore();
+      if (big) {
+        octx.font = `600 ${11 * dpr}px ui-sans-serif, system-ui`;
+        octx.textAlign = 'left';
+        octx.fillStyle = 'rgba(0,0,0,0.7)'; octx.fillText('Você está aqui', sx + 12 * dpr + 1, sy - 9 * dpr + 1);
+        octx.fillStyle = '#fff'; octx.fillText('Você está aqui', sx + 12 * dpr, sy - 9 * dpr);
+      }
+    };
+
     let fpsFrames = 0, fpsT = performance.now(), cpuAcc = 0;
     const frame = (now: number) => {
       const cpu0 = performance.now();
@@ -427,12 +686,14 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       const g = G.current;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const W = canvas.clientWidth, H = canvas.clientHeight;
-      if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) { canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); }
+      const DW = Math.round(W * dpr), DH = Math.round(H * dpr);
+      if (canvas.width !== DW || canvas.height !== DH) { canvas.width = DW; canvas.height = DH; }
+      if (overlay.width !== DW || overlay.height !== DH) { overlay.width = DW; overlay.height = DH; }
       requestChunks();
 
       if (!g.ready) {
         const c = chunkAt(g.x, g.y);
-        if (c && g.x) { g.ready = true; setLoading(''); g.level = levelAt(g.x, g.y) ?? 0; g.lift = g.level * LIFT; }
+        if (c && g.x) { g.ready = true; setLoading(''); g.level = levelAt(g.x, g.y) ?? 0; g.lift = liftAt(g.x, g.y); }
       }
 
       // --- movement ---
@@ -461,19 +722,28 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
             g.stepPhase = phase;
             if (gr !== null && DRY_GROUND.has(gr)) fx.dust(g.x + (Math.random() - 0.5) * 4, g.y - g.lift, gr === Ground.SAND || gr === Ground.RED_SAND ? '#d8c08a' : gr === Ground.ASH ? '#6a6460' : '#a08a64');
           }
-          // footstep splashes in water
           if (gr !== null && GROUND_INFO[gr].water && Math.random() < dt * 6) fx.ring(g.x, g.y - g.lift, 5, 'rgba(220,240,255,0.6)');
         } else g.anim = 0;
         if (g.gatherT > 0) g.gatherT = Math.max(0, g.gatherT - dt);
         g.level = levelAt(g.x, g.y) ?? g.level;
-        g.lift += (g.level * LIFT - g.lift) * Math.min(1, dt * 12);
+        g.lift += (liftAt(g.x, g.y) - g.lift) * Math.min(1, dt * 25);
         g.time += dt;
         if (Math.floor(g.time) % 5 === 0) for (const [id, tp] of g.picked) if (g.time - tp > DAY_SECONDS) g.picked.delete(id);
       }
 
+      // --- zoom (smooth, in log space) & level of detail ---
+      const zt = zoomTarget();
+      g.zoom = zt;
+      const lz = Math.log(g.zoomView), lt = Math.log(zt);
+      g.zoomView = Math.abs(lt - lz) < 0.004 ? zt : Math.exp(lz + (lt - lz) * Math.min(1, dt * 11));
+      const Z = g.zoomView;
+      const lod = lodOf(Z);
+      if (lod !== lodShown || zt !== zoomShown) { lodShown = lod; zoomShown = zt; setLodLabel({ lod, zoom: zt }); }
+      const local = lod === 'local';
+
       // --- interaction target (same terrace only; hand-gatherables win over tool-only things) ---
       let target: Feature | null = null, td = REACH, toolT: Feature | null = null, toolD = REACH - 6;
-      if (g.ready) nearbyFeatures(g.x, g.y, f => {
+      if (g.ready && local) nearbyFeatures(g.x, g.y, f => {
         if (f.l !== g.level) return;
         const h = harvestFor(f);
         if (h.kind === 'none' || (h.kind === 'pick' && g.picked.has(f.id))) return;
@@ -484,12 +754,18 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       g.target = (target ?? toolT) as Feature | null;
 
       // --- camera ---
-      const Z = g.zoom, S = Z * dpr;
-      const [shx, shy] = fx.shake();
-      const camX = Math.round((g.x + shx) * S) / S, camY = Math.round((g.y - g.lift - 8 + shy) * S) / S;
+      const S = Z * dpr;
+      const [shx, shy] = local ? fx.shake() : [0, 0];
+      let camYw = g.y - g.lift - 8 + shy;
+      if (!local) {
+        // keep the planet's surface filling the screen vertically (poles stay at the edges)
+        const worldH = WORLD_PX * (session.height / session.width), halfH = H / Z / 2;
+        camYw = worldH <= halfH * 2 ? worldH / 2 : Math.max(halfH, Math.min(worldH - halfH, camYw));
+      }
+      const camX = Math.round((g.x + shx) * S) / S, camY = Math.round(camYw * S) / S;
       g.camX = camX; g.camY = camY;
-      if (g.mouse.x >= 0) { const w = screenToWorld(g.mouse.x, g.mouse.y); g.hover = featureUnder(w.x, w.y); } else g.hover = null;
-      const tx0 = Math.round(canvas.width / 2 - camX * S), ty0 = Math.round(canvas.height / 2 - camY * S);
+      if (local && g.mouse.x >= 0) { const w = screenToWorld(g.mouse.x, g.mouse.y); g.hover = featureUnder(w.x, w.y); } else g.hover = null;
+      const tx0 = Math.round(DW / 2 - camX * S), ty0 = Math.round(DH / 2 - camY * S);
       const toScreen = (x: number, y: number): [number, number] => [x * S + tx0, y * S + ty0];
       const vw = W / Z / 2 + 48, vh = H / Z / 2 + 64;
       const x0 = camX - vw, x1 = camX + vw, y0 = camY - vh, y1 = camY + vh;
@@ -497,79 +773,55 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       const day = (g.time / DAY_SECONDS) % 1;
       const sun = Math.sin((day - 0.25) * Math.PI * 2);
 
-      // --- sample water / lava spots for ambient effects ---
-      spotsT -= dt;
-      if (spotsT <= 0 && g.ready) {
-        spotsT = 0.6;
-        waterSpots = []; lavaSpots = [];
-        for (let k = 0; k < 90 && (waterSpots.length < 8 || lavaSpots.length < 24); k++) {
-          const wx = x0 + Math.random() * (x1 - x0), wy = y0 + Math.random() * (y1 - y0);
-          const q = cellAt(wx, wy);
-          if (!q) continue;
-          const gr = q.c.data.ground[q.k] as Ground;
-          const cxw = (Math.floor(wx / TILE) + 0.5) * TILE, cyw = (Math.floor(wy / TILE) + 0.5) * TILE;
-          if (GROUND_INFO[gr].water && gr !== Ground.DEEP_WATER && waterSpots.length < 8) waterSpots.push({ x: cxw, y: cyw, l: q.c.data.level[q.k] });
-          else if (gr === Ground.DEEP_WATER && waterSpots.length < 8 && Math.random() < 0.5) waterSpots.push({ x: cxw, y: cyw, l: 0 });
-          if (q.c.data.lava[q.k] && lavaSpots.length < 24) lavaSpots.push({ x: cxw, y: cyw, l: q.c.data.level[q.k] });
+      let fxc: FxContext | null = null;
+      if (local) {
+        // --- sample water / lava spots for ambient effects ---
+        spotsT -= dt;
+        if (spotsT <= 0 && g.ready) {
+          spotsT = 0.6;
+          waterSpots = []; lavaSpots = [];
+          for (let k = 0; k < 90 && (waterSpots.length < 8 || lavaSpots.length < 24); k++) {
+            const wx = x0 + Math.random() * (x1 - x0), wy = y0 + Math.random() * (y1 - y0);
+            const q = cellAt(wx, wy);
+            if (!q) continue;
+            const gr = q.c.data.ground[q.k] as Ground;
+            const cxw = (Math.floor(wx / TILE) + 0.5) * TILE, cyw = (Math.floor(wy / TILE) + 0.5) * TILE;
+            if (GROUND_INFO[gr].water && gr !== Ground.DEEP_WATER && waterSpots.length < 8) waterSpots.push({ x: cxw, y: cyw, l: q.c.data.level[q.k] });
+            else if (gr === Ground.DEEP_WATER && waterSpots.length < 8 && Math.random() < 0.5) waterSpots.push({ x: cxw, y: cyw, l: 0 });
+            if (q.c.data.lava[q.k] && lavaSpots.length < 24) lavaSpots.push({ x: cxw, y: cyw, l: q.c.data.level[q.k] });
+          }
         }
-      }
-      const visible: Feature[] = [];
-      const falls: { x: number; y: number; w: number; h: number }[] = [];
-      for (let cy = Math.floor(y0 / CHUNK_PX); cy <= Math.floor((y1 + MAX_LEVEL * LIFT) / CHUNK_PX); cy++) for (let cx = Math.floor(x0 / CHUNK_PX); cx <= Math.floor(x1 / CHUNK_PX); cx++) {
-        const c = g.chunks.get(`${cx},${cy}`);
-        if (!c) continue;
-        for (const f of c.data.falls) if (f.x < x1 && f.x + f.w > x0 && f.y < y1 && f.y + f.h > y0) falls.push(f);
-        if (visible.length < 400) for (const f of c.data.features) if (f.x > x0 && f.x < x1 && f.y > y0 && f.y < y1 && !g.taken.has(f.id)) visible.push(f);
-      }
-      const info0 = g.ready ? tileInfo(g.x, g.y) : null;
-      const fxc: FxContext = {
-        t, dt, day, sun, view: { x0, y0, x1, y1 }, player: { x: g.x, y: g.y, lift: g.lift }, visible, waterSpots, lavaSpots, falls,
-        surface: (wx: number, wy: number) => {
-          const q = cellAt(wx, wy);
-          if (!q) return null;
-          const gr = q.c.data.ground[q.k] as Ground;
-          return { water: !!GROUND_INFO[gr].water, lift: q.c.data.level[q.k] * LIFT };
-        },
-        climate: { temp: info0?.temp ?? 0.5, moist: 0.5, living: cfg.planetType === PlanetType.EARTH_LIKE || cfg.planetType === PlanetType.ALIEN_LIFE || cfg.planetType === PlanetType.OCEAN_WORLD || cfg.planetType === PlanetType.SWAMP_WORLD, desert: info0?.biome === BiomeType.SUBTROPICAL_DESERT || info0?.biome === BiomeType.COLD_DESERT },
-      };
-      if (g.ready) fx.update(fxc);
-
-      // --- render ---
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.setTransform(S, 0, 0, S, tx0, ty0);
-      ctx.imageSmoothingEnabled = false;
-      drawScene(ctx, x0, x1, y0, y1, t, null);
-
-      fx.drawWorldBelow(ctx, fxc);
-      fx.drawWorldAbove(ctx, fxc);
-
-      // target marker
-      const mark = g.target;
-      if (mark) {
-        const s = bank.get(mark.t, mark.v, g.picked.has(mark.id));
-        const my = mark.y - mark.l * LIFT;
-        const top = my - Math.min(s.ay, 30) - 6 + Math.sin(t * 5) * 1.5;
-        ctx.fillStyle = '#fff';
-        ctx.beginPath(); ctx.moveTo(mark.x - 3, top - 4); ctx.lineTo(mark.x + 3, top - 4); ctx.lineTo(mark.x, top); ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1 / Z;
-        ctx.beginPath(); ctx.ellipse(mark.x, my, 6, 2.5, 0, 0, Math.PI * 2); ctx.stroke();
-      }
-
-      // floating pickup texts
-      ctx.font = '600 6px ui-sans-serif, system-ui'; ctx.textAlign = 'center';
-      for (let i = g.floaters.length - 1; i >= 0; i--) {
-        const fl = g.floaters[i];
-        fl.t += dt;
-        if (fl.t > 1.4) { g.floaters.splice(i, 1); continue; }
-        ctx.globalAlpha = 1 - fl.t / 1.4;
-        ctx.fillStyle = '#000'; ctx.fillText(fl.text, fl.x + 0.5, fl.y - fl.t * 14 + 0.5);
-        ctx.fillStyle = '#fff6c8'; ctx.fillText(fl.text, fl.x, fl.y - fl.t * 14);
-        ctx.globalAlpha = 1;
+        const visible: Feature[] = [];
+        const falls: { x: number; y: number; w: number; h: number }[] = [];
+        for (let cy = Math.floor(y0 / CHUNK_PX); cy <= Math.floor((y1 + MAX_LEVEL * LIFT) / CHUNK_PX); cy++) for (let cx = Math.floor(x0 / CHUNK_PX); cx <= Math.floor(x1 / CHUNK_PX); cx++) {
+          const c = g.chunks.get(`${cx},${cy}`);
+          if (!c) continue;
+          for (const f of c.data.falls) if (f.x < x1 && f.x + f.w > x0 && f.y < y1 && f.y + f.h > y0) falls.push(f);
+          if (visible.length < 400) for (const f of c.data.features) if (f.x > x0 && f.x < x1 && f.y > y0 && f.y < y1 && !g.taken.has(f.id)) visible.push(f);
+        }
+        const info0 = g.ready ? tileInfo(g.x, g.y) : null;
+        fxc = {
+          t, dt, day, sun, view: { x0, y0, x1, y1 }, player: { x: g.x, y: g.y, lift: g.lift }, visible, waterSpots, lavaSpots, falls,
+          surface: (wx: number, wy: number) => {
+            const q = cellAt(wx, wy);
+            if (!q) return null;
+            const gr = q.c.data.ground[q.k] as Ground;
+            return { water: !!GROUND_INFO[gr].water, lift: q.c.data.level[q.k] * LIFT };
+          },
+          climate: { temp: info0?.temp ?? 0.5, moist: 0.5, living: cfg.planetType === PlanetType.EARTH_LIKE || cfg.planetType === PlanetType.ALIEN_LIFE || cfg.planetType === PlanetType.OCEAN_WORLD || cfg.planetType === PlanetType.SWAMP_WORLD, desert: info0?.biome === BiomeType.SUBTROPICAL_DESERT || info0?.biome === BiomeType.COLD_DESERT },
+        };
+        if (g.ready) fx.update(fxc);
+      } else {
+        if (!mapImg) loadMap();
+        if (lod === 'regional' && g.ready) {
+          const step = 2 ** Math.ceil(Math.log2(Math.max(1, 3 / (TILE * zt))));
+          requestRegions(step, x0, y0, x1, y1, camX, camY);
+        }
       }
 
       // --- vision lens: when terrain or a tree hides the player, cut a dithered window through it ---
-      if (g.ready) {
+      let lensOn = false;
+      if (g.ready && local) {
         const feet = g.y - g.lift, head = feet - 22;
         let occ = false;
         const pr = Math.floor(g.y / TILE), pc = Math.floor(g.x / TILE);
@@ -585,38 +837,123 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
           if (Math.abs(f.x - g.x) < s.c.width / 2 - 3 && fy - s.ay < feet - 8 && fy > head + 6) occ = true;
         });
         g.lensK += ((occ ? 1 : 0) - g.lensK) * Math.min(1, dt * 7);
-        if (g.lensK > 0.04) {
-          const D = Math.round(LENS * S);
-          if (lens.width !== D) { lens.width = D; lens.height = D; }
-          const cxw = g.x, cyw = g.y - g.lift - 10;
-          lctx.setTransform(1, 0, 0, 1, 0, 0);
-          lctx.globalCompositeOperation = 'source-over';
-          lctx.clearRect(0, 0, D, D);
-          lctx.setTransform(S, 0, 0, S, Math.round(D / 2 - cxw * S), Math.round(D / 2 - cyw * S));
-          lctx.imageSmoothingEnabled = false;
-          drawScene(lctx, cxw - LENS / 2, cxw + LENS / 2, cyw - LENS / 2, cyw + LENS / 2, t, { row: pr, y: g.y });
-          lctx.setTransform(1, 0, 0, 1, 0, 0);
-          lctx.globalCompositeOperation = 'destination-in';
-          lctx.drawImage(lensMask(g.lensK), 0, 0, D, D);
-          lctx.globalCompositeOperation = 'source-over';
-          const [sx, sy] = toScreen(cxw, cyw);
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.drawImage(lens, Math.round(sx - D / 2), Math.round(sy - D / 2));
-          // soft rim of the window
-          ctx.strokeStyle = `rgba(255,255,255,${0.18 * g.lensK})`;
-          ctx.lineWidth = Math.max(1, S / 2);
-          ctx.beginPath(); ctx.ellipse(sx, sy, (LENS / 2 - 3) * g.lensK * S, (LENS / 2 - 3) * g.lensK * S / 1.12, 0, 0, Math.PI * 2); ctx.stroke();
+        lensOn = g.lensK > 0.04;
+      } else g.lensK = 0;
+      const lensX = g.x, lensY = g.y - g.lift - 10;
+      const lensStop = { row: Math.floor(g.y / TILE), y: g.y };
+
+      // --- render the world ---
+      if (gl) {
+        gl.begin(camX, camY, S, [0.02, 0.027, 0.047]);
+        if (local) {
+          drawScene(painter, x0, x1, y0, y1, t, null);
+          if (lensOn) {
+            const [sx, sy] = toScreen(lensX, lensY);
+            gl.lens(sx, sy, (LENS / 2 - 3) * g.lensK * S, S);
+            drawScene(painter, lensX - LENS / 2, lensX + LENS / 2, lensY - LENS / 2, lensY + LENS / 2, t, lensStop);
+            gl.lens(0, 0, 0, 1);
+          }
+        } else {
+          drawMap(painter, x0, x1);
+          if (lod === 'regional') drawRegions(painter, regionStep || 1, x0, y0, x1, y1);
+        }
+        gl.flush();
+      } else if (ctx) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, DW, DH);
+        ctx.setTransform(S, 0, 0, S, tx0, ty0);
+        ctx.imageSmoothingEnabled = false;
+        if (local) {
+          drawScene(painter, x0, x1, y0, y1, t, null);
+          if (lensOn) {
+            const D = Math.round(LENS * S);
+            if (lens.width !== D) { lens.width = D; lens.height = D; }
+            lctx.setTransform(1, 0, 0, 1, 0, 0);
+            lctx.globalCompositeOperation = 'source-over';
+            lctx.clearRect(0, 0, D, D);
+            lctx.setTransform(S, 0, 0, S, Math.round(D / 2 - lensX * S), Math.round(D / 2 - lensY * S));
+            lctx.imageSmoothingEnabled = false;
+            drawScene(lensPainter, lensX - LENS / 2, lensX + LENS / 2, lensY - LENS / 2, lensY + LENS / 2, t, lensStop);
+            lctx.setTransform(1, 0, 0, 1, 0, 0);
+            lctx.globalCompositeOperation = 'destination-in';
+            lctx.drawImage(lensMask(g.lensK), 0, 0, D, D);
+            lctx.globalCompositeOperation = 'source-over';
+            const [sx, sy] = toScreen(lensX, lensY);
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.drawImage(lens, Math.round(sx - D / 2), Math.round(sy - D / 2));
+          }
+        } else {
+          drawMap(painter, x0, x1);
+          if (lod === 'regional') drawRegions(painter, regionStep || 1, x0, y0, x1, y1);
         }
       }
 
-      // --- screen space: sunset tint, weather, night & lantern, fireflies ---
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      if (sun > -0.2 && sun < 0.25) { ctx.fillStyle = `rgba(255,120,40,${(1 - Math.abs(sun - 0.02) / 0.23) * 0.12})`; ctx.fillRect(0, 0, canvas.width, canvas.height); }
-      fx.drawScreen(ctx, canvas.width, canvas.height, S, fxc, toScreen);
+      // --- overlay: world effects, markers, text, screen-space weather & night ---
+      octx.setTransform(1, 0, 0, 1, 0, 0);
+      octx.clearRect(0, 0, DW, DH);
+      if (local && fxc) {
+        octx.setTransform(S, 0, 0, S, tx0, ty0);
+        octx.imageSmoothingEnabled = false;
+        fx.drawWorldBelow(octx, fxc);
+        fx.drawWorldAbove(octx, fxc);
+
+        const mark = g.target;
+        if (mark) {
+          const s = bank.get(mark.t, mark.v, g.picked.has(mark.id));
+          const my = mark.y - mark.l * LIFT;
+          const top = my - Math.min(s.ay, 30) - 6 + Math.sin(t * 5) * 1.5;
+          octx.fillStyle = '#fff';
+          octx.beginPath(); octx.moveTo(mark.x - 3, top - 4); octx.lineTo(mark.x + 3, top - 4); octx.lineTo(mark.x, top); octx.fill();
+          octx.strokeStyle = 'rgba(255,255,255,0.7)'; octx.lineWidth = 1 / Z;
+          octx.beginPath(); octx.ellipse(mark.x, my, 6, 2.5, 0, 0, Math.PI * 2); octx.stroke();
+        }
+
+        // floating pickup texts
+        octx.font = '600 6px ui-sans-serif, system-ui'; octx.textAlign = 'center';
+        for (let i = g.floaters.length - 1; i >= 0; i--) {
+          const fl = g.floaters[i];
+          fl.t += dt;
+          if (fl.t > 1.4) { g.floaters.splice(i, 1); continue; }
+          octx.globalAlpha = 1 - fl.t / 1.4;
+          octx.fillStyle = '#000'; octx.fillText(fl.text, fl.x + 0.5, fl.y - fl.t * 14 + 0.5);
+          octx.fillStyle = '#fff6c8'; octx.fillText(fl.text, fl.x, fl.y - fl.t * 14);
+          octx.globalAlpha = 1;
+        }
+
+        octx.setTransform(1, 0, 0, 1, 0, 0);
+        if (lensOn) {
+          // soft rim of the vision window
+          const [sx, sy] = toScreen(lensX, lensY);
+          octx.strokeStyle = `rgba(255,255,255,${0.18 * g.lensK})`;
+          octx.lineWidth = Math.max(1, S / 2);
+          octx.beginPath(); octx.ellipse(sx, sy, (LENS / 2 - 3) * g.lensK * S, (LENS / 2 - 3) * g.lensK * S / 1.12, 0, 0, Math.PI * 2); octx.stroke();
+        }
+        if (sun > -0.2 && sun < 0.25) { octx.fillStyle = `rgba(255,120,40,${(1 - Math.abs(sun - 0.02) / 0.23) * 0.12})`; octx.fillRect(0, 0, DW, DH); }
+        fx.drawScreen(octx, DW, DH, S, fxc, toScreen);
+      } else if (g.ready) {
+        // zoomed-out views: a clear "you are here" marker (drawn at every horizontal wrap of the planet)
+        const [px, py] = toScreen(g.x, g.y - g.lift);
+        for (let k = -1; k <= 1; k++) {
+          const sx = px + k * WORLD_PX * S;
+          if (sx > -40 && sx < DW + 40) drawPlayerMarker(sx, py, t, dpr, lod === 'world');
+        }
+        if (lod === 'world') {
+          // latitude / longitude graticule
+          octx.strokeStyle = 'rgba(255,255,255,0.08)'; octx.lineWidth = 1;
+          const worldH = WORLD_PX * (session.height / session.width);
+          octx.beginPath();
+          for (let i = 1; i < 6; i++) { const [, yy] = toScreen(0, (worldH * i) / 6); octx.moveTo(0, Math.round(yy) + 0.5); octx.lineTo(DW, Math.round(yy) + 0.5); }
+          for (let k = Math.floor(x0 / WORLD_PX); k <= Math.floor(x1 / WORLD_PX); k++) for (let i = 0; i < 12; i++) {
+            const [xx] = toScreen(k * WORLD_PX + (WORLD_PX * i) / 12, 0);
+            octx.moveTo(Math.round(xx) + 0.5, toScreen(0, 0)[1]); octx.lineTo(Math.round(xx) + 0.5, toScreen(0, worldH)[1]);
+          }
+          octx.stroke();
+        }
+      }
 
       // minimap
       const mini = miniRef.current;
-      if (mini && g.ready) {
+      if (mini && g.ready && local) {
         const mc = mini.getContext('2d')!;
         const MW = mini.width;
         mc.fillStyle = '#05070c'; mc.fillRect(0, 0, MW, MW);
@@ -635,19 +972,18 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
         const info = tileInfo(g.x, g.y);
         const hours = Math.floor(day * 24), mins = Math.floor((day * 24 - hours) * 60);
         const txTiles = g.x / TILE, tyTiles = g.y / TILE;
-        const worldTilesY = WORLD_TILES_X / 2;
         if (info) setHud({
           biome: info.biome !== 255 ? BIOME_PT[info.biome] ?? '' : '',
           ground: GROUND_INFO[info.g].name,
           temp: Math.round(-30 + info.temp * 90 - info.temp * info.temp * 30),
           lat: (0.5 - tyTiles / worldTilesY) * 180,
-          lon: ((txTiles / WORLD_TILES_X) % 1) * 360 - 180,
+          lon: ((((txTiles / WORLD_TILES_X) % 1) + 1) % 1) * 360 - 180,
           clock: `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
           rock: ROCK_NAMES[info.rock as RockType] ?? '',
           alt: info.level * 40,
           weather: fx.weather,
         });
-        const f = g.hover ?? g.target;
+        const f = local ? g.hover ?? g.target : null;
         if (f) {
           const h = harvestFor(f);
           const inRange = Math.hypot(f.x - g.x, f.y - g.y) <= REACH + 14 && f.l === g.level;
@@ -663,14 +999,21 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       fpsFrames++;
       if (now - fpsT >= 500) {
         const pool = poolRef.current;
-        setPerf({ fps: Math.round((fpsFrames * 1000) / (now - fpsT)), cpu: cpuAcc / fpsFrames, chunkMs: pool?.avgMs ?? 0, workers: pool?.size ?? 1, chunks: G.current.chunks.size });
+        setPerf({ fps: Math.round((fpsFrames * 1000) / (now - fpsT)), cpu: cpuAcc / fpsFrames, chunkMs: pool?.avgMs ?? 0, workers: pool?.size ?? 1, chunks: G.current.chunks.size, draws: gl?.drawCalls ?? 0, gpu: !!gl });
         fpsFrames = 0; fpsT = now; cpuAcc = 0;
       }
       // requestAnimationFrame runs at the display's native refresh rate (60/120/144/240 Hz...) - no extra cap
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      aliveRef.current = false;
+      // GPU resources die with this renderer: drop chunks so a remount re-uploads them
+      G.current.chunks.clear();
+      G.current.pending.clear();
+      glRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bank, player, fx]);
 
@@ -711,6 +1054,28 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
           setJoyVis({ ox: j.ox, oy: j.oy, x: j.ox + dx * Math.min(1, max / (len || 1)), y: j.oy + dy * Math.min(1, max / (len || 1)) });
         }}
       />
+      <canvas ref={overlayRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+
+      {/* Level of detail + zoom controls */}
+      {!loading && (
+        <div className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5">
+          <button onClick={() => zoomStep(-1)} title="Aproximar (roda / +)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><ZoomIn className="w-4 h-4" /></button>
+          <div className="flex flex-col gap-1 py-1">
+            {(['local', 'regional', 'world'] as Lod[]).map(l => (
+              <div key={l} title={LOD_NAME[l]} className={`w-2 h-2 rounded-full mx-auto ${lodLabel.lod === l ? 'bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]' : 'bg-white/25'}`} />
+            ))}
+          </div>
+          <button onClick={() => zoomStep(1)} title="Afastar (roda / -)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><ZoomOut className="w-4 h-4" /></button>
+        </div>
+      )}
+      {!loading && lodLabel.lod !== 'local' && (
+        <div className="absolute left-1/2 -translate-x-1/2 bottom-[76px] pointer-events-none bg-black/70 border border-white/15 rounded-lg px-3 py-1.5 text-center">
+          <div className="text-white font-bold text-sm tracking-wide">{LOD_NAME[lodLabel.lod]}</div>
+          <div className="text-[11px] font-mono text-neutral-400">
+            {lodLabel.lod === 'regional' ? `1 px ≈ ${(1 / (TILE * lodLabel.zoom)).toFixed(lodLabel.zoom > 1 / 32 ? 1 : 0)} m · a região ao redor` : 'superfície do planeta inteiro'} · roda para voltar
+          </div>
+        </div>
+      )}
 
       {/* Performance overlay (F3 / P) */}
       {perfOn && !loading && (
@@ -718,6 +1083,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
           <span className={perf.fps >= 100 ? 'text-emerald-300' : perf.fps >= 55 ? 'text-amber-300' : 'text-red-400'}>{perf.fps} FPS</span>
           <span title="Tempo de CPU por quadro">{perf.cpu.toFixed(2)} ms CPU</span>
           <span title="Quadros por segundo possíveis se o monitor permitisse">~{perf.cpu > 0 ? Math.round(1000 / perf.cpu) : 0} máx</span>
+          <span title="Renderizador" className={perf.gpu ? 'text-cyan-300' : 'text-amber-300'}>{perf.gpu ? `WebGL2 · ${perf.draws} draw` : 'Canvas2D'}</span>
           <span title="Workers de terreno em paralelo / tempo médio por chunk" className="hidden sm:inline">{perf.workers}× núcleos · {perf.chunkMs.toFixed(0)} ms/chunk</span>
         </div>
       )}
@@ -806,7 +1172,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
                 );
               })}
             </div>
-            <p className="mt-3 text-[10px] text-neutral-500">WASD/setas: andar · E/Espaço/clique: coletar · Roda: zoom · I: mochila · M: minimapa · P/F3: desempenho · Esc: sair</p>
+            <p className="mt-3 text-[10px] text-neutral-500">WASD/setas: andar · E/Espaço/clique: coletar · Roda ou +/-: zoom (local → regional → mapa-múndi) · I: mochila · M: minimapa · P/F3: desempenho · Esc: sair</p>
           </div>
         </div>
       )}

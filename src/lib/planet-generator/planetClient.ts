@@ -247,7 +247,9 @@ export class TerrainPool {
   readonly ready: Promise<void>;
   private workers: { w: Worker; busy: boolean }[] = [];
   private queue: { cx: number; cy: number; resolve: (c: ChunkData) => void; reject: (e: Error) => void }[] = [];
-  private waiting = new Map<number, { resolve: (c: ChunkData) => void; reject: (e: Error) => void; slot: { busy: boolean } }>();
+  private regionQueue: { tx: number; ty: number; step: number; n: number; resolve: (px: Uint8ClampedArray) => void; reject: (e: Error) => void }[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private waiting = new Map<number, { resolve: (c: any) => void; reject: (e: Error) => void; slot: { busy: boolean } }>();
   private nextId = 1;
   private fields: PlanetFields;
   private fallback: (cx: number, cy: number) => Promise<ChunkData>;
@@ -273,6 +275,7 @@ export class TerrainPool {
           this.waiting.delete(m.id);
           slot.busy = false;
           if (m.kind === 'chunk') { this.avgMs = this.avgMs ? this.avgMs * 0.9 + m.ms * 0.1 : m.ms; job.resolve(m.chunk); }
+          else if (m.kind === 'region') job.resolve(m.px);
           else job.reject(new Error(m.message));
           this.pump();
         };
@@ -293,14 +296,38 @@ export class TerrainPool {
 
   private pump() {
     for (const slot of this.workers) {
-      if (slot.busy || !this.queue.length) continue;
-      const job = this.queue.shift()!;
+      if (slot.busy) continue;
       const id = this.nextId++;
-      slot.busy = true;
-      this.waiting.set(id, { resolve: job.resolve, reject: job.reject, slot });
-      slot.w.postMessage({ kind: 'chunk', id, cx: job.cx, cy: job.cy });
+      if (this.queue.length) {
+        // gameplay chunks always go first
+        const job = this.queue.shift()!;
+        slot.busy = true;
+        this.waiting.set(id, { resolve: job.resolve, reject: job.reject, slot });
+        slot.w.postMessage({ kind: 'chunk', id, cx: job.cx, cy: job.cy });
+      } else if (this.regionQueue.length) {
+        const job = this.regionQueue.shift()!;
+        slot.busy = true;
+        this.waiting.set(id, { resolve: job.resolve, reject: job.reject, slot });
+        slot.w.postMessage({ kind: 'region', id, tx: job.tx, ty: job.ty, step: job.step, n: job.n });
+      }
     }
   }
+
+  /** Map-pixel coverage test for a tile position (regional LOD requests must stay inside the field window). */
+  coversTile(tx: number, ty: number) {
+    const F = this.fields, W = F.config.width;
+    const S = WORLD_TILES_X / W;
+    const lx = (((Math.floor(tx / S) - F.ox) % W) + W) % W, ly = Math.floor(ty / S) - F.oy;
+    return lx >= 3 && lx < F.fw - 3 && ly >= 3 && ly < F.fh - 3;
+  }
+
+  /** Regional LOD block: n*n colours, one per `step` tiles, starting at tile (tx, ty). */
+  region(tx: number, ty: number, step: number, n: number): Promise<Uint8ClampedArray> {
+    return new Promise((resolve, reject) => { this.regionQueue.push({ tx, ty, step, n, resolve, reject }); this.pump(); });
+  }
+  /** Drops queued (not yet started) regional jobs - used when the camera moves on. */
+  clearRegions() { const q = this.regionQueue; this.regionQueue = []; for (const j of q) j.reject(new Error('cancelled')); }
+  get regionBacklog() { return this.regionQueue.length; }
 
   /** Number of chunk jobs that can start right now without queueing. */
   get idle() { return this.workers.filter(w => !w.busy).length - this.queue.length; }
