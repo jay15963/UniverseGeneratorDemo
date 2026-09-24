@@ -11,7 +11,7 @@ import { hash3, vnoise, bayer } from '../terrain/noise';
 export type RGB = [number, number, number];
 export type Tex =
   | 'smooth' | 'scales' | 'fur' | 'feathers' | 'chitin' | 'plates' | 'skin' | 'fin' | 'cloth' | 'denim' | 'leather'
-  | 'metal' | 'glass' | 'gel' | 'bone' | 'wood' | 'compound' | 'glow' | 'hair';
+  | 'metal' | 'glass' | 'gel' | 'bone' | 'wood' | 'compound' | 'glow' | 'hair' | 'wool' | 'knit' | 'silk';
 
 export interface Mat {
   ramp: RGB[];                  // 6 colours, dark -> light
@@ -83,6 +83,9 @@ function texDelta(m: Mat, x: number, y: number, u: number, v: number, nz: number
       if (Math.abs(fv - 0.5) < 0.1 && fu > 0.35) return 0.06;
       return fu > 0.8 ? 0.06 : 0;
     }
+    case 'wool': return (h01(x, y >> 1, 19) - 0.5) * 0.1 + ((x + y * 2) % 3 === 0 ? 0.06 : 0);
+    case 'knit': return ((y % 2 === 0) !== (x % 2 === 0) ? 0.04 : -0.03) + (y % 3 === 0 ? -0.03 : 0);
+    case 'silk': return Math.sin(u * 0.35 + v * 0.1) * 0.09;
     case 'fur': case 'hair':
       return (h01(x, y >> 1, 11) - 0.5) * 0.2 + (h01(x >> 1, y >> 2, 12) - 0.5) * 0.12 + (m.tex === 'hair' ? Math.sin(x * 1.3 + y * 0.4) * 0.05 : 0);
     case 'skin':
