@@ -87,8 +87,9 @@ export class GLWorld {
   private readonly PAGE = 2048;
   white!: TexRegion;
 
-  static create(canvas: HTMLCanvasElement): GLWorld | null {
-    const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: true, powerPreference: 'high-performance' } as WebGLContextAttributes);
+  /** `preserve`: keep the drawn frame readable after compositing (needed to record the canvas into a video) */
+  static create(canvas: HTMLCanvasElement, preserve = false): GLWorld | null {
+    const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: true, powerPreference: 'high-performance', preserveDrawingBuffer: preserve } as WebGLContextAttributes);
     // (no `desynchronized`: low-latency front-buffer mode shows the clear colour for a moment on heavy frames -> dark flicker)
     return gl ? new GLWorld(gl) : null;
   }
