@@ -3,35 +3,20 @@
 // to the world map. No HUD: only the engine's frame rate (what it could reach with vsync off).
 import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
-import { PlanetConfig, PlanetType } from '../../lib/planet-generator/generator';
-import { openPlanetSession, requestPlanetTexture, PlanetSession, PlanetTexture } from '../../lib/planet-generator/planetClient';
-import { atmosphereFor, cloudProfileFor, emissiveFor } from '../../lib/planet-generator/visualProfile';
-import { renderSphere } from '../../lib/render/planetSphere';
-import { SpaceBackdrop } from '../../lib/render/spaceBackdrop';
-import { glowSprite, ringSprite, starRaysSprite, RingSprite } from '../../lib/render/celestialSprites';
-import { haloSprite } from '../../lib/render/bodySprite';
+import { PlanetConfig } from '../../lib/planet-generator/generator';
+import { openPlanetSession, PlanetSession } from '../../lib/planet-generator/planetClient';
 import { frameMeter } from '../../lib/render/frameMeter';
 import { SurvivalView } from '../Survival/SurvivalView';
 import { scout, SurfaceCine, ShotSpec } from './director';
-
-type RGB = [number, number, number];
-
-const BASE: PlanetConfig = {
-  seed: 'demo', width: 2048, height: 1024, numPlates: 30, seaLevel: 0.5, baseTemperature: 0.5, baseMoisture: 0.55,
-  planetSize: 2, planetType: PlanetType.EARTH_LIKE, craterDensity: 0.4, surfaceHue: 'gray', dustStormIntensity: 0.3,
-  cloudDensity: 0.55, volcanicActivity: 0.3, iceFractureDensity: 0.5, bandContrast: 0.6, stormFrequency: 0.4,
-  colorPalette: 'jovian', vegetationHue: 'green', waterHue: 'blue', crustAge: 0.5, islandDensity: 0.2, lineaeDensity: 0.5,
-  iceThickness: 0.5, starIntensity: 0.7, twilightWidth: 0.3, crystalDensity: 0.4, hydrocarbonLakes: 0.3,
-  bioluminescence: 0.5, waterLevel: 0.6, ashDepth: 0.5, emberActivity: 0.4,
-} as PlanetConfig;
-const cfg = (over: Partial<PlanetConfig>): PlanetConfig => ({ ...BASE, ...over });
+import { SpaceShot } from './spaceShot';
+import { WORLDS, STARS, GIANT, RGB } from './worlds';
 
 interface DemoPlanet { config: PlanetConfig; shots: ShotSpec[]; star: RGB }
 
 // The film: every world is shown at its best time of day and weather.
 const PLANETS: DemoPlanet[] = [
   {
-    config: cfg({ seed: 'demo-gaia-7', planetType: PlanetType.EARTH_LIKE, baseTemperature: 0.55, baseMoisture: 0.62 }), star: [255, 226, 180],
+    config: WORLDS.gaia, star: STARS.gaia,
     shots: [
       { kind: 'coast', dur: 11, hour: [9, 9.6] },
       { kind: 'wild', dur: 12, hour: [7.2, 8], speed: 9, zoom: [3, 3] },
@@ -41,7 +26,7 @@ const PLANETS: DemoPlanet[] = [
     ],
   },
   {
-    config: cfg({ seed: 'demo-xeno-3', planetType: PlanetType.ALIEN_LIFE, vegetationHue: 'purple', waterHue: 'green', baseMoisture: 0.65 }), star: [200, 220, 255],
+    config: WORLDS.xeno, star: STARS.xeno,
     shots: [
       { kind: 'wild', dur: 12, hour: [10, 10.5], speed: 10 },
       { kind: 'coast', dur: 11, hour: [13, 13.5], weather: 'rain' },
@@ -51,7 +36,7 @@ const PLANETS: DemoPlanet[] = [
     ],
   },
   {
-    config: cfg({ seed: 'demo-thalassa', planetType: PlanetType.OCEAN_WORLD, islandDensity: 0.22 }), star: [255, 240, 210],
+    config: WORLDS.ocean, star: STARS.ocean,
     shots: [
       { kind: 'coast', dur: 12, hour: [11, 11.5], speed: 22 },
       { kind: 'coast', dur: 10, hour: [15, 15.4], weather: 'rain' },
@@ -59,14 +44,14 @@ const PLANETS: DemoPlanet[] = [
     ],
   },
   {
-    config: cfg({ seed: 'demo-bayou-2', planetType: PlanetType.SWAMP_WORLD, baseTemperature: 0.65 }), star: [255, 210, 160],
+    config: WORLDS.bayou, star: STARS.bayou,
     shots: [
       { kind: 'wild', dur: 11, hour: [8, 8.6], speed: 10 },
       { kind: 'coast', dur: 11, hour: [19, 22.5] },
     ],
   },
   {
-    config: cfg({ seed: 'demo-inferno', planetType: PlanetType.LAVA_WORLD, volcanicActivity: 0.9, emberActivity: 0.8, crustAge: 0.2 }), star: [255, 180, 120],
+    config: WORLDS.inferno, star: STARS.inferno,
     shots: [
       { kind: 'lava', dur: 11, hour: [12, 12.4], zoom: [2, 2], speed: 18 },
       { kind: 'lava', dur: 12, hour: [19.2, 23], speed: 18 },
@@ -74,7 +59,7 @@ const PLANETS: DemoPlanet[] = [
     ],
   },
   {
-    config: cfg({ seed: 'demo-boreas', planetType: PlanetType.GLACIAL, baseTemperature: 0.2 }), star: [220, 235, 255],
+    config: WORLDS.boreas, star: STARS.boreas,
     shots: [
       { kind: 'peaks', dur: 11, hour: [10, 10.4], weather: 'snow', zoom: [3, 3] },
       { kind: 'peaks', dur: 10, hour: [16.5, 18.6], zoom: [2, 2] },
@@ -82,98 +67,6 @@ const PLANETS: DemoPlanet[] = [
     ],
   },
 ];
-// opens the film: a ringed gas giant drifting past
-const GIANT = cfg({ seed: 'demo-jove', planetType: PlanetType.GAS_GIANT, colorPalette: 'jovian', bandContrast: 0.75, stormFrequency: 0.6 });
-
-// ---------------------------------------------------------------------------------------------------
-// Space shots
-// ---------------------------------------------------------------------------------------------------
-class SpaceShot {
-  tex: PlanetTexture | null = null;
-  private img: ImageData | null = null;
-  private sphere = document.createElement('canvas');
-  private lastRot = -1;
-  private atmo; private cloud; private emissive;
-  private ring: RingSprite | null;
-  private backdrop: SpaceBackdrop;
-  private rays: HTMLCanvasElement;
-  private fade = 0;
-
-  constructor(readonly config: PlanetConfig, private star: RGB, rings: boolean) {
-    this.atmo = atmosphereFor(config);
-    this.cloud = cloudProfileFor(config);
-    this.emissive = emissiveFor(config);
-    this.ring = rings ? ringSprite(config.seed, this.atmo?.color ?? [210, 190, 160], false) : null;
-    this.backdrop = new SpaceBackdrop({ seed: config.seed + '_demo', nebula: 0.9, density: 1.1 });
-    this.rays = starRaysSprite(star, config.seed);
-    requestPlanetTexture(config, 1000, 512).then(t => { this.tex = t; }).catch(() => { /* stays a starfield */ });
-  }
-
-  /** px/py/pr in CSS px; sx/sy: the star. */
-  draw(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: number, t: number, dt: number, px: number, py: number, pr: number, sx: number, sy: number) {
-    this.backdrop.draw(ctx, w, h, t * 22, t * 5, t);
-    const sr = Math.min(w, h) * 0.03;
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = 0.9;
-    ctx.drawImage(glowSprite(this.star, 1.4), sx - sr * 16, sy - sr * 16, sr * 32, sr * 32);
-    ctx.drawImage(glowSprite([255, 250, 235], 3), sx - sr * 3, sy - sr * 3, sr * 6, sr * 6);
-    ctx.translate(sx, sy);
-    ctx.rotate(t * 0.02);
-    ctx.globalAlpha = 0.7;
-    ctx.drawImage(this.rays, -sr * 14, -sr * 14, sr * 28, sr * 28);
-    ctx.restore();
-    const tex = this.tex;
-    if (!tex) return;
-    this.fade = Math.min(1, this.fade + dt * 1.2);
-    const lx = sx - px, ly = sy - py, ll = Math.hypot(lx, ly) || 1;
-    const light: [number, number, number] = [lx / ll * 0.85, ly / ll * 0.85, 0.52];
-    const ring = this.ring;
-    const drawRing = (back: boolean) => {
-      if (!ring) return;
-      const R = pr * Math.min(ring.outer, 2.25);
-      ctx.save();
-      ctx.translate(px, py);
-      ctx.rotate(-0.32);
-      ctx.beginPath();
-      if (back) ctx.rect(-R - 2, -R - 2, R * 2 + 4, R + 2); else ctx.rect(-R - 2, 0, R * 2 + 4, R + 2);
-      ctx.clip();
-      ctx.scale(1, 0.22);
-      ctx.globalAlpha = 0.9 * this.fade;
-      ctx.drawImage(ring.canvas, -R, -R, R * 2, R * 2);
-      ctx.restore();
-    };
-    drawRing(true);
-    if (this.atmo) {
-      const outer = pr * (1 + this.atmo.thickness * 2);
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = this.atmo.intensity * 0.6 * this.fade;
-      ctx.drawImage(haloSprite(this.atmo.color, pr / outer), px - outer + light[0] * pr * 0.06, py - outer + light[1] * pr * 0.06, outer * 2, outer * 2);
-      ctx.restore();
-    }
-    const size = Math.max(64, Math.min(640, Math.round(pr * 2 * dpr / 8) * 8));
-    const rot = (t / 90) % 1;
-    if (!this.img || this.img.width !== size || Math.abs(rot - this.lastRot) > 0.5 / tex.width) {
-      if (!this.img || this.img.width !== size) { this.img = new ImageData(size, size); this.sphere.width = size; this.sphere.height = size; }
-      renderSphere(this.img, tex, {
-        rotation: rot, cloudRotation: rot * 1.15 + 0.2, light, ambient: 0.025, emissive: this.emissive,
-        cloudColor: this.cloud?.color ?? [255, 255, 255], cloudOpacity: this.cloud?.opacity ?? 0,
-        rimColor: this.atmo?.color ?? null, rimStrength: this.atmo ? this.atmo.intensity : 0,
-      });
-      this.sphere.getContext('2d')!.putImageData(this.img, 0, 0);
-      this.lastRot = rot;
-    }
-    ctx.save();
-    ctx.globalAlpha = this.fade;
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(this.sphere, px - pr, py - pr, pr * 2, pr * 2);
-    ctx.restore();
-    drawRing(false);
-  }
-  get atmoColor(): RGB { return (this.atmo?.color as RGB) ?? [200, 220, 255]; }
-}
 
 // ---------------------------------------------------------------------------------------------------
 // The reel
@@ -281,8 +174,6 @@ export function DemoReel({ onExit, startAt = -1 }: { onExit: () => void; /** fir
         const k = ease(t / 10);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         shot.draw(ctx, w, h, dpr, t, dt, w * (1.25 - k * 0.75), h * (0.7 - k * 0.08), m * (0.62 + k * 0.1), w * 0.14, h * 0.2);
-        const fade = Math.max(1 - t / 1.5, (t - 9) / 1.2);
-        if (fade > 0) { ctx.fillStyle = `rgba(0,0,0,${Math.min(1, fade)})`; ctx.fillRect(0, 0, w, h); }
         if (t > 10.2) { scene = PLANETS.length - 1; next(); }
       } else if (phase !== 'surface') {
         // --- approach: the planet grows until the camera dives through its atmosphere ---
@@ -307,8 +198,6 @@ export function DemoReel({ onExit, startAt = -1 }: { onExit: () => void; /** fir
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         shot.draw(ctx, w, h, dpr, clock, dt, px, py, pr, w * 0.12, h * 0.18);
         if (flash > 0) { const c = shot.atmoColor; ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${flash})`; ctx.fillRect(0, 0, w, h); }
-        const fin = phase === 'space' ? 1 - t / 1.2 : 0;
-        if (fin > 0) { ctx.fillStyle = `rgba(0,0,0,${fin})`; ctx.fillRect(0, 0, w, h); }
         canvas.style.opacity = String(alpha);
         if (phase === 'surface') canvas.style.opacity = '0';
       } else {

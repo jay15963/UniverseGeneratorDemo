@@ -402,6 +402,7 @@ export class NatureFx {
   // Screen-space: weather tint, rain/snow, darkness with lantern light, fireflies
   // ---------------------------------------------------------------------------
   drawScreen(ctx: CanvasRenderingContext2D, W: number, H: number, S: number, c: FxContext, toScreen: (x: number, y: number) => [number, number]) {
+    if (W < 1 || H < 1) return;
     const R = this.rng;
     const I = this.intensity;
     // overcast tint

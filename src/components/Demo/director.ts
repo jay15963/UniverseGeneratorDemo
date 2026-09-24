@@ -1,5 +1,6 @@
-// Demo reel director for the planet surface: finds beautiful places on a planet (coasts, wildlife, cliffs, snow)
-// and films them with a scripted spectator camera - slow pans, time-lapses, weather and a pull-out to the world map.
+// Director for the planet surface (demo reel and trailer): finds beautiful places on a planet (coasts, wildlife,
+// cliffs, lava, snow) and films them with a scripted spectator camera - slow pans, time-lapses, weather and a pull-out
+// to the world map. Shots change with hard cuts: the next place streams in while the current one is on screen.
 import type { PlanetSession } from '../../lib/planet-generator/planetClient';
 import { PlanetType, BiomeType } from '../../lib/planet-generator/generator';
 import type { PlanetProbe } from '../../lib/planet-generator/workerProtocol';
@@ -21,6 +22,8 @@ export interface ShotSpec {
   zoom?: [number, number];
   /** pan speed, world px per second */
   speed?: number;
+  /** absolute start time on the soundtrack (timed directors only; the shot lasts until the next one starts) */
+  at?: number;
 }
 
 interface Spot { x: number; y: number }
@@ -88,22 +91,27 @@ export async function scout(session: PlanetSession): Promise<Scouted> {
   return out;
 }
 
-interface Planned { spec: ShotSpec; cx: number; cy: number; dx: number; dy: number; refined: boolean; cont: boolean }
+interface Planned { spec: ShotSpec; cx: number; cy: number; dx: number; dy: number; refined: boolean; cont: boolean; dur: number }
 
-/** Plays a list of shots on one planet. `ready` flips once the first shot is loaded; `finished` after the last one. */
+/**
+ * Plays a list of shots on one planet.
+ * - free-running (demo reel): each shot lasts `dur`; the cut waits (a little) until the next place is loaded.
+ * - timed (trailer): shots start at `spec.at` on the `clock` (the soundtrack), whatever happens.
+ * `ready` flips once the first shot is loaded; `finished` after the last one.
+ */
 export class SurfaceCine implements Cinematic {
   ready = false;
   finished = false;
+  /** no terrain left to stream in around the camera */
+  idle = false;
   private shots: Planned[] = [];
   private i = 0;
   private t = 0;
-  private wait = 0;
-  private phase: 'wait' | 'play' = 'wait';
-  private last: CineCam = { x: 0, y: 0, zoom: 3, fade: 1 };
+  private last: CineCam = { x: 0, y: 0, zoom: 3, fade: 0 };
   /** map px of the first shot (where the renderer spawns) */
   readonly start: Spot;
 
-  constructor(specs: ShotSpec[], spots: Scouted, W: number, seed: string) {
+  constructor(specs: ShotSpec[], spots: Scouted, W: number, seed: string, private clock?: () => number, endAt?: number) {
     const rnd = mulberry(seedToInt(seed + ':demo'));
     const S = (WORLD_TILES_X / W) * TILE; // world px per map px
     const used = new Set<Spot>();
@@ -113,16 +121,18 @@ export class SurfaceCine implements Cinematic {
       if (s) used.add(s);
       return s;
     };
-    for (const spec of specs) {
+    specs.forEach((spec, n) => {
       const kind = (spec.kind === 'coast' || spec.kind === 'cold' || spec.kind === 'lava') && !spots[spec.kind].length ? 'peaks' : spec.kind;
       const cont = kind === 'rise' && this.shots.length > 0;
       const s = kind === 'rise' ? (cont ? null : pick(spots.land)) : pick(spots[kind]) ?? pick(spots.land);
       const a = rnd() * Math.PI * 2;
+      const next = specs[n + 1];
+      const dur = spec.at !== undefined ? (next?.at ?? endAt ?? spec.at + spec.dur) - spec.at : spec.dur;
       this.shots.push({
         spec: { ...spec, kind }, cx: s ? (s.x + 0.5) * S : 0, cy: s ? (s.y + 0.5) * S : 0,
-        dx: Math.cos(a), dy: Math.sin(a) * 0.6, refined: cont || kind === 'rise', cont,
+        dx: Math.cos(a), dy: Math.sin(a) * 0.6, refined: cont || kind === 'rise', cont, dur,
       });
-    }
+    });
     const f = this.shots[0];
     this.start = { x: Math.floor(f.cx / S), y: Math.floor(f.cy / S) };
   }
@@ -131,20 +141,30 @@ export class SurfaceCine implements Cinematic {
     if (sh.spec.kind === 'rise') {
       // local view -> regional -> the whole planet, exponentially (steady perceived speed), then hold
       const z0 = sh.spec.zoom?.[0] ?? 3, z1 = api.worldZoom;
-      const k = smooth(0.08, 0.78, u);
+      const k = smooth(0.05, 0.8, u);
       return Math.exp(Math.log(z0) + (Math.log(z1) - Math.log(z0)) * k);
     }
     const [z0, z1] = sh.spec.zoom ?? [3, 3];
     return z0 + (z1 - z0) * u;
   }
   private camAt(sh: Planned, u: number, api: CineApi): CineCam {
-    const dist = sh.spec.kind === 'rise' ? 0 : (sh.spec.speed ?? 26) * sh.spec.dur;
-    const zoom = this.zoomAt(sh, u, api);
+    const dist = sh.spec.kind === 'rise' ? 0 : (sh.spec.speed ?? 26) * sh.dur;
     const [h0, h1] = sh.spec.hour;
     return {
-      x: sh.cx + sh.dx * (u - 0.5) * dist, y: sh.cy + sh.dy * (u - 0.5) * dist, zoom, fade: 0,
+      x: sh.cx + sh.dx * (u - 0.5) * dist, y: sh.cy + sh.dy * (u - 0.5) * dist, zoom: this.zoomAt(sh, u, api), fade: 0,
       hour: h0 + (h1 - h0) * u, weather: sh.spec.weather ?? 'clear',
     };
+  }
+
+  /** Streams a shot's place in, then moves it to the best spot on the loaded tiles. true once it can be cut to. */
+  private prepare(sh: Planned, api: CineApi): { ready: boolean; preload: { x: number; y: number } } {
+    if (sh.cont) return { ready: true, preload: { x: this.last.x, y: this.last.y } };
+    if (!sh.refined) {
+      if (api.loaded(sh.cx, sh.cy, 2)) { this.refine(sh, api); sh.refined = true; }
+      return { ready: false, preload: { x: sh.cx, y: sh.cy } };
+    }
+    const c0 = this.camAt(sh, 0, api);
+    return { ready: api.loaded(c0.x, c0.y, c0.zoom), preload: { x: c0.x, y: c0.y } };
   }
 
   /** Moves a shot to the best nearby spot, judged on the loaded terrain (tile precision). */
@@ -192,30 +212,52 @@ export class SurfaceCine implements Cinematic {
   }
 
   update(dt: number, api: CineApi): CineCam {
-    const sh = this.shots[this.i];
-    if (!sh) return { ...this.last, fade: 1 };
-    if (this.phase === 'wait') {
-      this.wait += dt;
-      const z0 = this.zoomAt(sh, 0, api);
-      if (sh.cont) { sh.cx = this.last.x; sh.cy = this.last.y; }
-      if (!sh.refined && (api.loaded(sh.cx, sh.cy, Math.min(z0, 2)) || this.wait > 6)) { this.refine(sh, api); sh.refined = true; this.wait = Math.min(this.wait, 5); }
-      const c0 = this.camAt(sh, 0, api);
-      if (sh.refined && (sh.cont || api.loaded(c0.x, c0.y, c0.zoom) || this.wait > 9)) { this.phase = 'play'; this.t = 0; this.ready = true; }
-      this.last = { ...c0, fade: sh.cont ? 0 : 1 };
-      return this.last;
+    this.idle = api.pending() === 0;
+    const timed = !!this.clock;
+    if (timed) {
+      // the soundtrack decides which shot is on screen
+      const now = this.clock!();
+      let i = 0;
+      while (i + 1 < this.shots.length && now >= (this.shots[i + 1].spec.at ?? 0)) i++;
+      if (i !== this.i) { this.i = i; if (this.shots[i].cont) { this.shots[i].cx = this.last.x; this.shots[i].cy = this.last.y; } }
+      const sh = this.shots[i];
+      const start = sh.spec.at ?? 0;
+      if (now < start) {
+        // pre-roll: park the camera on the first place so it streams in (and is refined) before the cut
+        const p = this.prepare(sh, api);
+        this.ready = p.ready;
+        this.last = { ...this.camAt(sh, 0, api), x: p.preload.x, y: p.preload.y, preload: null };
+        return this.last;
+      }
+      this.ready = true;
+      if (now >= start + sh.dur && i === this.shots.length - 1) this.finished = true;
+      const cam = this.camAt(sh, Math.min(1, (now - start) / sh.dur), api);
+      const nx = this.shots[i + 1];
+      cam.preload = nx ? this.prepare(nx, api).preload : null;
+      this.last = cam;
+      return cam;
+    }
+
+    let sh = this.shots[this.i];
+    if (!sh) return this.last;
+    if (!this.ready) {
+      const p = this.prepare(sh, api);
+      this.last = { ...this.camAt(sh, 0, api), x: p.preload.x, y: p.preload.y };
+      if (p.ready) this.ready = true; else return this.last;
     }
     this.t += dt;
-    const u = Math.min(1, this.t / sh.spec.dur);
-    const cam = this.camAt(sh, u, api);
-    const next = this.shots[this.i + 1];
-    const fin = sh.cont ? 1 : Math.min(1, this.t / 0.9);
-    const fout = next?.cont ? 1 : Math.min(1, (sh.spec.dur - this.t) / 0.9);
-    cam.fade = 1 - Math.max(0, Math.min(fin, fout));
-    this.last = cam;
-    if (this.t >= sh.spec.dur) {
-      this.i++; this.phase = 'wait'; this.wait = 0;
-      if (this.i >= this.shots.length) this.finished = true;
+    const nx = this.shots[this.i + 1];
+    const np = nx ? this.prepare(nx, api) : null;
+    // hard cut when the shot is over and the next place is on screen-ready (or we waited long enough)
+    if (this.t >= sh.dur && (!np || np.ready || this.t > sh.dur + 4)) {
+      if (!nx) { this.finished = true; return this.last; }
+      this.i++; this.t = 0; sh = nx;
+      if (sh.cont) { sh.cx = this.last.x; sh.cy = this.last.y; }
     }
+    const cam = this.camAt(sh, Math.min(1, this.t / sh.dur), api);
+    const n2 = this.shots[this.i + 1];
+    cam.preload = n2 ? this.prepare(n2, api).preload : null;
+    this.last = cam;
     return cam;
   }
 }

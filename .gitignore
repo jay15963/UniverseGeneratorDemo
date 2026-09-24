@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# trailer soundtrack (licensed music: not redistributed with the source)
+public/trailer/*.mp3

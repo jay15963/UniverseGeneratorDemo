@@ -19,11 +19,12 @@ import { GameApplication } from './components/Game/GameApplication';
 import { AssetGallery } from './components/Survival/AssetGallery';
 import { CreatureGenerator } from './components/Creature/CreatureGenerator';
 import { DemoReel } from './components/Demo/DemoReel';
+import { Trailer } from './components/Trailer/Trailer';
 
 export default function App() {
   const { config, setConfig, bodies, isGenerating, handleGenerate, showZones, setShowZones } = useSolarSystemController();
   
-  const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator' | 'creature-generator' | 'demo'>(() => (typeof window !== 'undefined' && window.location.hash === '#criaturas' ? 'creature-generator' : typeof window !== 'undefined' && window.location.hash.startsWith('#demo') ? 'demo' : 'menu'));
+  const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator' | 'creature-generator' | 'demo' | 'trailer'>(() => (typeof window !== 'undefined' && window.location.hash === '#criaturas' ? 'creature-generator' : typeof window !== 'undefined' && window.location.hash.startsWith('#demo') ? 'demo' : typeof window !== 'undefined' && window.location.hash.startsWith('#trailer') ? 'trailer' : 'menu'));
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
@@ -79,8 +80,15 @@ export default function App() {
         onPlay={() => setCurrentView('game')}
         onCreatureStart={() => setCurrentView('creature-generator')}
         onDemo={() => setCurrentView('demo')}
+        onTrailer={() => setCurrentView('trailer')}
       />
     );
+  }
+
+  if (currentView === 'trailer') {
+    // #trailer=SECONDS starts from that point of the soundtrack; #trailer=SECONDS,STEP runs a silent fixed-step clock (testing)
+    const m = /^#trailer=(-?[\d.]+)(?:,([\d.]+))?$/.exec(window.location.hash);
+    return <Trailer onExit={() => { if (window.location.hash.startsWith('#trailer')) window.location.hash = ''; setCurrentView('menu'); }} seek={m ? +m[1] : undefined} step={m?.[2] ? +m[2] : 0} />;
   }
 
   if (currentView === 'demo') {

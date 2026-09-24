@@ -10,6 +10,8 @@ export interface CineApi {
   viewW: number; viewH: number;
   /** loaded terrain under a world point (null when its chunk is not loaded) */
   tile(x: number, y: number): { water: boolean; lava: boolean; level: number } | null;
+  /** terrain chunks still being generated or uploaded */
+  pending(): number;
   /** wildlife currently alive around the camera */
   animals(): readonly { x: number; y: number; state: string }[];
 }
@@ -23,6 +25,8 @@ export interface CineCam {
   /** time of day in hours (0-24) */
   hour?: number;
   weather?: Weather;
+  /** terrain to load ahead of a hard cut (world px) */
+  preload?: { x: number; y: number } | null;
 }
 export interface Cinematic {
   update(dt: number, api: CineApi): CineCam;

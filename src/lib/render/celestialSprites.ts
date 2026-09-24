@@ -205,6 +205,11 @@ export function cssColorToRgb(c: string): RGB {
 }
 
 const galaxySpriteCache = new Map<string, HTMLCanvasElement>();
+/** The cached galaxy sprite, or null when it has not been baked yet. */
+export function peekGalaxySprite(shape: string, color: RGB, variant: number): HTMLCanvasElement | null {
+  const q = color.map(v => Math.round(v / 24) * 24);
+  return galaxySpriteCache.get(`${shape}|${q.join(',')}|${variant}`) ?? null;
+}
 export function galaxySprite(shape: string, color: RGB, variant: number): HTMLCanvasElement {
   const q = color.map(v => Math.round(v / 24) * 24) as RGB; // quantise colours to bound the cache
   const key = `${shape}|${q.join(',')}|${variant}`;
