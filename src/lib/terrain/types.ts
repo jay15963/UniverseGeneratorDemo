@@ -3,6 +3,9 @@
 export const TILE = 16;          // pixels per tile
 export const CHUNK = 32;         // tiles per chunk side
 export const CHUNK_PX = TILE * CHUNK;
+/** Screen pixels a tile is raised per terrain level (3/4 view). */
+export const LIFT = 10;
+export const MAX_LEVEL = 24;
 /** Tiles per planet-map pixel is derived so the walkable world has the same size for any map resolution. */
 export const WORLD_TILES_X = 131072;
 
@@ -65,12 +68,25 @@ export interface Feature {
   v: number;   // variant (species, rock type, sprite variant...)
   x: number;   // world pixel of the base point (where it touches the ground)
   y: number;
+  l: number;   // terrain level of the tile it stands on
+}
+
+/** One tile row of a chunk, pre-composited with raised terrain and cliff faces. */
+export interface TerrainRow {
+  y: number;   // world-screen y of the buffer's top edge (row ground y - rowMaxLevel*LIFT)
+  h: number;   // buffer height in px
+  px: Uint8ClampedArray; // CHUNK_PX x h RGBA
 }
 
 export interface ChunkData {
   cx: number;
   cy: number;
-  pixels: Uint8ClampedArray; // CHUNK_PX² RGBA
+  rows: TerrainRow[];        // CHUNK rows, north to south
+  level: Uint8Array;         // CHUNK² terrain level
+  ramp: Uint8Array;          // CHUNK² 1 = walkable slope to the level below
+  falls: { x: number; y: number; w: number; h: number }[]; // waterfall faces (world-screen coords)
+  lava: Uint8Array;          // CHUNK² 1 = lava tile (for glow/embers)
+  mini: Uint8ClampedArray;   // CHUNK² RGBA minimap colours
   ground: Uint8Array;        // CHUNK² ground ids
   biome: Uint8Array;         // CHUNK² biome ids (BiomeType, 255 = none)
   rock: Uint8Array;          // CHUNK² RockType

@@ -1,7 +1,7 @@
 // Playable surface generator. Runs inside the planet worker, reading the full-resolution planet
 // fields so the local terrain matches the world map (biomes, coasts, rivers, ores, climate).
 import { PlanetGenerator, PlanetType, BiomeType } from '../planet-generator/generator';
-import { Ground, Feat, Feature, ChunkData, TILE, CHUNK, CHUNK_PX, WORLD_TILES_X } from './types';
+import { Ground, Feat, Feature, ChunkData, TerrainRow, TILE, CHUNK, CHUNK_PX, WORLD_TILES_X, LIFT, MAX_LEVEL } from './types';
 import { fbm2, vnoise, rand2, ridge, hash3, mulberry, seedToInt, smoothstep } from './noise';
 import { RockType, ROCK_RAMPS, GROUND_RAMPS, LEAF, RGB, shiftRamp, vegetationHueShift, waterHueShift, hex } from './palettes';
 
@@ -20,6 +20,8 @@ interface TileInfo {
   rock: RockType;
   wet: number;       // 0..1 closeness to water (floodplain / creek bank)
   beach: boolean;
+  lv: number;        // terrain level (0 = sea level plain)
+  ramp: boolean;     // walkable slope down to a neighbour one level lower
 }
 
 const B = 2; // tile border computed around each chunk
@@ -113,6 +115,22 @@ export class TerrainGenerator {
     return moist > 0.65 ? BiomeType.TROPICAL_RAINFOREST : moist > 0.45 ? BiomeType.SAVANNA : BiomeType.SUBTROPICAL_DESERT;
   }
 
+  /** Discrete terrain level: plains stay flat, highlands terrace into plateaus and cliffs. */
+  levelOf(t: TileInfo, tx: number, ty: number): number {
+    if (t.g === Ground.DEEP_WATER || (this.hasSea && t.h <= this.sea)) return 0;
+    const ref = this.hasSea ? this.sea : this.gen.config.seaLevel;
+    const alt = (t.h - ref) / Math.max(0.05, 1 - ref);
+    if (alt <= 0) return 0;
+    const m = smoothstep(0.16, 0.5, alt);
+    // rugged ridges & valleys inside mountain ranges, gentle knolls on the plains
+    const rug = ridge(tx / 44, ty / 44, this.seed + 82, 3);
+    const e = alt * (0.32 + 0.68 * m)
+      + m * (rug * rug * 0.2 + (fbm2(tx / 14, ty / 14, this.seed + 83, 2) - 0.5) * 0.05)
+      + (fbm2(tx / 23, ty / 23, this.seed + 80, 3) - 0.5) * 0.07 * (0.35 + m)
+      + (1 - m) * Math.max(0, fbm2(tx / 30, ty / 30, this.seed + 84, 3) - 0.58) * 0.35;
+    return Math.max(0, Math.min(MAX_LEVEL, Math.floor(e / 0.038)));
+  }
+
   /** Full per-tile environment. */
   tile(tx: number, ty: number): TileInfo {
     const gen = this.gen, S = this.S, s = this.seed;
@@ -132,7 +150,7 @@ export class TerrainGenerator {
     temp = Math.max(0, Math.min(1, temp));
     moist = Math.max(0, Math.min(1, moist));
 
-    const info: TileInfo = { g: Ground.GRASS, biome: 255, h, depth: 0, temp, moist, fert, ore, forest: 0, rock, wet: 0, beach: false };
+    const info: TileInfo = { g: Ground.GRASS, biome: 255, h, depth: 0, temp, moist, fert, ore, forest: 0, rock, wet: 0, beach: false, lv: 0, ramp: false };
     if (this.mode !== 'living') { this.barrenGround(info, tx, ty); return info; }
 
     const sea = this.sea;
@@ -286,7 +304,40 @@ export class TerrainGenerator {
   chunk(cx: number, cy: number): ChunkData {
     const tx0 = cx * CHUNK - B, ty0 = cy * CHUNK - B;
     const tiles: TileInfo[] = new Array(N * N);
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) tiles[j * N + i] = this.tile(tx0 + i, ty0 + j);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const t = this.tile(tx0 + i, ty0 + j);
+      t.lv = this.levelOf(t, tx0 + i, ty0 + j);
+      tiles[j * N + i] = t;
+    }
+    // Walkable slopes: clustered stretches of a terrace edge become ramps
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const t = tiles[j * N + i];
+      if (t.lv === 0 || isWater(t.g)) continue;
+      let down1 = false, cliff = false;
+      for (const [dx, dy] of NB4) {
+        const ii = i + dx, jj = j + dy;
+        if (ii < 0 || jj < 0 || ii >= N || jj >= N) continue;
+        const d = t.lv - tiles[jj * N + ii].lv;
+        if (d === 1) down1 = true; else if (d > 1) cliff = true;
+      }
+      if (down1 && !cliff && vnoise((tx0 + i) / 6, (ty0 + j) / 6, this.seed + 81) > 0.64) t.ramp = true;
+    }
+
+    // Steep terrain turns rocky: scree on multi-level slopes, bare rock and snow on high peaks
+    for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) {
+      const t = tiles[j * N + i];
+      if (t.lv < 3 || isWater(t.g) || t.g === Ground.LAVA) continue;
+      let steep = 0, edge = false;
+      for (const [dx, dy] of NB4) {
+        const d = Math.abs(t.lv - tiles[(j + dy) * N + i + dx].lv);
+        if (d >= 2) steep++;
+        if (d >= 1) edge = true;
+      }
+      const n = vnoise((tx0 + i) / 5, (ty0 + j) / 5, this.seed + 85);
+      if (t.lv >= 8 && t.temp < 0.45 && n > 0.25) { t.g = Ground.SNOW; t.forest *= 0.2; }
+      else if (steep >= 2 || (steep === 1 && n > 0.5)) { t.g = n > 0.7 ? Ground.GRAVEL : Ground.STONE; t.forest *= 0.25; }
+      else if (edge && !t.ramp && t.lv >= 4 && n > 0.72) { t.g = Ground.GRAVEL; t.forest *= 0.6; }
+    }
 
     // Water proximity (for reeds, wet shores)
     const nearWater = new Uint8Array(N * N);
@@ -301,16 +352,26 @@ export class TerrainGenerator {
     }
 
     const pixels = this.raster(cx, cy, tiles, nearWater);
+    const falls: ChunkData['falls'] = [];
+    const rows = this.compose(cx, cy, tiles, pixels, falls);
     const features = this.place(cx, cy, tiles, nearWater);
 
     const ground = new Uint8Array(CHUNK * CHUNK), biome = new Uint8Array(CHUNK * CHUNK), rock = new Uint8Array(CHUNK * CHUNK);
     const temp = new Float32Array(CHUNK * CHUNK);
+    const level = new Uint8Array(CHUNK * CHUNK), ramp = new Uint8Array(CHUNK * CHUNK), lava = new Uint8Array(CHUNK * CHUNK);
     for (let j = 0; j < CHUNK; j++) for (let i = 0; i < CHUNK; i++) {
       const t = tiles[(j + B) * N + i + B];
       const k = j * CHUNK + i;
       ground[k] = t.g; biome[k] = t.biome; rock[k] = t.rock; temp[k] = t.temp;
+      level[k] = t.lv; ramp[k] = t.ramp ? 1 : 0; lava[k] = t.g === Ground.LAVA ? 1 : 0;
     }
-    return { cx, cy, pixels, ground, biome, rock, temp, features };
+    const mini = new Uint8ClampedArray(CHUNK * CHUNK * 4);
+    for (let j = 0; j < CHUNK; j++) for (let i = 0; i < CHUNK; i++) {
+      const gk = ((j * TILE + 8) * CHUNK_PX + i * TILE + 8) * 4, mk = (j * CHUNK + i) * 4;
+      const lvl = 1 + level[j * CHUNK + i] * 0.035;
+      mini[mk] = pixels[gk] * lvl; mini[mk + 1] = pixels[gk + 1] * lvl; mini[mk + 2] = pixels[gk + 2] * lvl; mini[mk + 3] = 255;
+    }
+    return { cx, cy, rows, ground, biome, rock, temp, level, ramp, lava, falls, features, mini };
   }
 
   // ---------------------------------------------------------------------------
@@ -366,7 +427,9 @@ export class TerrainGenerator {
         const wx = px0 + px, wy = py0 + py;
         const hk = (py >> 1) * HR + (px >> 1);
         const jx = JX[hk], jy = JY[hk];
-        const ti = lookup(px + jx, py + jy);
+        let ti = lookup(px + jx, py + jy);
+        const own = lookup(px, py);
+        if (tiles[ti].lv !== tiles[own].lv) ti = own; // crisp terrace edges
         const t = tiles[ti];
         const g = t.g;
         const r0 = rand2(wx, wy, s);
@@ -558,12 +621,120 @@ export class TerrainGenerator {
   }
 
   // ---------------------------------------------------------------------------
+  // Raised terrain: each tile row becomes a buffer where tiles are lifted by their level
+  // and exposed south faces are painted as rock cliffs, grassy ramps or waterfalls.
+  // ---------------------------------------------------------------------------
+  private compose(cx: number, cy: number, tiles: TileInfo[], G: Uint8ClampedArray, falls: ChunkData['falls']): TerrainRow[] {
+    const rows: TerrainRow[] = [];
+    const s = this.seed;
+    const R = this.ramps;
+    for (let j = 0; j < CHUNK; j++) {
+      const jj = j + B;
+      let maxL = 0, minL = MAX_LEVEL;
+      for (let i = 0; i < CHUNK; i++) {
+        const lv = tiles[jj * N + i + B].lv;
+        maxL = Math.max(maxL, lv);
+        minL = Math.min(minL, lv, Math.max(0, Math.min(lv, tiles[(jj + 1) * N + i + B].lv)));
+      }
+      const H = TILE + (maxL - minL) * LIFT; // buffer spans only this row's own relief
+      const buf = new Uint8ClampedArray(CHUNK_PX * H * 4);
+      const rowGroundY = (cy * CHUNK + j) * TILE;
+      for (let i = 0; i < CHUNK; i++) {
+        const t = tiles[jj * N + i + B];
+        const L = t.lv;
+        const north = tiles[(jj - 1) * N + i + B].lv, south = tiles[(jj + 1) * N + i + B].lv;
+        const west = tiles[jj * N + i + B - 1].lv, east = tiles[jj * N + i + B + 1].lv;
+        const top = (maxL - L) * LIFT;
+        const wx0 = (cx * CHUNK + i) * TILE;
+        // --- surface ---
+        for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) {
+          const gk = ((j * TILE + y) * CHUNK_PX + i * TILE + x) * 4;
+          const bk = ((top + y) * CHUNK_PX + i * TILE + x) * 4;
+          let r = G[gk], g = G[gk + 1], b = G[gk + 2];
+          const bright = t.g === Ground.SNOW || t.g === Ground.ICE || t.g === Ground.SALT_FLAT;
+          let k = bright ? 1 - Math.min(L, 6) * 0.012 : 1 + Math.min(L, 8) * 0.018; // higher terraces catch more light
+          if (north < L && y === 0) k *= bright ? 1.04 : 1.22;               // lit crest
+          if (north < L && y === 1) k *= 1.08;
+          if (north > L && y < 4) k *= [0.55, 0.68, 0.8, 0.92][y];          // occlusion under a cliff
+          if (west < L && x === 0) k *= 1.1;
+          if (east < L && x === TILE - 1) k *= 0.72;
+          if (west > L && x < 5) k *= [0.62, 0.72, 0.8, 0.88, 0.95][x];   // cliff shadow falls east
+          // chamfer convex corners so terraces read as rounded rock, not boxes
+          const cut = (south < L && west < L && x + (TILE - 1 - y) < 3) || (south < L && east < L && (TILE - 1 - x) + (TILE - 1 - y) < 3);
+          if (cut && south < L) {
+            const rk = ROCK_RAMPS[t.rock][1];
+            buf[bk] = rk[0]; buf[bk + 1] = rk[1]; buf[bk + 2] = rk[2]; buf[bk + 3] = 255;
+            continue;
+          }
+          buf[bk] = r * k; buf[bk + 1] = g * k; buf[bk + 2] = b * k; buf[bk + 3] = 255;
+        }
+        // --- south face ---
+        if (south >= L) continue;
+        const fh = (L - south) * LIFT;
+        const f0 = top + TILE;
+        const water = isWater(t.g), lava = t.g === Ground.LAVA;
+        const isRamp = t.ramp && L - south === 1 && !water && !lava;
+        if (water) falls.push({ x: wx0, y: rowGroundY - maxL * LIFT + f0, w: TILE, h: fh });
+        const rock = ROCK_RAMPS[t.rock];
+        const veg = t.g === Ground.GRASS || t.g === Ground.LUSH_GRASS || t.g === Ground.FOREST_FLOOR || t.g === Ground.JUNGLE_FLOOR ||
+          t.g === Ground.MARSH || t.g === Ground.NEEDLES || t.g === Ground.TUNDRA || t.g === Ground.DRY_GRASS;
+        const snowy = t.g === Ground.SNOW;
+        for (let x = 0; x < TILE; x++) {
+          const wx = wx0 + x;
+          const gkb = ((j * TILE + TILE - 1) * CHUNK_PX + i * TILE + x) * 4; // surface's bottom pixel colour
+          const lip = veg || snowy ? 1 + Math.floor(rand2(wx, rowGroundY, s + 92) * (snowy ? 3 : 5)) : Math.floor(rand2(wx, rowGroundY, s + 92) * 2);
+          for (let y = 0; y < fh; y++) {
+            const bk = ((f0 + y) * CHUNK_PX + i * TILE + x) * 4;
+            const fy = y / Math.max(1, fh - 1);
+            let c: RGB;
+            if (water || lava) {
+              const wr = lava ? R.lava : R.shallow;
+              const streak = rand2(wx, Math.floor((y + wx * 3) / 3), s + 93);
+              let idx = lava ? 3 + streak * 2 : 2.5 + (streak > 0.6 ? 1.6 : 0) - fy * 0.8;
+              if (!lava && y >= fh - 2) idx = 5.2;
+              c = wr[Math.max(0, Math.min(wr.length - 1, Math.round(idx)))];
+              if (!lava && y >= fh - 2 && rand2(wx, y, s + 94) > 0.4) c = [235, 245, 250];
+            } else if (isRamp) {
+              const base: RGB = [G[gkb], G[gkb + 1], G[gkb + 2]];
+              let k = 0.82 - fy * 0.3 + (rand2(wx, y, s + 95) - 0.5) * 0.08;
+              if (y % 3 === 0) k -= 0.16;             // earthen steps of the path
+              if (x === 0 || x === TILE - 1) k -= 0.12;
+              c = [base[0] * k, base[1] * k, base[2] * k];
+            } else if (y < lip) {
+              const base: RGB = [G[gkb], G[gkb + 1], G[gkb + 2]];
+              const k = snowy ? 1 : 0.72 - y * 0.08;
+              c = [base[0] * k, base[1] * k, base[2] * k];
+            } else {
+              const band = Math.floor((y + (rowGroundY >> 1)) / 3);
+              const strat = rand2(wx >> 2, band, s + 90);
+              let idx = 3.4 - fy * 2.4 + (strat - 0.5) * 1.1;
+              if (rand2(wx, y >> 2, s + 91) > 0.92) idx -= 1.6;           // vertical cracks
+              if (x < 2) idx += 0.6;                                      // lit left edge
+              if (x > TILE - 3) idx -= 0.4;
+              if (y === fh - 1) idx = 0;
+              if (t.moist > 0.6 && this.mode === 'living' && rand2(wx >> 1, y >> 1, s + 96) > 0.9) { c = R.moss[2]; }
+              else c = rock[Math.max(0, Math.min(rock.length - 1, Math.round(idx)))];
+            }
+            buf[bk] = c[0]; buf[bk + 1] = c[1]; buf[bk + 2] = c[2]; buf[bk + 3] = 255;
+          }
+        }
+      }
+      rows.push({ y: rowGroundY - maxL * LIFT, h: H, px: buf });
+    }
+    return rows;
+  }
+
+  // ---------------------------------------------------------------------------
   // Feature placement
   // ---------------------------------------------------------------------------
   private place(cx: number, cy: number, tiles: TileInfo[], nearWater: Uint8Array): Feature[] {
     const feats: Feature[] = [];
     let n = 0;
-    const add = (t: Feat, v: number, x: number, y: number) => feats.push({ id: `${cx}:${cy}:${n++}`, t, v, x: Math.round(x), y: Math.round(y) });
+    const add = (t: Feat, v: number, x: number, y: number) => {
+      const lx = Math.floor(x / TILE) - cx * CHUNK, ly = Math.floor(y / TILE) - cy * CHUNK;
+      const l = tiles[(Math.max(0, Math.min(CHUNK - 1, ly)) + B) * N + Math.max(0, Math.min(CHUNK - 1, lx)) + B].lv;
+      feats.push({ id: `${cx}:${cy}:${n++}`, t, v, x: Math.round(x), y: Math.round(y), l });
+    };
     const tx0 = cx * CHUNK, ty0 = cy * CHUNK;
     const occupied = new Uint8Array(CHUNK * CHUNK);
     const T = (i: number, j: number) => tiles[(j + B) * N + i + B];
@@ -746,6 +917,8 @@ export class TerrainGenerator {
     }
   }
 }
+
+const NB4: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 // flat [dx, dy, weight] triples, strongest first
 const SHORE_PROBES = [

@@ -175,14 +175,16 @@ export class SpriteBank {
     const trunkTop = base - (spruce ? 7 : 11);
     this.trunk(p, Math.round(cx), base, trunkTop - 4, spruce ? 3 : 3, BARK.pine, 2);
     const tiers = spruce ? 7 : 5;
-    const top = 3, bottom = trunkTop;
+    const top = 4, bottom = trunkTop;
     const maxHW = spruce ? 13 : 16;
+    const th = (bottom - top) / tiers * (spruce ? 1.9 : 2.1);
+    // leader tip above the crown
+    for (let y = 1; y < top + 2; y++) p.set(cx - 0.5, y, leaves[y < 2 ? 4 : 3]);
     for (let k = 0; k < tiers; k++) {
-      // draw bottom tier first; upper tiers overlap the lower ones
+      // draw bottom tier first; upper tiers overlap the lower ones; the top tier ends exactly at `top`
       const t = 1 - k / tiers;
-      const yb = top + (bottom - top) * t;
+      const yb = top + th + (bottom - top - th) * (1 - k / (tiers - 1));
       const hw = maxHW * (spruce ? t * 0.95 + 0.12 : Math.pow(t, 0.8) * 0.9 + 0.12);
-      const th = (bottom - top) / tiers * (spruce ? 1.9 : 2.1);
       for (let y = Math.floor(yb - th); y <= yb + 1; y++) {
         const fy = (y - (yb - th)) / th; // 0 top .. 1 bottom of tier
         const half = hw * Math.pow(Math.max(0, fy), spruce ? 0.9 : 0.7);

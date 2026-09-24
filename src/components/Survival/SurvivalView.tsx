@@ -3,7 +3,9 @@ import { createPortal } from 'react-dom';
 import { X, Backpack, Map as MapIcon, Hand } from 'lucide-react';
 import type { PlanetSession } from '../../lib/planet-generator/planetClient';
 import { PlanetType, BiomeType } from '../../lib/planet-generator/generator';
-import { ChunkData, Feature, Feat, CHUNK, CHUNK_PX, TILE, GROUND_INFO, Ground, solidRadius, WORLD_TILES_X } from '../../lib/terrain/types';
+import { ChunkData, Feature, Feat, CHUNK, CHUNK_PX, TILE, GROUND_INFO, Ground, solidRadius, WORLD_TILES_X, LIFT, MAX_LEVEL, TREES } from '../../lib/terrain/types';
+import { NatureFx, FxContext } from './natureFx';
+import { BAYER4, seedToInt } from '../../lib/terrain/noise';
 import { SpriteBank, paintPlayer, Dir, Sprite } from '../../lib/terrain/sprites';
 import { ITEMS, harvestFor, featureName, ItemDef } from '../../lib/terrain/items';
 import { vegetationHueShift, ROCK_NAMES, RockType } from '../../lib/terrain/palettes';
@@ -16,7 +18,7 @@ interface Props {
   onExit: () => void;
 }
 
-interface LoadedChunk { data: ChunkData; canvas: HTMLCanvasElement; mini: HTMLCanvasElement; lastUsed: number }
+interface LoadedChunk { data: ChunkData; rows: { c: HTMLCanvasElement; y: number }[]; mini: HTMLCanvasElement; lastUsed: number }
 
 const BIOME_PT: Record<number, string> = {
   [BiomeType.SNOW]: 'Deserto de neve', [BiomeType.TUNDRA]: 'Tundra', [BiomeType.TAIGA]: 'Taiga', [BiomeType.COLD_DESERT]: 'Deserto frio',
@@ -40,16 +42,19 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   const [order, setOrder] = useState<string[]>([]);
   const [bagOpen, setBagOpen] = useState(false);
   const [miniOn, setMiniOn] = useState(true);
-  const [hud, setHud] = useState({ biome: '', ground: '', temp: 0, lat: 0, lon: 0, clock: '08:00', rock: '' });
+  const [hud, setHud] = useState({ biome: '', ground: '', temp: 0, lat: 0, lon: 0, clock: '08:00', rock: '', alt: 0, weather: 'clear' });
   const [prompt, setPrompt] = useState<{ text: string; action: string | null } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const bank = useMemo(() => new SpriteBank(vegetationHueShift(cfg.vegetationHue, cfg.planetType === PlanetType.ALIEN_LIFE)), [cfg]);
   const player = useMemo(() => paintPlayer(), []);
+  const fx = useMemo(() => new NatureFx(seedToInt(cfg.seed + '_fx')), [cfg]);
+  // Dev-only handle for automated visual checks (time of day, weather...)
+  useEffect(() => { if (import.meta.env.DEV) (window as any).__survival = { G, fx }; }, [fx]);
 
   // Mutable game state (kept out of React to avoid per-frame renders)
   const G = useRef({
-    x: 0, y: 0, dir: 'down' as Dir, moving: false, anim: 0,
+    x: 0, y: 0, dir: 'down' as Dir, moving: false, anim: 0, level: 0, lift: 0, camX: 0, camY: 0, lensK: 0,
     keys: new Set<string>(), joy: { x: 0, y: 0 },
     zoom: 3,
     chunks: new Map<string, LoadedChunk>(), pending: new Set<string>(),
@@ -122,17 +127,17 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       g.pending.add(key);
       session.chunk(cx, cy).then(data => {
         g.pending.delete(key);
-        const canvas = document.createElement('canvas');
-        canvas.width = CHUNK_PX; canvas.height = CHUNK_PX;
-        const ctx = canvas.getContext('2d')!;
-        ctx.putImageData(new ImageData(data.pixels as Uint8ClampedArray<ArrayBuffer>, CHUNK_PX, CHUNK_PX), 0, 0);
+        const rows = data.rows.map(r => {
+          const c = document.createElement('canvas');
+          c.width = CHUNK_PX; c.height = r.h;
+          c.getContext('2d')!.putImageData(new ImageData(r.px as Uint8ClampedArray<ArrayBuffer>, CHUNK_PX, r.h), 0, 0);
+          return { c, y: r.y };
+        });
+        data.rows = []; // pixel buffers now live in the canvases
         const mini = document.createElement('canvas');
         mini.width = CHUNK; mini.height = CHUNK;
-        const mctx = mini.getContext('2d')!;
-        mctx.imageSmoothingEnabled = true;
-        mctx.drawImage(canvas, 0, 0, CHUNK, CHUNK);
-        g.chunks.set(key, { data, canvas, mini, lastUsed: performance.now() });
-        // evict far chunks
+        mini.getContext('2d')!.putImageData(new ImageData(data.mini as Uint8ClampedArray<ArrayBuffer>, CHUNK, CHUNK), 0, 0);
+        g.chunks.set(key, { data, rows, mini, lastUsed: performance.now() });
         if (g.chunks.size > 49) {
           const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - 49);
           for (const [k] of far) g.chunks.delete(k);
@@ -146,18 +151,25 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   // World queries
   // ---------------------------------------------------------------------------
   const chunkAt = (wx: number, wy: number) => G.current.chunks.get(`${Math.floor(wx / CHUNK_PX)},${Math.floor(wy / CHUNK_PX)}`);
-  const groundAt = (wx: number, wy: number): Ground | null => {
+  const cellAt = (wx: number, wy: number) => {
     const c = chunkAt(wx, wy);
     if (!c) return null;
     const tx = Math.floor(wx / TILE) - c.data.cx * CHUNK, ty = Math.floor(wy / TILE) - c.data.cy * CHUNK;
-    return c.data.ground[ty * CHUNK + tx] as Ground;
+    return { c, k: ty * CHUNK + tx };
+  };
+  const groundAt = (wx: number, wy: number): Ground | null => {
+    const q = cellAt(wx, wy);
+    return q ? (q.c.data.ground[q.k] as Ground) : null;
+  };
+  const levelAt = (wx: number, wy: number): number | null => {
+    const q = cellAt(wx, wy);
+    return q ? q.c.data.level[q.k] : null;
   };
   const tileInfo = (wx: number, wy: number) => {
-    const c = chunkAt(wx, wy);
-    if (!c) return null;
-    const tx = Math.floor(wx / TILE) - c.data.cx * CHUNK, ty = Math.floor(wy / TILE) - c.data.cy * CHUNK;
-    const k = ty * CHUNK + tx;
-    return { g: c.data.ground[k] as Ground, biome: c.data.biome[k], rock: c.data.rock[k], temp: c.data.temp[k] };
+    const q = cellAt(wx, wy);
+    if (!q) return null;
+    const d = q.c.data;
+    return { g: d.ground[q.k] as Ground, biome: d.biome[q.k], rock: d.rock[q.k], temp: d.temp[q.k], level: d.level[q.k] };
   };
   const nearbyFeatures = (wx: number, wy: number, fn: (f: Feature) => void) => {
     const pcx = Math.floor(wx / CHUNK_PX), pcy = Math.floor(wy / CHUNK_PX);
@@ -166,12 +178,23 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       if (c) for (const f of c.data.features) if (!G.current.taken.has(f.id)) fn(f);
     }
   };
-  const blocked = (wx: number, wy: number) => {
+  /** Cliffs block; one-level steps are only possible where the upper tile is a ramp. */
+  const canStep = (fx: number, fy: number, tx: number, ty: number) => {
+    const a = cellAt(fx, fy), b = cellAt(tx, ty);
+    if (!a || !b) return false;
+    const la = a.c.data.level[a.k], lb = b.c.data.level[b.k];
+    if (la === lb) return true;
+    if (Math.abs(la - lb) !== 1) return false;
+    return lb > la ? b.c.data.ramp[b.k] === 1 : a.c.data.ramp[a.k] === 1;
+  };
+  const blocked = (wx: number, wy: number, fromX: number, fromY: number) => {
     const g = groundAt(wx, wy);
     if (g === null || GROUND_INFO[g].blocking) return true;
+    if (!canStep(fromX, fromY, wx, wy)) return true;
+    const lv = levelAt(wx, wy);
     let hit = false;
     nearbyFeatures(wx, wy, f => {
-      if (hit) return;
+      if (hit || f.l !== lv) return;
       const r = solidRadius(f.t);
       if (r && Math.abs(f.x - wx) < r + 4 && Math.abs(f.y - 1 - wy) < r * 0.6 + 3) hit = true;
     });
@@ -198,12 +221,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   const interact = (f: Feature | null) => {
     const g = G.current;
     if (!f) return;
+    if (f.l !== g.level) { flash(f.l > g.level ? 'Está no alto — encontre uma rampa para subir' : 'Está lá embaixo — desça por uma rampa'); return; }
     if (Math.hypot(f.x - g.x, f.y - g.y) > REACH + 14) { flash('Muito longe — aproxime-se'); return; }
     const h = harvestFor(f);
     if (h.kind === 'take' || (h.kind === 'pick' && !g.picked.has(f.id))) {
       if (h.kind === 'take') g.taken.add(f.id); else g.picked.set(f.id, g.time);
       addItems(h.items);
-      h.items.forEach(([id, n], i) => g.floaters.push({ x: f.x, y: f.y - 14 - i * 9, t: 0, text: `+${n} ${ITEMS[id]?.name ?? id}` }));
+      h.items.forEach(([id, n], i) => g.floaters.push({ x: f.x, y: f.y - f.l * LIFT - 14 - i * 9, t: 0, text: `+${n} ${ITEMS[id]?.name ?? id}` }));
     } else if (h.kind === 'pick') flash('Já colhido — os frutos voltam em cerca de um dia');
     else if (h.kind === 'tool') flash(`Requer ${h.tool} (em breve: crafting)`);
   };
@@ -235,19 +259,20 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
     return () => c.removeEventListener('wheel', onWheel);
   }, []);
 
+  /** Screen point -> world-screen coords (x, y as drawn, i.e. y already includes lift). */
   const screenToWorld = (sx: number, sy: number) => {
     const g = G.current;
     const c = canvasRef.current!;
-    return { x: g.x + (sx - c.clientWidth / 2) / g.zoom, y: g.y + (sy - c.clientHeight / 2) / g.zoom };
+    return { x: g.camX + (sx - c.clientWidth / 2) / g.zoom, y: g.camY + (sy - c.clientHeight / 2) / g.zoom };
   };
   const featureUnder = (wx: number, wy: number): Feature | null => {
     let best: Feature | null = null, bd = 1e9;
-    nearbyFeatures(wx, wy, f => {
+    nearbyFeatures(wx, wy + 40, f => {
       const s = bank.get(f.t, f.v, G.current.picked.has(f.id));
-      const x0 = f.x - s.ax, y0 = f.y - s.ay;
-      const small = !s.tall;
-      if (wx >= x0 - 2 && wx <= x0 + s.c.width + 2 && wy >= (small ? y0 - 2 : f.y - 14) && wy <= f.y + 4) {
-        const d = Math.hypot(f.x - wx, f.y - wy) + (s.tall ? 10 : 0);
+      const fy = f.y - f.l * LIFT;
+      const x0 = f.x - s.ax, y0 = fy - s.ay;
+      if (wx >= x0 - 2 && wx <= x0 + s.c.width + 2 && wy >= (s.tall ? fy - 14 : y0 - 2) && wy <= fy + 4) {
+        const d = Math.hypot(f.x - wx, fy - wy) + (s.tall ? 10 : 0);
         if (d < bd) { bd = d; best = f; }
       }
     });
@@ -260,7 +285,98 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   useEffect(() => {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext('2d')!;
-    let raf = 0, last = performance.now(), hudT = 0;
+    const lens = document.createElement('canvas');
+    const lctx = lens.getContext('2d')!;
+    const LENS = 132; // world px
+    let raf = 0, last = performance.now(), hudT = 0, spotsT = 0;
+    let waterSpots: { x: number; y: number; l: number }[] = [];
+    let lavaSpots: { x: number; y: number; l: number }[] = [];
+    const t0 = performance.now();
+
+    type Item = { y: number; f?: Feature; s?: Sprite };
+
+    const drawScene = (c2: CanvasRenderingContext2D, x0: number, x1: number, y0: number, y1: number, t: number, stop: { row: number; y: number } | null) => {
+      const g = G.current;
+      const rowFrom = Math.floor(y0 / TILE) - 1, rowTo = Math.floor((y1 + MAX_LEVEL * LIFT) / TILE) + 1;
+      const byRow = new Map<number, Item[]>();
+      const cx0 = Math.floor(x0 / CHUNK_PX), cx1 = Math.floor(x1 / CHUNK_PX);
+      for (let cy = Math.floor(rowFrom / CHUNK); cy <= Math.floor(rowTo / CHUNK); cy++) {
+        for (let cx = cx0; cx <= cx1; cx++) {
+          const c = g.chunks.get(`${cx},${cy}`);
+          if (!c) continue;
+          for (const f of c.data.features) {
+            if (f.x < x0 - 40 || f.x > x1 + 40 || f.y < y0 - 20 || f.y > y1 + MAX_LEVEL * LIFT + 40) continue;
+            if (g.taken.has(f.id)) continue;
+            const r = Math.floor(f.y / TILE);
+            let arr = byRow.get(r); if (!arr) byRow.set(r, arr = []);
+            arr.push({ y: f.t === Feat.LILY_PAD ? f.y - 100 : f.y, f, s: bank.get(f.t, f.v, g.picked.has(f.id)) });
+          }
+        }
+      }
+      if (g.ready) { const r = Math.floor(g.y / TILE); let arr = byRow.get(r); if (!arr) byRow.set(r, arr = []); arr.push({ y: g.y }); }
+      const frames = player[g.dir];
+      const pf = frames[g.moving ? Math.floor(g.anim) % 4 : 0];
+      for (let r = rowFrom; r <= rowTo; r++) {
+        if (stop && r > stop.row) break;
+        const cy = Math.floor(r / CHUNK), j = r - cy * CHUNK;
+        for (let cx = cx0; cx <= cx1; cx++) {
+          const c = g.chunks.get(`${cx},${cy}`);
+          if (!c) continue;
+          const row = c.rows[j];
+          if (row) c2.drawImage(row.c, cx * CHUNK_PX, row.y);
+          c.lastUsed = t;
+        }
+        const items = byRow.get(r);
+        if (!items) continue;
+        items.sort((a, b) => a.y - b.y);
+        // shadows first so neighbours in the same row don't get darkened
+        c2.fillStyle = 'rgba(8,12,6,0.28)';
+        for (const it of items) {
+          const sh = it.s ? it.s.shadow : 5;
+          if (!sh) continue;
+          const x = it.f ? it.f.x : g.x, y = it.f ? it.f.y - it.f.l * LIFT : g.y - g.lift;
+          c2.beginPath(); c2.ellipse(x + sh * 0.25, y, sh, sh * 0.38, 0, 0, Math.PI * 2); c2.fill();
+        }
+        for (const it of items) {
+          if (stop && r === stop.row && it.y > stop.y) break;
+          if (!it.f) { c2.drawImage(pf, Math.round(g.x - 8), Math.round(g.y - g.lift - 22)); continue; }
+          const f = it.f, s = it.s!;
+          const x = f.x - s.ax, y = f.y - f.l * LIFT - s.ay;
+          if (TREES.has(f.t)) {
+            // canopy sways in the wind, trunk stays rooted
+            const dx = fx.sway(t, f.x, f.y, 1.4);
+            const split = Math.max(1, s.c.height - 12);
+            c2.drawImage(s.c, 0, 0, s.c.width, split, x + dx, y, s.c.width, split);
+            c2.drawImage(s.c, 0, split, s.c.width, s.c.height - split, x, y + split, s.c.width, s.c.height - split);
+          } else {
+            const dx = SWAY.has(f.t) ? fx.sway(t * 1.3, f.x, f.y, 1.6) : 0;
+            c2.drawImage(s.c, x + dx, y);
+          }
+        }
+      }
+    };
+
+    const maskCache = new Map<number, HTMLCanvasElement>();
+    const lensMask = (k: number) => {
+      const q = Math.round(k * 12);
+      let m = maskCache.get(q);
+      if (m) return m;
+      m = document.createElement('canvas');
+      m.width = LENS; m.height = LENS;
+      const mc = m.getContext('2d')!;
+      const img = mc.createImageData(LENS, LENS);
+      const R = (LENS / 2 - 3) * (q / 12), band = 7;
+      for (let y = 0; y < LENS; y++) for (let x = 0; x < LENS; x++) {
+        const d = Math.hypot(x + 0.5 - LENS / 2, (y + 0.5 - LENS / 2) * 1.12);
+        let on = d < R - band;
+        if (!on && d < R) on = (d - (R - band)) / band < BAYER4[(y & 3) * 4 + (x & 3)];
+        img.data[(y * LENS + x) * 4 + 3] = on ? 255 : 0;
+      }
+      mc.putImageData(img, 0, 0);
+      maskCache.set(q, m);
+      return m;
+    };
+
     const frame = (now: number) => {
       const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
       const g = G.current;
@@ -271,7 +387,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
 
       if (!g.ready) {
         const c = chunkAt(g.x, g.y);
-        if (c && g.x) { g.ready = true; setLoading(''); }
+        if (c && g.x) { g.ready = true; setLoading(''); g.level = levelAt(g.x, g.y) ?? 0; g.lift = g.level * LIFT; }
       }
 
       // --- movement ---
@@ -291,18 +407,22 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
           const gr = groundAt(g.x, g.y);
           const sp = SPEED * (gr !== null ? GROUND_INFO[gr].speed || 0.4 : 1);
           const nx = g.x + mx * sp * dt, ny = g.y + my * sp * dt;
-          if (!blocked(nx, g.y)) g.x = nx;
-          if (!blocked(g.x, ny)) g.y = ny;
+          if (!blocked(nx, g.y, g.x, g.y)) g.x = nx;
+          if (!blocked(g.x, ny, g.x, g.y)) g.y = ny;
           g.anim += dt * 8 * (sp / SPEED);
+          // footstep splashes in water
+          if (gr !== null && GROUND_INFO[gr].water && Math.random() < dt * 6) fx.ring(g.x, g.y - g.lift, 5, 'rgba(220,240,255,0.6)');
         } else g.anim = 0;
+        g.level = levelAt(g.x, g.y) ?? g.level;
+        g.lift += (g.level * LIFT - g.lift) * Math.min(1, dt * 12);
         g.time += dt;
-        if (Math.floor(g.time) % 5 === 0) for (const [id, t0] of g.picked) if (g.time - t0 > DAY_SECONDS) g.picked.delete(id);
+        if (Math.floor(g.time) % 5 === 0) for (const [id, tp] of g.picked) if (g.time - tp > DAY_SECONDS) g.picked.delete(id);
       }
 
-      // --- interaction target: nearest gatherable in front of the player ---
-      // hand-gatherable things always win over things that need a tool
+      // --- interaction target (same terrace only; hand-gatherables win over tool-only things) ---
       let target: Feature | null = null, td = REACH, toolT: Feature | null = null, toolD = REACH - 6;
       if (g.ready) nearbyFeatures(g.x, g.y, f => {
+        if (f.l !== g.level) return;
         const h = harvestFor(f);
         if (h.kind === 'none' || (h.kind === 'pick' && g.picked.has(f.id))) return;
         const d = Math.hypot(f.x - g.x, f.y - g.y);
@@ -310,85 +430,82 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
         else if (d < td) { td = d; target = f; }
       });
       g.target = (target ?? toolT) as Feature | null;
-      if (g.mouse.x >= 0) { const w = screenToWorld(g.mouse.x, g.mouse.y); g.hover = featureUnder(w.x, w.y); } else g.hover = null;
 
-      // --- render ---
+      // --- camera ---
       const Z = g.zoom, S = Z * dpr;
-      const camX = Math.round(g.x * S) / S, camY = Math.round(g.y * S) / S;
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.setTransform(S, 0, 0, S, Math.round(canvas.width / 2 - camX * S), Math.round(canvas.height / 2 - camY * S));
-      ctx.imageSmoothingEnabled = false;
+      const camX = Math.round(g.x * S) / S, camY = Math.round((g.y - g.lift - 8) * S) / S;
+      g.camX = camX; g.camY = camY;
+      if (g.mouse.x >= 0) { const w = screenToWorld(g.mouse.x, g.mouse.y); g.hover = featureUnder(w.x, w.y); } else g.hover = null;
+      const tx0 = Math.round(canvas.width / 2 - camX * S), ty0 = Math.round(canvas.height / 2 - camY * S);
+      const toScreen = (x: number, y: number): [number, number] => [x * S + tx0, y * S + ty0];
       const vw = W / Z / 2 + 48, vh = H / Z / 2 + 64;
       const x0 = camX - vw, x1 = camX + vw, y0 = camY - vh, y1 = camY + vh;
-      const t = now / 1000;
+      const t = (now - t0) / 1000;
+      const day = (g.time / DAY_SECONDS) % 1;
+      const sun = Math.sin((day - 0.25) * Math.PI * 2);
 
-      // ground
-      for (let cy = Math.floor(y0 / CHUNK_PX); cy <= Math.floor(y1 / CHUNK_PX); cy++) {
-        for (let cx = Math.floor(x0 / CHUNK_PX); cx <= Math.floor(x1 / CHUNK_PX); cx++) {
-          const c = g.chunks.get(`${cx},${cy}`);
-          if (c) { ctx.drawImage(c.canvas, cx * CHUNK_PX, cy * CHUNK_PX); c.lastUsed = now; }
+      // --- sample water / lava spots for ambient effects ---
+      spotsT -= dt;
+      if (spotsT <= 0 && g.ready) {
+        spotsT = 0.6;
+        waterSpots = []; lavaSpots = [];
+        for (let k = 0; k < 90 && (waterSpots.length < 8 || lavaSpots.length < 24); k++) {
+          const wx = x0 + Math.random() * (x1 - x0), wy = y0 + Math.random() * (y1 - y0);
+          const q = cellAt(wx, wy);
+          if (!q) continue;
+          const gr = q.c.data.ground[q.k] as Ground;
+          const cxw = (Math.floor(wx / TILE) + 0.5) * TILE, cyw = (Math.floor(wy / TILE) + 0.5) * TILE;
+          if (GROUND_INFO[gr].water && gr !== Ground.DEEP_WATER && waterSpots.length < 8) waterSpots.push({ x: cxw, y: cyw, l: q.c.data.level[q.k] });
+          else if (gr === Ground.DEEP_WATER && waterSpots.length < 8 && Math.random() < 0.5) waterSpots.push({ x: cxw, y: cyw, l: 0 });
+          if (q.c.data.lava[q.k] && lavaSpots.length < 24) lavaSpots.push({ x: cxw, y: cyw, l: q.c.data.level[q.k] });
         }
       }
-      // water glints
+      const visible: Feature[] = [];
+      const falls: { x: number; y: number; w: number; h: number }[] = [];
+      for (let cy = Math.floor(y0 / CHUNK_PX); cy <= Math.floor((y1 + MAX_LEVEL * LIFT) / CHUNK_PX); cy++) for (let cx = Math.floor(x0 / CHUNK_PX); cx <= Math.floor(x1 / CHUNK_PX); cx++) {
+        const c = g.chunks.get(`${cx},${cy}`);
+        if (!c) continue;
+        for (const f of c.data.falls) if (f.x < x1 && f.x + f.w > x0 && f.y < y1 && f.y + f.h > y0) falls.push(f);
+        if (visible.length < 400) for (const f of c.data.features) if (f.x > x0 && f.x < x1 && f.y > y0 && f.y < y1 && !g.taken.has(f.id)) visible.push(f);
+      }
+      const info0 = g.ready ? tileInfo(g.x, g.y) : null;
+      const fxc: FxContext = {
+        t, dt, day, sun, view: { x0, y0, x1, y1 }, player: { x: g.x, y: g.y, lift: g.lift }, visible, waterSpots, lavaSpots, falls,
+        climate: { temp: info0?.temp ?? 0.5, moist: 0.5, living: cfg.planetType === PlanetType.EARTH_LIKE || cfg.planetType === PlanetType.ALIEN_LIFE || cfg.planetType === PlanetType.OCEAN_WORLD || cfg.planetType === PlanetType.SWAMP_WORLD, desert: info0?.biome === BiomeType.SUBTROPICAL_DESERT || info0?.biome === BiomeType.COLD_DESERT },
+      };
+      if (g.ready) fx.update(fxc);
+
+      // --- render ---
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(S, 0, 0, S, tx0, ty0);
+      ctx.imageSmoothingEnabled = false;
+      drawScene(ctx, x0, x1, y0, y1, t, null);
+
+      // water glints (lifted with their terrace)
       ctx.fillStyle = 'rgba(220,240,255,0.55)';
-      for (let ty = Math.floor(y0 / TILE); ty <= y1 / TILE; ty++) for (let tx = Math.floor(x0 / TILE); tx <= x1 / TILE; tx++) {
-        const gr = groundAt(tx * TILE, ty * TILE);
-        if (gr === null || gr > Ground.SWAMP_WATER) continue;
+      for (let ty = Math.floor(y0 / TILE); ty <= (y1 + MAX_LEVEL * LIFT) / TILE; ty++) for (let tx = Math.floor(x0 / TILE); tx <= x1 / TILE; tx++) {
+        const q = cellAt(tx * TILE, ty * TILE);
+        if (!q) continue;
+        const gr = q.c.data.ground[q.k];
+        if (gr > Ground.SWAMP_WATER) continue;
         const h = ((tx * 73856093) ^ (ty * 19349663)) >>> 0;
         const ph = Math.sin(t * 1.6 + (h % 628) / 100);
-        if (ph > 0.75) ctx.fillRect(tx * TILE + (h % 11) + Math.round(ph * 2), ty * TILE + ((h >> 4) % 13), 3, 1);
+        if (ph > 0.75) ctx.fillRect(tx * TILE + (h % 11) + Math.round(ph * 2), ty * TILE + ((h >> 4) % 13) - q.c.data.level[q.k] * LIFT, 3, 1);
       }
-
-      // collect visible features + player, y-sorted
-      type Item = { y: number; f?: Feature; s?: Sprite };
-      const list: Item[] = [];
-      for (let cy = Math.floor(y0 / CHUNK_PX); cy <= Math.floor(y1 / CHUNK_PX); cy++) {
-        for (let cx = Math.floor(x0 / CHUNK_PX); cx <= Math.floor(x1 / CHUNK_PX); cx++) {
-          const c = g.chunks.get(`${cx},${cy}`);
-          if (!c) continue;
-          for (const f of c.data.features) {
-            if (f.x < x0 || f.x > x1 || f.y < y0 || f.y > y1 + 40) continue;
-            if (g.taken.has(f.id)) continue;
-            list.push({ y: f.t === Feat.LILY_PAD ? f.y - 1000 : f.y, f, s: bank.get(f.t, f.v, g.picked.has(f.id)) });
-          }
-        }
-      }
-      if (g.ready) list.push({ y: g.y });
-      list.sort((a, b) => a.y - b.y);
-
-      // shadows
-      ctx.fillStyle = 'rgba(8,12,6,0.28)';
-      for (const it of list) {
-        const sh = it.s ? it.s.shadow : 5;
-        if (!sh) continue;
-        const x = it.f ? it.f.x : g.x, y = it.f ? it.f.y : g.y;
-        ctx.beginPath(); ctx.ellipse(x + sh * 0.25, y, sh, sh * 0.38, 0, 0, Math.PI * 2); ctx.fill();
-      }
-      // sprites
-      const frames = player[g.dir];
-      const pf = frames[g.moving ? Math.floor(g.anim) % 4 : 0];
-      for (const it of list) {
-        if (!it.f) { ctx.drawImage(pf, Math.round(g.x - 8), Math.round(g.y - 22)); continue; }
-        const f = it.f, s = it.s!;
-        let dx = 0;
-        if (SWAY.has(f.t)) dx = Math.sin(t * 1.8 + f.x * 0.045 + f.y * 0.02) > 0.55 ? 1 : 0;
-        let alpha = 1;
-        if (s.tall && g.ready && g.y < f.y && g.y > f.y - s.ay + 6 && Math.abs(g.x - f.x) < s.c.width / 2 - 2) alpha = 0.42;
-        if (alpha < 1) ctx.globalAlpha = alpha;
-        ctx.drawImage(s.c, f.x - s.ax + dx, f.y - s.ay);
-        if (alpha < 1) ctx.globalAlpha = 1;
-      }
+      fx.drawWorldBelow(ctx, fxc);
+      fx.drawWorldAbove(ctx, fxc);
 
       // target marker
       const mark = g.target;
       if (mark) {
         const s = bank.get(mark.t, mark.v, g.picked.has(mark.id));
-        const top = mark.y - Math.min(s.ay, 30) - 6 + Math.sin(t * 5) * 1.5;
+        const my = mark.y - mark.l * LIFT;
+        const top = my - Math.min(s.ay, 30) - 6 + Math.sin(t * 5) * 1.5;
         ctx.fillStyle = '#fff';
         ctx.beginPath(); ctx.moveTo(mark.x - 3, top - 4); ctx.lineTo(mark.x + 3, top - 4); ctx.lineTo(mark.x, top); ctx.fill();
         ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1 / Z;
-        ctx.beginPath(); ctx.ellipse(mark.x, mark.y, 6, 2.5, 0, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.ellipse(mark.x, my, 6, 2.5, 0, 0, Math.PI * 2); ctx.stroke();
       }
 
       // floating pickup texts
@@ -403,16 +520,51 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
         ctx.globalAlpha = 1;
       }
 
-      // day / night
-      const day = (g.time / DAY_SECONDS) % 1; // 0 = midnight
-      const sun = Math.sin((day - 0.25) * Math.PI * 2); // -1 night .. 1 noon
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      if (sun < 0.25) {
-        const k = Math.min(1, (0.25 - sun) / 0.8);
-        ctx.fillStyle = `rgba(10,16,48,${k * 0.55})`;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        if (sun > -0.2 && sun < 0.25) { ctx.fillStyle = `rgba(255,120,40,${(1 - Math.abs(sun - 0.02) / 0.23) * 0.12})`; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+      // --- vision lens: when terrain or a tree hides the player, cut a dithered window through it ---
+      if (g.ready) {
+        const feet = g.y - g.lift, head = feet - 22;
+        let occ = false;
+        const pr = Math.floor(g.y / TILE), pc = Math.floor(g.x / TILE);
+        for (let r = pr + 1; r <= pr + MAX_LEVEL && !occ; r++) for (let c = pc - 1; c <= pc + 1; c++) {
+          const L = levelAt(c * TILE, r * TILE);
+          if (L !== null && L > g.level && r * TILE - L * LIFT < feet - 12) { occ = true; break; }
+        }
+        if (!occ) nearbyFeatures(g.x, g.y, f => {
+          if (occ || f.y <= g.y) return;
+          const s = bank.get(f.t, f.v, g.picked.has(f.id));
+          if (!s.tall) return;
+          const fy = f.y - f.l * LIFT;
+          if (Math.abs(f.x - g.x) < s.c.width / 2 - 3 && fy - s.ay < feet - 8 && fy > head + 6) occ = true;
+        });
+        g.lensK += ((occ ? 1 : 0) - g.lensK) * Math.min(1, dt * 7);
+        if (g.lensK > 0.04) {
+          const D = Math.round(LENS * S);
+          if (lens.width !== D) { lens.width = D; lens.height = D; }
+          const cxw = g.x, cyw = g.y - g.lift - 10;
+          lctx.setTransform(1, 0, 0, 1, 0, 0);
+          lctx.globalCompositeOperation = 'source-over';
+          lctx.clearRect(0, 0, D, D);
+          lctx.setTransform(S, 0, 0, S, Math.round(D / 2 - cxw * S), Math.round(D / 2 - cyw * S));
+          lctx.imageSmoothingEnabled = false;
+          drawScene(lctx, cxw - LENS / 2, cxw + LENS / 2, cyw - LENS / 2, cyw + LENS / 2, t, { row: pr, y: g.y });
+          lctx.setTransform(1, 0, 0, 1, 0, 0);
+          lctx.globalCompositeOperation = 'destination-in';
+          lctx.drawImage(lensMask(g.lensK), 0, 0, D, D);
+          lctx.globalCompositeOperation = 'source-over';
+          const [sx, sy] = toScreen(cxw, cyw);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.drawImage(lens, Math.round(sx - D / 2), Math.round(sy - D / 2));
+          // soft rim of the window
+          ctx.strokeStyle = `rgba(255,255,255,${0.18 * g.lensK})`;
+          ctx.lineWidth = Math.max(1, S / 2);
+          ctx.beginPath(); ctx.ellipse(sx, sy, (LENS / 2 - 3) * g.lensK * S, (LENS / 2 - 3) * g.lensK * S / 1.12, 0, 0, Math.PI * 2); ctx.stroke();
+        }
       }
+
+      // --- screen space: sunset tint, weather, night & lantern, fireflies ---
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      if (sun > -0.2 && sun < 0.25) { ctx.fillStyle = `rgba(255,120,40,${(1 - Math.abs(sun - 0.02) / 0.23) * 0.12})`; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+      fx.drawScreen(ctx, canvas.width, canvas.height, S, fxc, toScreen);
 
       // minimap
       const mini = miniRef.current;
@@ -421,7 +573,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
         const MW = mini.width;
         mc.fillStyle = '#05070c'; mc.fillRect(0, 0, MW, MW);
         mc.imageSmoothingEnabled = false;
-        const scale = 1 / 16 * (MW / 160) * 2; // minimap px per world px
+        const scale = 1 / 16 * (MW / 160) * 2;
         const ox = MW / 2 - g.x * scale, oy = MW / 2 - g.y * scale;
         g.chunks.forEach(c => mc.drawImage(c.mini, ox + c.data.cx * CHUNK_PX * scale, oy + c.data.cy * CHUNK_PX * scale, CHUNK_PX * scale, CHUNK_PX * scale));
         mc.fillStyle = '#fff'; mc.fillRect(MW / 2 - 2, MW / 2 - 2, 4, 4);
@@ -444,14 +596,16 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
           lon: ((txTiles / WORLD_TILES_X) % 1) * 360 - 180,
           clock: `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
           rock: ROCK_NAMES[info.rock as RockType] ?? '',
+          alt: info.level * 40,
+          weather: fx.weather,
         });
         const f = g.hover ?? g.target;
         if (f) {
           const h = harvestFor(f);
-          const inRange = Math.hypot(f.x - g.x, f.y - g.y) <= REACH + 14;
+          const inRange = Math.hypot(f.x - g.x, f.y - g.y) <= REACH + 14 && f.l === g.level;
           setPrompt({
             text: featureName(f),
-            action: h.kind === 'take' || (h.kind === 'pick' && !g.picked.has(f.id)) ? (inRange ? 'E · Coletar' : 'Aproxime-se para coletar')
+            action: h.kind === 'take' || (h.kind === 'pick' && !g.picked.has(f.id)) ? (inRange ? 'E · Coletar' : f.l !== g.level ? 'Em outro nível do terreno' : 'Aproxime-se para coletar')
               : h.kind === 'pick' ? 'Já colhido' : h.kind === 'tool' ? `Requer ${h.tool}` : null,
           });
         } else setPrompt(null);
@@ -462,7 +616,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bank, player]);
+  }, [bank, player, fx]);
 
   // ---------------------------------------------------------------------------
   // Touch joystick
@@ -511,7 +665,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
             {hud.ground}{hud.rock ? ` · rocha: ${hud.rock}` : ''}
           </div>
           <div className="text-[11px] text-neutral-400 font-mono">
-            {hud.temp > 0 ? '+' : ''}{hud.temp}°C · {Math.abs(hud.lat).toFixed(2)}°{hud.lat >= 0 ? 'N' : 'S'} {Math.abs(hud.lon).toFixed(2)}°{hud.lon >= 0 ? 'L' : 'O'}
+            {hud.temp > 0 ? '+' : ''}{hud.temp}°C · alt. {hud.alt} m · {Math.abs(hud.lat).toFixed(2)}°{hud.lat >= 0 ? 'N' : 'S'} {Math.abs(hud.lon).toFixed(2)}°{hud.lon >= 0 ? 'L' : 'O'}
           </div>
         </div>
       </div>
@@ -519,7 +673,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       {/* Top-right: clock, minimap, exit */}
       <div className="absolute top-3 right-3 flex flex-col items-end gap-2">
         <div className="flex gap-2">
-          <div className="bg-black/60 backdrop-blur-md border border-white/10 rounded-xl px-3 py-2 text-white font-mono text-sm tabular-nums">{hud.clock}</div>
+          <div className="bg-black/60 backdrop-blur-md border border-white/10 rounded-xl px-3 py-2 text-white font-mono text-sm tabular-nums" title="Hora e clima">{({ clear: '☀️', cloudy: '☁️', rain: '🌧️', snow: '❄️', storm: '⛈️' } as Record<string, string>)[hud.weather] ?? ''} {hud.clock}</div>
           <button onClick={() => setMiniOn(o => !o)} title="Minimapa (M)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><MapIcon className="w-4 h-4" /></button>
           <button onClick={onExit} title="Voltar à órbita (Esc)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><X className="w-4 h-4" /></button>
         </div>

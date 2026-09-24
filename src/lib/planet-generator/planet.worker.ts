@@ -120,7 +120,7 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       }
       case 'chunk': {
         const chunk = terrainFor(msg.sessionId).chunk(msg.cx, msg.cy);
-        post({ kind: 'chunk', id: msg.id, chunk }, [chunk.pixels.buffer, chunk.ground.buffer, chunk.biome.buffer, chunk.rock.buffer, chunk.temp.buffer]);
+        post({ kind: 'chunk', id: msg.id, chunk }, [...chunk.rows.map(r => r.px.buffer), chunk.ground.buffer, chunk.biome.buffer, chunk.rock.buffer, chunk.temp.buffer, chunk.level.buffer, chunk.ramp.buffer, chunk.lava.buffer, chunk.mini.buffer]);
         break;
       }
       case 'spawn': {

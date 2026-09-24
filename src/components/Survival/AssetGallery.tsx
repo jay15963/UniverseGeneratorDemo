@@ -24,7 +24,7 @@ export function AssetGallery() {
     const bank = new SpriteBank(0);
     const Z = 3, pad = 10, colW = 80 * Z;
     const items: { s: ReturnType<SpriteBank['get']>; label: string }[] = [];
-    for (const [t, vs] of ROWS) for (const v of vs) items.push({ s: bank.get(t, v), label: featureName({ id: '', t, v, x: 0, y: 0 }) });
+    for (const [t, vs] of ROWS) for (const v of vs) items.push({ s: bank.get(t, v), label: featureName({ id: '', t, v, x: 0, y: 0, l: 0 }) });
     items.push({ s: bank.get(Feat.BERRY_BLUE, 0, true), label: 'Arbusto colhido' });
     const perRow = Math.max(1, Math.floor((window.innerWidth - 40) / colW));
     const rowH = 90 * Z;
