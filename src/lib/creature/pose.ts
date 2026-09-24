@@ -24,10 +24,22 @@ export const DIR_SRC: Record<Dir8, [keyof typeof FACINGS, boolean]> = {
 const PITCH = 0.3; // the game's 3/4 camera looks slightly down
 
 /** Animation being drawn. Builders read it to plant, swing or tuck limbs. */
-export type Anim = 'idle' | 'walk' | 'run' | 'fly' | 'swim' | 'use';
+export type Anim = 'idle' | 'walk' | 'run' | 'fly' | 'swim' | 'use' | 'die';
+
+/**
+ * A rigid placement of a body section (death animations): world = R * p + t, with an optional cutting plane
+ * (creature-frame normal n through point p) - only the side the normal points to is drawn.
+ */
+export interface Xf { R: number[]; t: V3; clip?: { n: V3; p: V3 } }
 
 export class Sketch {
   private items: { part: Part; key: number; n: number }[] = [];
+  /** current section placement (null = standing, as built) */
+  xf: Xf | null = null;
+  /** death animations: how each named section is placed (several = drawn once per placement, [] = hidden) */
+  sectionHook: ((name: string) => Xf[] | null) | null = null;
+  /** called after a section is drawn in one placement (stump caps, cut faces) */
+  sectionAfter: ((name: string, i: number) => void) | null = null;
   private cy: number; private sy: number; private cp = Math.cos(PITCH); private sp = Math.sin(PITCH);
   readonly yaw: number;
   /** pixel scale (1 = generator size; ~0.35 = gameplay size) */
@@ -35,19 +47,41 @@ export class Sketch {
   readonly anim: Anim;
   constructor(yaw: number, anim: Anim = 'walk', k = 1) { this.yaw = yaw; this.cy = Math.cos(yaw); this.sy = Math.sin(yaw); this.anim = anim; this.k = k; }
 
-  private raw(p: V3): [number, number, number] {
+  /** draws a named body section once per placement given by the hook (or as-is) */
+  section(name: string, fn: () => void) {
+    const vs = this.sectionHook?.(name);
+    if (!vs) { fn(); return; }
+    const old = this.xf;
+    vs.forEach((v, i) => { this.xf = v; fn(); this.sectionAfter?.(name, i); });
+    this.xf = old;
+  }
+  private rot(d: V3): V3 {
+    const x = this.xf;
+    if (!x) return d;
+    const R = x.R;
+    return [R[0] * d[0] + R[1] * d[1] + R[2] * d[2], R[3] * d[0] + R[4] * d[1] + R[5] * d[2], R[6] * d[0] + R[7] * d[1] + R[8] * d[2]];
+  }
+  private place(p: V3): V3 { const q = this.rot(p), t = this.xf?.t; return t ? [q[0] + t[0], q[1] + t[1], q[2] + t[2]] : q; }
+  private raw(p0: V3, dir = false): [number, number, number] {
+    const p = dir ? this.rot(p0) : this.place(p0);
     const xw = p[0] * this.cy - p[2] * this.sy, zw = p[0] * this.sy + p[2] * this.cy;
     return [xw, -p[1] * this.cp + zw * this.sp, zw * this.cp + p[1] * this.sp];
   }
   /** anchor -> [screen x, screen y (down), depth towards the viewer] (scaled) */
   P(p: V3): [number, number, number] { const r = this.raw(p); return [r[0] * this.k, r[1] * this.k, r[2] * this.k]; }
   /** how much a direction in the creature frame points at the viewer (-1 away .. 1 towards) */
-  facing(d: V3): number { const l = Math.hypot(d[0], d[1], d[2]) || 1; return this.raw([d[0] / l, d[1] / l, d[2] / l])[2]; }
+  facing(d: V3): number { const l = Math.hypot(d[0], d[1], d[2]) || 1; return this.raw([d[0] / l, d[1] / l, d[2] / l], true)[2]; }
   /** projected 2D direction of a unit vector (length < 1 when it points at / away from the viewer) */
-  flat(d: V3): [number, number] { const a = this.raw(d); return [a[0], a[1]]; }
+  flat(d: V3): [number, number] { const a = this.raw(d, true); return [a[0], a[1]]; }
 
   private push(part: Part, depth: number, o: PO) {
-    this.items.push({ part: { ...part, g: o.g, dark: o.dark, noLine: o.noLine, flat: o.flat }, key: depth + (o.bias ?? 0), n: this.items.length });
+    const out: Part = { ...part, g: o.g, dark: o.dark, noLine: o.noLine, flat: o.flat };
+    const c = this.xf?.clip;
+    if (c) { // the cutting plane seen edge-on enough becomes a screen line; face-on halves rely on painter's order
+      const [nx, ny] = this.flat(c.n), L = Math.hypot(nx, ny);
+      if (L > 0.25) { const [px, py] = this.P(c.p); out.clip = [nx / L, ny / L, -(nx * px + ny * py) / L]; }
+    }
+    this.items.push({ part: out, key: depth + (o.bias ?? 0), n: this.items.length });
   }
   /** round piece */
   ball(c: V3, r: number, m: Mat, o: PO = {}) { r *= this.k; const [x, y, d] = this.P(c); this.push({ s: { k: 'e', x, y, rx: Math.max(0.5, r), ry: Math.max(0.5, r), a: 0 }, m }, d, o); }

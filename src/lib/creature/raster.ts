@@ -44,6 +44,7 @@ export interface Part {
   dark?: number;     // shading multiplier (far-side limbs sit in shadow)
   noLine?: boolean;  // never casts inner lines on the parts behind it
   flat?: number;     // 0..1: flattens the normal (membranes, cloth panels)
+  clip?: number[];   // [a, b, c]: only pixels with a*x + b*y + c >= 0 (a body cut in two)
   uv?: number[];     // polygons: texture coords u = a*x + b*y + c, v = d*x + e*y + f (default: the pixel position)
 }
 
@@ -210,6 +211,7 @@ export function rasterize(parts: Part[], w: number, h: number): Raster {
     const pcx = (bx0 + bx1) / 2, pcy = (by0 + by1) / 2, phw = Math.max(1, (bx1 - bx0) / 2), phh = Math.max(1, (by1 - by0) / 2);
     for (let y = Y0; y <= Y1; y++) for (let x = X0; x <= X1; x++) {
       const px = x + 0.5, py = y + 0.5;
+      if (pt.clip && pt.clip[0] * px + pt.clip[1] * py + pt.clip[2] < 0) continue;
       const edge = fz ? (h01(x, y, 21 + pi) - 0.5) * 2 * fz : 0;
       let nx = 0, ny = 0, nz = 1, u = px, v = py;
       if (s.k === 'e') {

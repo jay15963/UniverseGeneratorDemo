@@ -100,17 +100,17 @@ function dress(x: WearCtx, L: Look): Outfit {
     },
     front: (S, B) => {
       const g = gg(B);
-      for (const a of B.arms) {
+      B.arms.forEach((a, ai) => S.section('arm' + ai, () => {
         if (L.pauldron && has(x, 'arms') && !a.lower) {
           S.ball(add(a.sh, [-B.U * 0.02, B.U * 0.06, a.s * B.U * 0.04]), B.U * 0.19 * g, L.pauldron, { bias: 0.12 });
           S.ball(add(a.sh, [0, -B.U * 0.08, a.s * B.U * 0.07]), B.U * 0.15 * g, L.pauldron, { bias: 0.121 });
         }
         if (L.bracer && has(x, 'arms')) S.limb(lerp3(a.el, a.hand, 0.2), lerp3(a.el, a.hand, 0.82), B.U * 0.12 * g * 0.85 + 1.6, B.U * 0.12 * g * 0.75 + 1.4, L.bracer, { bias: 0.045 });
-      }
-      if (L.greave && has(x, 'legs')) for (const l of B.legs) {
-        S.ball(l.knee, B.U * 0.15 * g, L.greave, { bias: 0.05 });
-        S.limb(lerp3(l.knee, l.ankle, 0.15), lerp3(l.knee, l.ankle, 0.92), B.U * 0.17 * g * 0.72 + 1.6, B.U * 0.17 * g * 0.6 + 1.2, L.greave, { bias: 0.045 });
-      }
+      }));
+      if (L.greave && has(x, 'legs')) B.legs.forEach((l, li) => S.section('leg' + li, () => {
+        S.ball(l.knee, B.U * 0.15 * g, L.greave!, { bias: 0.05 });
+        S.limb(lerp3(l.knee, l.ankle, 0.15), lerp3(l.knee, l.ankle, 0.92), B.U * 0.17 * g * 0.72 + 1.6, B.U * 0.17 * g * 0.6 + 1.2, L.greave!, { bias: 0.045 });
+      }));
     },
     headFront: (S, B, ph) => { if (has(x, 'head')) helmet(S, B, L.helm, L.helmM ?? L.torso, x, L, ph); },
   };
@@ -132,8 +132,14 @@ export const WEAR_STYLES: WearStyle[] = [
     build: x => dress(x, { torso: x.M, torsoPad: 1.8, skirt: x.M2, skirtLen: 0.4, sleeve: x.under, pants: x.M2, pauldron: x.M, bracer: x.M, glove: x.M2, boot: x.M2, helm: x.r[0] < 0.5 ? 'cap' : 'none', helmM: x.M, studs: x.T, bands: x.W, nBands: 1 }) },
   { id: 'bone', name: 'Armadura de ossos', blurb: 'Placas e costelas de osso amarradas, máscara de crânio.', mats: ['bone'],
     build: x => dress(x, { torso: x.under, skirt: x.M, skirtLen: 0.35, bands: x.M, nBands: 5, sleeve: x.under, pants: x.under2, pauldron: x.M, bracer: x.M, boot: x.W, helm: 'skull', helmM: x.M, horns: x.r[0] < 0.5 }) },
-  { id: 'lamellar', name: 'Armadura de lamelas', blurb: 'Lamelas de madeira ou bambu atadas em fileiras.', mats: ['wood'],
-    build: x => { const l = retex(x.M, 'plank', { texScale: 0.8 }); return dress(x, { torso: l, torsoPad: 2, skirt: l, skirtLen: 0.55, bands: x.W, nBands: 4, sleeve: x.under, pants: x.under2, pauldron: l, bracer: l, boot: x.W, helm: 'kettle', helmM: l }); } },
+  { id: 'lamellar', name: 'Armadura de lamelas', blurb: 'Lamelas de madeira, bambu, osso ou metal atadas em fileiras com cordões nas cores da cultura.', mats: ['wood', 'bone', 'metal'],
+    build: x => { const l = retex(x.M, 'plank', { texScale: 0.8, spec: x.M.spec }); return dress(x, { torso: l, torsoPad: 2, skirt: l, skirtLen: 0.55, bands: x.dye, nBands: 4, sleeve: x.under, pants: x.under2, pauldron: l, bracer: l, greave: x.r[0] < 0.5 ? l : undefined, boot: x.W, helm: 'kettle', helmM: x.M, horns: x.r[1] < 0.4 }); } },
+  { id: 'cuirass', name: 'Couraça', blurb: 'Peitoral e costas de metal, elmo e grevas sobre roupa acolchoada.', mats: ['metal'],
+    build: x => dress(x, { torso: x.M, torsoPad: 2.2, skirt: x.under, skirtLen: 0.5, sleeve: x.under, pants: x.under2, greave: x.M, boot: x.W, glove: x.W, helm: choose(x.r[0], ['conical', 'cap', 'kettle'] as Helm[]), helmM: x.M, gorget: x.M2, plume: x.r[1] < 0.5 ? x.dye : undefined, bands: x.T, nBands: 1 }) },
+  { id: 'brigandine', name: 'Brigantina', blurb: 'Casaco de tecido ou couro forrado de placas de metal presas por rebites.', mats: ['metal'], minEra: 1,
+    build: x => dress(x, { torso: x.dye, torsoPad: 2.2, skirt: x.dye, skirtLen: 0.5, studs: x.M, sleeve: retex(x.M, 'mail', { spec: 0.6 }), pants: x.under2, pauldron: x.M, bracer: x.M, glove: x.W, boot: x.W, helm: choose(x.r[0], ['kettle', 'cap', 'conical'] as Helm[]), helmM: x.M, bands: x.W, nBands: 1 }) },
+  { id: 'segmented', name: 'Armadura segmentada', blurb: 'Tiras de metal sobrepostas em volta do tronco e dos ombros.', mats: ['metal'],
+    build: x => dress(x, { torso: x.M, torsoPad: 2, bands: x.M2, nBands: 6, skirt: x.dye, skirtLen: 0.45, sleeve: x.under, pants: x.under2, pauldron: x.M, bracer: x.r[0] < 0.5 ? x.M : undefined, greave: x.M, boot: x.W, helm: 'cap', helmM: x.M, plume: x.r[1] < 0.6 ? x.dye2 : undefined }) },
   { id: 'mail', name: 'Cota de malha', blurb: 'Anéis de metal entrelaçados; capuz de malha e sobreveste com as cores da cultura.', mats: ['metal'], minEra: 1,
     build: x => { const m = retex(x.M, 'mail', { spec: 0.6 }); return dress(x, { torso: m, skirt: m, skirtLen: 0.6, sleeve: m, pants: m, glove: x.W, boot: x.W, helm: x.r[0] < 0.5 ? 'coif' : 'conical', helmM: x.r[0] < 0.5 ? m : x.M, tabard: x.r[1] < 0.6 ? x.dye : undefined, bands: x.W, nBands: 1, plume: x.r[2] < 0.3 ? x.dye2 : undefined }); } },
   { id: 'scale', name: 'Armadura de escamas', blurb: 'Escamas sobrepostas do material (metal, osso, cristal ou couro).', mats: ['metal', 'bone', 'crystal', 'hide'],

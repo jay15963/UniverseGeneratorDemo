@@ -9,6 +9,8 @@ import { Stage } from '../creature/genome';
 import { Sketch, V3, ik3, FACINGS, DIR_SRC, Dir8, DIRS, Anim } from '../creature/pose';
 import type { Body, LoadHooks, Outfit } from '../creature/civ';
 import { spriteData, SpriteData } from '../creature/render';
+import { makeKit } from '../creature/kit';
+import { makeDeath, Death, DEATH_FRAMES } from '../creature/death';
 import { mulberry, seedToInt } from '../terrain/noise';
 import { Forge, frame, Frame } from './forge';
 import { HAND_TYPES, handById, ItemCtx, Hold, HandType } from './hand';
@@ -73,7 +75,7 @@ function swing(t: number, lo = -0.55, hi = 2.2, rest = 1.0) {
   if (t < 0.6) return lerp(hi, lo, ease((t - 0.45) / 0.15));
   return lerp(lo, rest, ease((t - 0.6) / 0.4));
 }
-interface Held { fr: Frame; built: ReturnType<HandType['make']>; x: ItemCtx }
+interface Held { fr: Frame; built: ReturnType<HandType['make']>; x: ItemCtx; arm: number }
 
 /** poses one hand item; returns the frame to draw it in */
 function poseItem(B: Body, T: HandType, x: ItemCtx, built: ReturnType<HandType['make']>, arm: Arm, other: Arm | undefined, anim: string, e: number): Frame {
@@ -106,10 +108,11 @@ function poseItem(B: Body, T: HandType, x: ItemCtx, built: ReturnType<HandType['
       return frame(arm.hand, [Math.sin(x.ph) * (use ? 0.08 : 0.2), 1, 0], [1, 0, 0]);
     }
     case 'shield': {
-      const n: V3 = use ? nrm([1, 0.05, s * 0.12]) : nrm([0.9, 0, s * 0.45]);
-      setHand(arm, use ? add(sh, [U * 0.7, -U * 0.25, s * U * 0.05]) : add(sh, [U * 0.3 + sway * 0.5, -U * 0.8, s * U * 0.35]));
+      // held by the grip behind the boss: the big shield covers the side (resting) or the whole front (bracing)
+      const n: V3 = use ? nrm([1, 0.05, s * 0.12]) : nrm([1, 0, s * 0.3]);
+      setHand(arm, use ? add(sh, [U * 0.8, -U * 0.3, s * U * 0.05]) : add(sh, [U * 0.5 + sway * 0.5, -U * 0.62, s * U * 0.3]));
       const u: V3 = [0, 1, 0];
-      return frame(add(arm.hand, mul(n, U * 0.1)), u, cross(n, u));
+      return frame(add(arm.hand, mul(n, U * 0.14)), u, cross(n, u));
     }
     case 'bow': { // held in this hand (the bow hand); the other hand draws the string
       const draw = !use ? 0 : t < 0.15 ? 0 : t < 0.6 ? ease((t - 0.15) / 0.45) : t < 0.8 ? 1 : 0;
@@ -121,7 +124,7 @@ function poseItem(B: Body, T: HandType, x: ItemCtx, built: ReturnType<HandType['
       return f;
     }
     case 'gun': {
-      const kick = use && t > 0.5 && t < 0.62 ? 1 - (t - 0.5) / 0.12 : 0;
+      const kick = use && t >= 0.5 && t < 0.75 ? 1 - (t - 0.5) / 0.25 : 0; // on the loop's frames 4 (fire) and 5
       x.kick = kick; x.draw = use ? (t < 0.5 ? 1 : 0) : 1;
       const G: V3 = use ? [B.C[0] + U * 0.35 - kick * U * 0.1, B.C[1] + U * 0.05, sh[2] * 0.3] : [B.C[0] + U * 0.35, B.C[1] - U * 0.45, sh[2] * 0.4];
       const u: V3 = use ? [1, kick * 0.12, 0] : [0.8, 0.6, 0];
@@ -167,13 +170,16 @@ export function wearOutfit(g: Genome, e: number, w: WearSel | null | undefined):
   return style.build(x);
 }
 
-export function hooksFor(g: Genome, e: number, L: Loadout): LoadHooks {
+export function hooksFor(g: Genome, e: number, L: Loadout, death?: Death): LoadHooks {
   let held: Held[] = [];
   const outfit = wearOutfit(g, e, L.wear);
+  const D = death ? makeDeath(g, death, makeKit(g, eraStage(e)).body) : null;
   return {
     outfit,
-    pose: (B, ph, anim) => {
+    begin: D ? D.begin : undefined,
+    pose: (B, ph, anim0) => {
       held = [];
+      const anim = anim0 === 'die' ? 'idle' : anim0; // a dying creature still holds its things until it drops them
       const main = B.arms.find(a => !a.lower && a.s > 0), off = B.arms.find(a => !a.lower && a.s < 0);
       if (!main || !off) return;
       const go = (sel: ItemSel | null | undefined, arm: Arm, other: Arm | undefined, phOff = 0) => {
@@ -182,7 +188,7 @@ export function hooksFor(g: Genome, e: number, L: Loadout): LoadHooks {
         const x = itemCtx(g, e, sel, B.U, ph + phOff);
         x.use = anim === 'use';
         const built = T.make(x); // its draw closure reads x, which the pose fills (bow draw, recoil)
-        held.push({ fr: poseItem(B, T, x, built, arm, other, anim, e), built, x });
+        held.push({ fr: poseItem(B, T, x, built, arm, other, anim, e), built, x, arm: B.arms.indexOf(arm) });
       };
       if (L.two) {
         const T = handById(L.two.type);
@@ -196,14 +202,21 @@ export function hooksFor(g: Genome, e: number, L: Loadout): LoadHooks {
       }
     },
     draw: (S, B, ph) => {
-      for (const h of held) h.built.draw(new Forge(S, h.fr, 0));
+      for (const h of held) {
+        const one = () => h.built.draw(new Forge(S, h.fr, 0));
+        if (!D) { one(); continue; }
+        const old = S.xf;
+        for (const v of D.items(h.arm)) { S.xf = v; one(); }
+        S.xf = old;
+      }
       for (const sel of [L.back, L.belt]) {
         const T = sel && auxById(sel.type);
         if (!sel || !T) continue;
         const mat = matById(sel.mat), c = common(g, e, mat);
         const x: AuxCtx = { e, r: designOf(g, sel.type, sel.variant), ph, M: c.M, M2: c.M2, T: c.T, W: c.W, G: c.G, dye: c.dye, dye2: c.dye2, dark: c.dark, shaft: matOf(matById('wood'), g.mode === 'alien', g.culture.hue, 0.1), fletch: auxFletch(g.culture.hue2) };
-        T.draw(S, B, x);
+        S.section('aux:' + T.slot, () => T.draw(S, B, x));
       }
+      D?.draw(S, B, ph);
     },
   };
 }
@@ -215,7 +228,8 @@ export const eraStage = (e: number) => (Stage.TRIBAL + e) as Stage;
 export const loadKey = (L: Loadout) => JSON.stringify(L);
 
 /** the creature wearing / holding its loadout (one facing, all frames) */
-export function equippedData(g: Genome, e: number, L: Loadout, dir: Dir8, anim: Anim, frames = 8, k = 1): SpriteData {
+export function equippedData(g: Genome, e: number, L: Loadout, dir: Dir8, anim: Anim, frames = 8, k = 1, death?: Death): SpriteData {
+  if (death) return spriteData(g, eraStage(e), dir, 0, DEATH_FRAMES, 'die', k, hooksFor(g, e, L, death));
   return spriteData(g, eraStage(e), dir, 0, frames, anim, k, hooksFor(g, e, L));
 }
 
@@ -233,6 +247,7 @@ function translate(p: Part, dx: number, dy: number) {
   if (s.k === 'e') { s.x += dx; s.y += dy; }
   else if (s.k === 'c') { s.x1 += dx; s.y1 += dy; s.x2 += dx; s.y2 += dy; }
   else for (let i = 0; i < s.pts.length; i += 2) { s.pts[i] += dx; s.pts[i + 1] += dy; }
+  if (p.clip) p.clip = [p.clip[0], p.clip[1], p.clip[2] - p.clip[0] * dx - p.clip[1] * dy];
 }
 function flip(px: Uint8ClampedArray, w: number, h: number) {
   const o = new Uint8ClampedArray(px.length);

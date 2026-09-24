@@ -327,14 +327,15 @@ function light(x: ItemCtx): Built {
 // ---------------------------------------------------------------------------------------------------
 function shield(x: ItemCtx): Built {
   const U = x.U, e = x.e, r = x.r;
-  const shape = e >= 7 ? 'energy' : e >= 4 ? 'riot' : e === 0 ? (r[0] < 0.5 ? 'round' : 'oval') : ['round', 'heater', 'kite', 'tower', 'buckler'][Math.floor(r[0] * 5)];
-  const S = U * (shape === 'buckler' ? 0.32 : shape === 'tower' || shape === 'riot' ? 0.75 : 0.55) * (0.9 + r[1] * 0.2);
+  // big shields only: a round one is about half the bearer's height across (like a viking shield)
+  const shape = e >= 7 ? 'energy' : e >= 4 ? 'riot' : e === 0 ? (r[0] < 0.6 ? 'round' : 'oval') : ['round', 'round', 'heater', 'kite', 'tower'][Math.floor(r[0] * 5)];
+  const S = U * ({ round: 1.18, oval: 1.1, heater: 1.1, kite: 1.2, tower: 1.25, riot: 1.25, energy: 1.2 } as Record<string, number>)[shape] * (0.95 + r[1] * 0.12);
   const outline = (k: number): [number, number][] => {
     const pts: [number, number][] = [];
     const n = 20;
     for (let i = 0; i < n; i++) {
       const t = (i / n) * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
-      if (shape === 'round' || shape === 'buckler' || shape === 'energy') pts.push([s * S * k, c * S * k]);
+      if (shape === 'round' || shape === 'energy') pts.push([s * S * k, c * S * k]);
       else if (shape === 'oval') pts.push([s * S * 1.3 * k, c * S * 0.8 * k]);
       else if (shape === 'tower' || shape === 'riot') pts.push([Math.sign(s) * Math.min(1, Math.abs(s) * 1.6) * S * 1.3 * k, Math.sign(c) * Math.min(1, Math.abs(c) * 1.6) * S * 0.7 * k]);
       else if (shape === 'heater') pts.push([(s > 0 ? s * 0.55 : s) * S * 1.1 * k + S * 0.2 * k, c * S * 0.8 * (s > 0 ? 1 : 1 + s * 0.9) * k]);
@@ -342,7 +343,7 @@ function shield(x: ItemCtx): Built {
     }
     return pts;
   };
-  const faceMat: Mat = cls(x) === 'hide' || (e === 0 && cls(x) === 'wood') ? x.M : cls(x) === 'wood' ? { ...x.M, tex: 'plank' } : x.M;
+  const faceMat: Mat = cls(x) === 'hide' ? x.M : cls(x) === 'wood' ? { ...x.M, tex: 'plank', texScale: 1.6 } : x.M;
   return {
     draw: F => {
       if (shape === 'energy') { // wrist emitter and a translucent hex field
@@ -356,12 +357,22 @@ function shield(x: ItemCtx): Built {
       if (shape === 'riot') F.blade(outline(0.5).map(([a, f]) => [a + S * 0.35, f]), { ramp: ramp(0.55, 0.3, 0.7), tex: 'glass', alpha: 0.85 }, U * 0.08, 0.002);
       else {
         // painted emblem in the culture's colours (stripe, cross, ring or chevron)
-        const k = Math.floor(r[2] * 4), em = x.dye;
-        if (k === 0) F.blade([[-S * 0.9, -S * 0.15], [S * 0.9, -S * 0.15], [S * 0.9, S * 0.15], [-S * 0.9, S * 0.15]].map(([a, f]) => [a * (shape === 'buckler' ? 0.7 : 0.85), f]) as [number, number][], em, U * 0.08, 0.002);
+        const k = Math.floor(r[2] * (shape === 'round' ? 7 : 4)), em = x.dye;
+        if (k >= 4 && shape === 'round') { // viking-style painted boards: halves, quarters or a swirl of arms
+          const arc = (a0: number, a1: number, k2 = 1): [number, number][] => { const q: [number, number][] = [[0, 0]]; for (let i = 0; i <= 8; i++) { const t = a0 + ((a1 - a0) * i) / 8; q.push([Math.sin(t) * S * 0.98 * k2, Math.cos(t) * S * 0.98 * k2]); } return q; };
+          if (k === 4) F.blade(arc(0, Math.PI), em, U * 0.08, 0.002);
+          if (k === 5) { F.blade(arc(0, Math.PI / 2), em, U * 0.08, 0.002); F.blade(arc(Math.PI, Math.PI * 1.5), em, U * 0.08, 0.002); }
+          if (k === 6) for (let j = 0; j < 3; j++) { const t0 = (j / 3) * Math.PI * 2; const q: [number, number][] = []; for (let i = 0; i <= 8; i++) { const t = t0 + i * 0.28, rr = S * (0.15 + i * 0.1); q.push([Math.sin(t) * rr, Math.cos(t) * rr]); } for (let i = 8; i >= 0; i--) { const t = t0 + i * 0.28 + 0.35, rr = S * (0.1 + i * 0.1); q.push([Math.sin(t) * rr, Math.cos(t) * rr]); } F.blade(q, em, U * 0.08, 0.002 + j * 0.0001); }
+          F.ball([0, 0, U * 0.12], U * 0.2, x.T, 0.003); // iron boss
+          for (let i = 0; i < 12; i++) { const t = (i / 12) * Math.PI * 2; F.ball([Math.sin(t) * S * 0.97, Math.cos(t) * S * 0.97, U * 0.09], 0.7, x.T, 0.003); } // rim nails
+          if (e >= 6) F.blade(outline(1.02).filter((_, i) => i % 3 === 0), x.G, U * 0.085, 0.004);
+          return;
+        }
+        if (k === 0) F.blade([[-S * 0.9, -S * 0.15], [S * 0.9, -S * 0.15], [S * 0.9, S * 0.15], [-S * 0.9, S * 0.15]].map(([a, f]) => [a * 0.85, f]) as [number, number][], em, U * 0.08, 0.002);
         if (k === 1) { F.blade([[-S * 0.7, -S * 0.1], [S * 0.7, -S * 0.1], [S * 0.7, S * 0.1], [-S * 0.7, S * 0.1]], em, U * 0.08, 0.002); F.blade([[-S * 0.1, -S * 0.6], [S * 0.1, -S * 0.6], [S * 0.1, S * 0.6], [-S * 0.1, S * 0.6]], em, U * 0.08, 0.0021); }
         if (k === 2) { const ring: [number, number][] = []; for (let i = 0; i < 16; i++) { const t = (i / 16) * Math.PI * 2; ring.push([Math.sin(t) * S * 0.6, Math.cos(t) * S * 0.6]); } F.blade(ring, em, U * 0.08, 0.002); F.blade(ring.map(([a, f]) => [a * 0.6, f * 0.6]), faceMat, U * 0.085, 0.0025); }
         if (k === 3) F.blade([[S * 0.1, -S * 0.7], [S * 0.6, 0], [S * 0.1, S * 0.7], [-S * 0.2, S * 0.7], [S * 0.25, 0], [-S * 0.2, -S * 0.7]], em, U * 0.08, 0.002);
-        if (shape !== 'tower') F.ball([0, 0, U * 0.1], U * 0.09, x.T, 0.003); // boss
+        if (shape !== 'tower') F.ball([0, 0, U * 0.12], U * 0.17, x.T, 0.003); // boss
       }
       if (e >= 6) F.blade(outline(1.02).filter((_, i) => i % 3 === 0), x.G, U * 0.085, 0.004);
     },
@@ -399,6 +410,7 @@ function bow(x: ItemCtx): Built {
       F.bar([tipA, tf, 0], [0, Math.min(tf, nock), 0], 0.35, 0.35, x.string, -0.01);
       F.bar([-tipA, tf, 0], [0, Math.min(tf, nock), 0], 0.35, 0.35, x.string, -0.01);
       if (x.draw > 0.05) arrow(F, x, Math.min(tf, nock), U * 1.3);
+      else if (x.use && x.t >= 0.8) arrow(F, x, -bend * 0.4 + (x.t - 0.8) * U * 22, U * 1.3); // loosed: it flies off
     },
   };
 }
@@ -417,8 +429,49 @@ function crossbow(x: ItemCtx): Built {
       const latch = x.draw > 0.1 ? U * 0.2 : U * 0.65;
       for (const s of [-1, 1]) F.bar([U * 0.68, 1, s * pw], [latch, 1, 0], 0.35, 0.35, x.string, 0.01);
       if (x.draw > 0.1) F.bar([latch, 1.5, 0], [U * 1.05, 1.5, 0], 0.55, 0.45, x.T, 0.02);
+      else if (x.use && x.t >= 0.5) { const d = U * (1.05 + (x.t - 0.5) * 20); F.bar([d - U * 0.4, 1.5, 0], [d, 1.5, 0], 0.55, 0.45, x.T, 0.02); } // the bolt flies off
     },
   };
+}
+/**
+ * What leaves the muzzle after the shot (t >= 0.5 of the use loop): a big cloud of black-powder smoke for muskets,
+ * a star-shaped flash, a wisp of smoke and a spent casing for modern guns (two shots for assault rifles), a glowing
+ * bolt for pulse rifles and a plasma ball for the space age. `a` is the muzzle along the barrel, `f` its height.
+ */
+function shotFx(F: Forge, x: ItemCtx, a: number, f: number) {
+  const U = x.U, e = x.e, age = x.t - 0.5; // 0 .. 0.5
+  const smoke = (l: number): Mat => ({ ramp: ramp(0.6, 0.05, l), tex: 'smooth', line: [150, 150, 160] });
+  const flash = (q: number, big = 1) => {
+    if (q <= 0) return;
+    const r = U * 0.3 * big * q;
+    F.blade([[a, f - r * 0.5], [a + r * 1.6, f - r * 0.25], [a + r * 2.6, f], [a + r * 1.6, f + r * 0.25], [a, f + r * 0.5]], x.fire, 0.3, 0.06);
+    F.blade([[a + r * 0.8, f - r * 1.1], [a + r * 1.05, f], [a + r * 0.8, f + r * 1.1], [a + r * 0.55, f]], x.fire, 0.3, 0.061);
+    F.ball([a + r * 0.7, f, 0], r * 0.55, x.fire2, 0.062);
+  };
+  if (e === 3) { // musket: flash, then a big rolling cloud that drifts up and forward
+    flash(age < 0.1 ? 1 : 0, 1.5);
+    const n = 6;
+    for (let i = 0; i < n; i++) {
+      const k = i / n, g = Math.min(1, age * 3 + 0.2);
+      const pa = a + U * (0.1 + k * 0.9 * g + age * 0.4), pf = f + U * (0.05 + k * 0.15 + age * 0.9 + Math.sin(i * 1.7) * 0.06);
+      F.ball([pa, pf, (i % 2 ? 1 : -1) * U * 0.05], U * (0.1 + g * 0.2) * (1 - k * 0.35), smoke(0.78 - k * 0.08), 0.05 + i * 0.001);
+    }
+    F.ball([U * 0.15, U * (0.18 + age * 0.6), 0], U * (0.05 + age * 0.25), smoke(0.72), 0.04); // flash in the pan
+    return;
+  }
+  if (e <= 5) {
+    flash(age < 0.1 ? 1 : 0);
+    if (e === 5) flash(age >= 0.1 && age < 0.2 ? 0.75 : 0); // second round of the burst
+    for (let i = 0; i < 3; i++) F.ball([a + U * (0.12 + i * 0.12 + age * 0.4), f + U * (age * 0.7 + i * 0.04), 0], U * (0.05 + age * 0.22) * (1 - i * 0.2), smoke(0.72 - i * 0.04), 0.04 + i * 0.001);
+    const c = Math.min(age, 0.3); // spent casing tumbling out of the ejection port
+    F.bar([U * 0.2 + c * U * 0.3, U * 0.1 + c * U * 2.2 - c * c * U * 9, U * 0.1 + c * U * 0.8], [U * 0.26 + c * U * 0.3, U * 0.12 + c * U * 2.2 - c * c * U * 9, U * 0.1 + c * U * 0.8], 0.6, 0.6, { ramp: ramp(0.12, 0.7, 0.55), tex: 'metal', spec: 0.8 }, 0.05);
+    return;
+  }
+  const d = a + U * (0.2 + age * 9);
+  if (e === 6) { F.bar([d, f, 0], [d + U * 0.7, f, 0], U * 0.05, U * 0.03, x.G, 0.06); F.ball([a + U * 0.05, f, 0], U * 0.12 * Math.max(0, 1 - age * 4), x.G, 0.06); return; }
+  F.ball([d, f, 0], U * 0.13, x.G, 0.06); F.ball([d, f, 0], U * 0.06, { ramp: ramp(0.15, 0.2, 0.95), tex: 'glow', emit: true, line: null }, 0.07);
+  F.bar([d - U * 0.6, f, 0], [d, f, 0], U * 0.02, U * 0.07, { ...x.G, alpha: 0.6 }, 0.055);
+  if (age < 0.12) for (let i = 0; i < 6; i++) { const t = (i / 6) * Math.PI * 2; F.ball([a + U * 0.1, f + Math.cos(t) * U * 0.15, Math.sin(t) * U * 0.15], U * 0.04, x.G, 0.06); }
 }
 function rifle(x: ItemCtx): Built {
   const U = x.U, e = x.e, L = U * (e === 3 ? 2.2 : 1.8);
@@ -434,7 +487,7 @@ function rifle(x: ItemCtx): Built {
       if (e >= 4) F.rod(U * 0.12, U * 0.24, U * 0.045, U * 0.04, dark, -U * 0.16); // magazine
       if (e >= 5) F.rod(U * 0.05, U * 0.35, U * 0.035, U * 0.035, dark, U * 0.12); // sight
       if (e >= 6) { F.rod(U * 0.3, L * 0.9, U * 0.02, U * 0.02, x.G, U * 0.09, U * 0.09, 0, 0.01); F.ball([L, U * 0.05, 0], U * 0.04, x.G, 0.01); }
-      if (x.kick > 0.3) { const q = x.kick; F.ball([L + U * 0.12 * q, U * 0.05, 0], U * 0.1 * q, e >= 6 ? x.G : x.fire2, 0.05); F.ball([L + U * 0.2 * q, U * 0.05, 0], U * 0.06 * q, e >= 6 ? x.G : x.fire, 0.06); }
+      if (x.use && x.t >= 0.5) shotFx(F, x, L, U * 0.05);
     },
   };
 }
@@ -453,7 +506,7 @@ export const HAND_TYPES: HandType[] = [
   { id: 'hammer', slot: 'one', name: 'Martelo', blurb: 'Ferramenta de construção e forja.', mats: TOOL, hold: () => 'swing', make: x => hammer(x) },
   { id: 'sickle', slot: 'one', name: 'Foice pequena', blurb: 'Colheita.', mats: TOOL, hold: () => 'swing', make: sickle },
   { id: 'light', slot: 'one', name: 'Iluminação', eraNames: ['Tocha', 'Tocha', 'Lanterna de vela', 'Lampião', 'Lanterna elétrica', 'Lanterna de mão', 'Bastão de luz', 'Orbe de luz'], blurb: 'Tocha, lanterna, lanterna elétrica, bastão ou orbe de luz, conforme a era.', mats: ['wood', 'bone', 'metal', 'crystal', 'synthetic'], hold: e => (e <= 1 || e >= 5 ? 'torch' : 'lantern'), make: light },
-  { id: 'shield', slot: 'one', name: 'Escudo', eraNames: ['Escudo de couro', 'Escudo', 'Escudo', 'Escudo', 'Escudo balístico', 'Escudo balístico', 'Escudo balístico', 'Escudo de energia'], blurb: 'Vai na mão secundária; redondo, heráldico, pipa, torre ou broquel.', mats: ['wood', 'hide', 'bone', 'metal', 'crystal', 'synthetic', 'energy'], hold: () => 'shield', make: shield },
+  { id: 'shield', slot: 'one', name: 'Escudo', eraNames: ['Escudo de couro', 'Escudo', 'Escudo', 'Escudo', 'Escudo balístico', 'Escudo balístico', 'Escudo balístico', 'Escudo de energia'], blurb: 'Vai na mão secundária; escudos grandes: redondo (viking), heráldico, pipa ou torre.', mats: ['wood', 'hide', 'bone', 'metal', 'crystal', 'synthetic', 'energy'], hold: () => 'shield', make: shield },
   { id: 'longsword', slot: 'two', name: 'Espada longa', blurb: 'Lâmina de duas mãos.', mats: MELEE, hold: () => 'two-swing', make: longsword },
   { id: 'greataxe', slot: 'two', name: 'Machado longo', blurb: 'Machado de duas mãos, de lâmina simples ou dupla.', mats: TOOL, hold: () => 'two-swing', make: x => axe(x, true) },
   { id: 'pickaxe', slot: 'two', name: 'Picareta', blurb: 'Mineração: ponta de chifre, bronze, aço ou liga.', mats: TOOL, hold: () => 'two-swing', make: pick },
