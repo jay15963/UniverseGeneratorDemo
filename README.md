@@ -4,6 +4,7 @@
   <img src="https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white" />
   <img src="https://img.shields.io/badge/Zustand-5-443E38?logo=npm&logoColor=white" />
   <img src="https://img.shields.io/badge/Canvas_API-2D-orange" />
+  <img src="https://img.shields.io/badge/WebGL-2-990000" />
 </p>
 
 <h1 align="center">🌌 Space Engine — Gerador de Universo Procedural</h1>
@@ -69,12 +70,17 @@ No mapa de superfície de qualquer planeta sólido, clique em **Pousar** e escol
 - **Natureza viva**: copas balançando com o vento (tronco fixo), capim e juncos ondulando, folhas caindo e se acumulando no chão, borboletas nas flores, bandos de pássaros com sombra, peixes saltando, ondulações na água, pólen no ar, sombras de nuvens, vaga-lumes à noite, lanterna do personagem, brasas de lava, e clima dinâmico (nublado, chuva, tempestade com relâmpagos, neve).
 - **Personagem tribal** pintado por código (cabelo com trança, penas, pintura facial, colete de pele de lobo, colar de osso, lança de pedra) com animações de caminhada (6 quadros), respiração/piscar e coleta, nas 4 direções.
 - **Água viva**: rios correm na direção da descida, lagos ondulam com o vento, pântanos cintilam e lava pulsa (quadros de animação pré-gerados no worker).
-- **Escadarias de pedra** bem visíveis marcam onde subir/descer os paredões (também destacadas no minimapa).
+- **Escadarias naturais de pedra**: degraus de pedras chatas empilhadas **na cor do terreno** (brancas na neve, cobertas de musgo na grama, arenosas no deserto), assentadas em coordenadas do mundo para que a trilha de 2 tiles seja contínua. Dá para ver de relance se a escada sobe ou desce: descendo em direção à câmera, cada degrau mostra a face frontal sombreada; subindo para longe, só os lábios iluminados; nas laterais o chão realmente desce degrau a degrau, com a parede de rocha do corte atrás. O personagem sobe e desce suavemente (altura interpolada ao longo da escada), e só se entra na escada pelo sentido dela (também destacada no minimapa).
 - **Tempestades**: chuva inclinada pelo vento, gotas criando ondulações na água e respingos no chão, raios ramificados com clarão e trovão que treme a câmera, árvores envergando e folhas/detritos voando.
-- **Desempenho**: terreno gerado em paralelo por um worker por núcleo da CPU; renderização sem limite de FPS além da taxa do monitor; contador de FPS/tempo de CPU (tecla P ou F3).
+- **Renderizador WebGL2**: o mundo inteiro (terreno com relevo, animações de água, sombras, árvores, personagem) sai em **1–3 draw calls por quadro** — cada chunk vira uma textura na GPU, sprites vão para um atlas, e a lente de visão é uma máscara pontilhada no fragment shader. Efeitos de clima/noite ficam numa camada 2D por cima. Fallback automático para Canvas2D em navegadores sem WebGL2.
+- **3 níveis de zoom (LOD)** — roda do mouse, teclas `+`/`-` ou botões na lateral:
+  - **LOD 1 · Local** (6× a 1×): a jogabilidade em pixel art.
+  - **LOD 2 · Regional** (1/2 a 1/128): um mapa da região gerado nos workers amostrando o mesmo terreno (biomas, florestas, rios, neve nos picos, relevo sombreado), em blocos de 64×64 com resolução adaptada ao zoom e o mapa-múndi por baixo enquanto os blocos chegam.
+  - **LOD 3 · Mapa-múndi**: a superfície inteira do planeta com grade de latitude/longitude e o marcador pulsante **“Você está aqui”** com a direção do jogador.
+- **Desempenho**: terreno gerado em paralelo por um worker por núcleo da CPU; renderização sem limite de FPS além da taxa do monitor; contador de FPS/tempo de CPU/draw calls (tecla P ou F3).
 - **Coleta e mochila** persistentes por planeta; frutinhas rebrotam após um dia; árvores, pedregulhos e troncos exigem ferramentas (próximo passo: crafting).
 - **Toda a arte é gerada por código** (sem arquivos de imagem): galeria em `#galeria` na URL.
-- Controles: WASD/setas, E/Espaço/clique para coletar, roda para zoom, I mochila, M minimapa, P/F3 desempenho, Esc sair; no celular, joystick virtual + botão de ação.
+- Controles: WASD/setas, E/Espaço/clique para coletar, roda ou +/- para zoom (local → regional → mapa-múndi), I mochila, M minimapa, P/F3 desempenho, Esc sair; no celular, joystick virtual + botão de ação.
 
 ### ⌨️ Atalhos no Sistema Solar
 
@@ -114,6 +120,7 @@ Cada nível deriva sua semente do nível pai, garantindo que:
 
 ### Renderização
 - **Canvas 2D API** para renderização de alta performance
+- **WebGL2** no modo sobrevivência: sprites em lote, atlas de texturas, até 16 texturas por draw call, vértices relativos à câmera para precisão em mundos de milhões de pixels
 - **Rasterizador de esferas em software** (tabelas pré-computadas por tamanho, re-render apenas quando rotação/luz mudam)
 - **Web Workers** para toda geração pesada de planetas
 - **Fundo espacial procedural** com nebulosa “tileável” (ruído 4D em toro) e camadas de estrelas com parallax
@@ -149,6 +156,7 @@ Cada nível deriva sua semente do nível pai, garantindo que:
 | **Vite 6** | Build tool e HMR |
 | **Zustand** | State management (game engine) |
 | **Canvas 2D API** | Renderização de universos, galáxias e sistemas solares |
+| **WebGL2** | Renderizador em lote do modo sobrevivência |
 | **Tailwind CSS 4** | Estilização da UI |
 | **GitHub Actions** | CI/CD para deploy automático no GitHub Pages |
 

@@ -27,7 +27,7 @@ export function cropFields(src: Omit<PlanetFields, 'ox' | 'oy' | 'fw' | 'fh'>, c
 }
 import { Ground, Feat, Feature, ChunkData, TerrainRow, TILE, CHUNK, CHUNK_PX, WORLD_TILES_X, LIFT, MAX_LEVEL, LIQUID_FRAMES } from './types';
 import { fbm2, vnoise, rand2, ridge, hash3, mulberry, seedToInt, smoothstep } from './noise';
-import { RockType, ROCK_RAMPS, GROUND_RAMPS, LEAF, RGB, shiftRamp, vegetationHueShift, waterHueShift, hex } from './palettes';
+import { RockType, ROCK_RAMPS, GROUND_RAMPS, LEAF, RGB, shiftRamp, vegetationHueShift, waterHueShift, hex, mixRGB } from './palettes';
 
 type Mode = 'living' | 'arid' | 'airless' | 'glacial' | 'frozen' | 'volcanic' | 'toxic' | 'carbon';
 
@@ -339,6 +339,72 @@ export class TerrainGenerator {
   }
 
   // ---------------------------------------------------------------------------
+  // Regional LOD: one colour per sampled tile (no rasterising, no features) - cheap enough to cover
+  // thousands of tiles around the player when the camera zooms out.
+  // ---------------------------------------------------------------------------
+  region(tx0: number, ty0: number, step: number, n: number): Uint8ClampedArray {
+    const M = n + 1; // one extra sample row/column for hill shading
+    const lv = new Float32Array(M * M);
+    const cols = new Float32Array(M * M * 3);
+    const R = this.ramps as Record<string, RGB[]>;
+    const vh = vegetationHueShift(this.gen.config.vegetationHue, this.type === PlanetType.ALIEN_LIFE);
+    const canopy = { oak: shiftRamp(LEAF.oak, vh), pine: shiftRamp(LEAF.pine, vh), jungle: shiftRamp(LEAF.oak, vh * 0.5 + 12) };
+    const rampOf: Partial<Record<Ground, RGB[]>> = {
+      [Ground.DEEP_WATER]: R.water, [Ground.SHALLOW_WATER]: R.shallow, [Ground.RIVER_WATER]: R.shallow, [Ground.SWAMP_WATER]: R.swampWater,
+      [Ground.ICE]: R.ice, [Ground.SAND]: R.sand, [Ground.RED_SAND]: R.redSand, [Ground.GRAVEL]: R.gravel, [Ground.GRASS]: R.grass,
+      [Ground.LUSH_GRASS]: R.lushGrass, [Ground.DRY_GRASS]: R.dryGrass, [Ground.TUNDRA]: R.tundra, [Ground.SNOW]: R.snow,
+      [Ground.FOREST_FLOOR]: R.forest, [Ground.NEEDLES]: R.needles, [Ground.JUNGLE_FLOOR]: R.jungle, [Ground.DIRT]: R.dirt, [Ground.MUD]: R.mud,
+      [Ground.CLAY]: R.clay, [Ground.BLUE_CLAY]: R.blueClay, [Ground.PEAT]: R.peat, [Ground.MARSH]: R.marsh, [Ground.REGOLITH]: R.regolith,
+      [Ground.LAVA]: R.lava, [Ground.ASH]: R.ash, [Ground.SULFUR_CRUST]: R.sulfur, [Ground.GRAPHITE]: R.graphite, [Ground.SALT_FLAT]: R.snow,
+    };
+    const tiles: TileInfo[] = new Array(M * M);
+    for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) {
+      const tx = tx0 + (i - 1) * step + (step >> 1), ty = ty0 + (j - 1) * step + (step >> 1);
+      const t = this.tile(tx, ty);
+      tiles[j * M + i] = t;
+      lv[j * M + i] = this.levelOf(t, tx, ty);
+    }
+    for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) {
+      const tx = tx0 + (i - 1) * step + (step >> 1), ty = ty0 + (j - 1) * step + (step >> 1);
+      const k = j * M + i;
+      const t = tiles[k], L = lv[k];
+      // same high-ground rules as chunk(): snow caps on cold peaks, bare rock on cliffs
+      if (L >= 3 && !isWater(t.g) && t.g !== Ground.LAVA) {
+        const n = vnoise(tx / 5, ty / 5, this.seed + 85);
+        const steep = step <= 2 && i > 0 && j > 0 && (Math.abs(L - lv[k - 1]) >= 2 || Math.abs(L - lv[k - M]) >= 2);
+        if (L >= 8 && t.temp < 0.45 && n > 0.25) { t.g = Ground.SNOW; t.forest *= 0.2; }
+        else if (steep) { t.g = n > 0.7 ? Ground.GRAVEL : Ground.STONE; t.forest *= 0.25; }
+      }
+      let c: RGB;
+      if (t.g === Ground.STONE) { const r = ROCK_RAMPS[t.rock]; c = r[3]; }
+      else {
+        const r = rampOf[t.g] ?? R.dirt;
+        const n = vnoise(tx / 7, ty / 7, this.seed + 91);
+        c = t.g === Ground.DEEP_WATER ? r[Math.max(0, Math.round(3.2 - Math.min(1, t.depth * 18) * 3))] : r[Math.round(2 + n * 1.6)];
+      }
+      if (t.forest > 0.05 && !isWater(t.g)) {
+        const cr = t.biome === BiomeType.TAIGA || t.temp < 0.35 ? canopy.pine : t.biome === BiomeType.TROPICAL_RAINFOREST ? canopy.jungle : canopy.oak;
+        const n = rand2(tx >> 1, ty >> 1, this.seed + 92);
+        const leaf = cr[n > 0.7 ? 3 : n > 0.3 ? 2 : 1];
+        const k2 = Math.min(1, t.forest * 1.25) * (0.55 + n * 0.45);
+        c = [c[0] + (leaf[0] - c[0]) * k2, c[1] + (leaf[1] - c[1]) * k2, c[2] + (leaf[2] - c[2]) * k2];
+      }
+      cols[k * 3] = c[0]; cols[k * 3 + 1] = c[1]; cols[k * 3 + 2] = c[2];
+    }
+    const out = new Uint8ClampedArray(n * n * 4);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const k = (j + 1) * M + i + 1;
+      const L = lv[k];
+      // light from the north-west: terraces facing it glow, the ones turned away fall into shade
+      const slope = (lv[k - M] - L) + (lv[k - 1] - L) * 0.6;
+      const sh = (1 + L * 0.03) * (slope > 0 ? Math.max(0.55, 1 - slope * 0.16) : Math.min(1.25, 1 - slope * 0.07));
+      const o = (j * n + i) * 4;
+      out[o] = cols[k * 3] * sh; out[o + 1] = cols[k * 3 + 1] * sh; out[o + 2] = cols[k * 3 + 2] * sh; out[o + 3] = 255;
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
   // Chunk generation
   // ---------------------------------------------------------------------------
   chunk(cx: number, cy: number): ChunkData {
@@ -353,14 +419,21 @@ export class TerrainGenerator {
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
       const t = tiles[j * N + i];
       if (t.lv === 0 || isWater(t.g)) continue;
-      let down1 = false, cliff = false;
+      let cliff = false, dS = false, dN = false, dE = false, dW = false;
       for (const [dx, dy] of NB4) {
         const ii = i + dx, jj = j + dy;
         if (ii < 0 || jj < 0 || ii >= N || jj >= N) continue;
         const d = t.lv - tiles[jj * N + ii].lv;
-        if (d === 1) down1 = true; else if (d > 1) cliff = true;
+        if (d === 1) { if (dy === 1) dS = true; else if (dy === -1) dN = true; else if (dx === 1) dE = true; else dW = true; }
+        else if (d > 1) cliff = true;
       }
-      if (down1 && !cliff && vnoise((tx0 + i) / 5, (ty0 + j) / 5, this.seed + 81) > 0.6) t.ramp = true;
+      if (cliff || !(dS || dN || dE || dW)) continue;
+      // narrow natural trails: in each 6-tile cell along the edge, at most one 2-tile-wide stairway
+      const gx = tx0 + i, gy = ty0 + j;
+      const along = dS || dN ? gx : gy;          // position along the terrace edge
+      const cell = Math.floor(along / 6), other = Math.floor((dS || dN ? gy : gx) / 3);
+      const pick = Math.floor(rand2(cell, other, this.seed + 81) * 4);
+      if (rand2(cell, other, this.seed + 82) < 0.7 && (((along % 6) + 6) % 6 === pick || ((along % 6) + 6) % 6 === pick + 1)) t.ramp = true;
     }
 
     // Steep terrain turns rocky: scree on multi-level slopes, bare rock and snow on high peaks
@@ -403,7 +476,11 @@ export class TerrainGenerator {
       const t = tiles[(j + B) * N + i + B];
       const k = j * CHUNK + i;
       ground[k] = t.g; biome[k] = t.biome; rock[k] = t.rock; temp[k] = t.temp;
-      level[k] = t.lv; ramp[k] = t.ramp ? 1 : 0; lava[k] = t.g === Ground.LAVA ? 1 : 0;
+      level[k] = t.lv; lava[k] = t.g === Ground.LAVA ? 1 : 0;
+      if (t.ramp) {
+        const n = tiles[(j + B - 1) * N + i + B].lv, so = tiles[(j + B + 1) * N + i + B].lv, e = tiles[(j + B) * N + i + B + 1].lv, w = tiles[(j + B) * N + i + B - 1].lv;
+        ramp[k] = so === t.lv - 1 ? 1 : e === t.lv - 1 ? 3 : w === t.lv - 1 ? 4 : n === t.lv - 1 ? 2 : 0; // 1=S 2=N 3=E 4=W
+      }
     }
     const mini = new Uint8ClampedArray(CHUNK * CHUNK * 4);
     for (let j = 0; j < CHUNK; j++) for (let i = 0; i < CHUNK; i++) {
@@ -692,6 +769,13 @@ export class TerrainGenerator {
         const west = tiles[jj * N + i + B - 1].lv, east = tiles[jj * N + i + B + 1].lv;
         const top = (maxL - L) * LIFT;
         const wx0 = (cx * CHUNK + i) * TILE;
+        if (t.ramp && !isWater(t.g) && t.g !== Ground.LAVA) {
+          const dir = south === L - 1 ? 0 : east === L - 1 ? 2 : west === L - 1 ? 3 : 1;
+          const rampAt = (di: number, dj: number) => { const n = tiles[(jj + dj) * N + i + B + di]; return n.ramp && n.lv === L; };
+          const [sa, sb] = dir <= 1 ? [rampAt(-1, 0), rampAt(1, 0)] : [rampAt(0, -1), rampAt(0, 1)];
+          this.paintRamp(buf, H, i, top, t, L, dir, G, j, wx0, rowGroundY, south, sa, sb);
+          continue;
+        }
         // --- surface ---
         for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) {
           const gk = ((j * TILE + y) * CHUNK_PX + i * TILE + x) * 4;
@@ -713,24 +797,6 @@ export class TerrainGenerator {
             continue;
           }
           buf[bk] = r * k; buf[bk + 1] = g * k; buf[bk + 2] = b * k; buf[bk + 3] = 255;
-          if (t.ramp) {
-            // carved stone stairs running down towards the lower neighbour
-            const rk = ROCK_RAMPS[t.rock];
-            const dir = south === L - 1 ? 0 : north === L - 1 ? 1 : east === L - 1 ? 2 : 3;
-            const along = dir === 0 ? y : dir === 1 ? TILE - 1 - y : dir === 2 ? x : TILE - 1 - x; // distance travelled downwards
-            const side = dir <= 1 ? x : y;
-            let v: number;
-            if (side <= 1 || side >= TILE - 2) v = side <= 1 ? 1.2 : 0.4;            // low side walls
-            else {
-              const ph = along % 4;
-              v = ph === 0 ? 4.4 : ph === 3 ? 0.8 : 3 - ph * 0.4;                 // lit tread edge -> tread -> dark riser
-              if (rand2(wx0 + x, rowGroundY + y, s + 97) > 0.93) v -= 1;
-              v -= along * 0.07;
-            }
-            const c = rk[Math.max(0, Math.min(rk.length - 1, Math.round(v)))];
-            buf[bk] = c[0] * k; buf[bk + 1] = c[1] * k; buf[bk + 2] = c[2] * k; buf[bk + 3] = 255;
-            continue;
-          }
           const lq = liq[gk >> 2];
           if (lq) animPx.push(bk, wx0 + x, rowGroundY + y, lq, i);
         }
@@ -788,6 +854,141 @@ export class TerrainGenerator {
       rows.push({ y: rowGroundY - maxL * LIFT, h: H, px: buf, anim: animPx.length ? this.animateLiquid(buf, animPx, tiles, jj) : undefined });
     }
     return rows;
+  }
+
+  /**
+   * Natural stairway: steps built from flat stones in the colour of the local ground (tinted towards
+   * the bedrock), laid out in world coordinates so a two-tile stairway reads as one.
+   * dir: 0 = descends south (towards the viewer), 1 = north (away), 2 = east, 3 = west.
+   * Direction cues: going down towards the viewer every step shows its shaded front face; going away
+   * only the bright lips show; sideways stairs really drop step by step with a rock wall above them.
+   * sideA / sideB: whether the neighbours across the stairway (W/E for N-S stairs, N/S for E-W) are stairs too.
+   */
+  private paintRamp(buf: Uint8ClampedArray, H: number, i: number, top: number, t: TileInfo, L: number, dir: number,
+    G: Uint8ClampedArray, j: number, wx0: number, rowGroundY: number, south: number, sideA: boolean, sideB: boolean) {
+    const s = this.seed;
+    const rk = ROCK_RAMPS[t.rock];
+    const gpx = (x: number, y: number): RGB => {
+      const k = ((j * TILE + (((y % TILE) + TILE) % TILE)) * CHUNK_PX + i * TILE + Math.max(0, Math.min(TILE - 1, x))) * 4;
+      return [G[k], G[k + 1], G[k + 2]];
+    };
+    const put = (x: number, y: number, c: RGB, k = 1) => {
+      if (x < 0 || x >= TILE || y < 0 || y >= H) return;
+      const bk = (y * CHUNK_PX + i * TILE + x) * 4;
+      buf[bk] = Math.min(255, c[0] * k); buf[bk + 1] = Math.min(255, c[1] * k); buf[bk + 2] = Math.min(255, c[2] * k); buf[bk + 3] = 255;
+    };
+    const h = (a: number, b: number, c: number) => rand2(a, b, s + 400 + c);
+    const bright = t.g === Ground.SNOW || t.g === Ground.ICE || t.g === Ground.SALT_FLAT;
+    const baseK = (lv: number) => bright ? 1 - Math.min(lv, 6) * 0.012 : 1 + Math.min(lv, 8) * 0.018; // same terrace lighting as normal tiles
+    const kTop = baseK(L), kBot = baseK(L - 1) * 0.97;
+    const stone = (x: number, y: number, w: number): RGB => mixRGB(gpx(x, y), rk[w > 0.7 ? 2 : 3], bright ? 0.28 : 0.3 + w * 0.2);
+    const mossy = !bright && (t.g === Ground.GRASS || t.g === Ground.LUSH_GRASS || t.g === Ground.FOREST_FLOOR || t.g === Ground.JUNGLE_FLOOR || t.g === Ground.MARSH || t.g === Ground.TUNDRA);
+    const earth = (x: number, y: number): RGB => mixRGB(gpx(x, y), rk[1], 0.65);
+    const speck = (x: number, y: number) => 0.94 + h(wx0 + x, rowGroundY + y, 7) * 0.12;
+    const vertical = dir <= 1;
+    // stone joints across the stairway, in world px, shared by both tiles of a stairway
+    const origin = vertical ? wx0 : rowGroundY;
+    const anchor = Math.floor(origin / (TILE * 2)) * TILE * 2;
+    const joints = (k: number): number[] => {
+      const out: number[] = [];
+      for (let p = anchor - 2 - Math.floor(h(anchor, k, 1) * 5); p < anchor + TILE * 2 + 9; p += 3 + Math.floor(h(p, k, 2) * 6)) out.push(p - origin);
+      return out;
+    };
+    // ragged ends where the stairway meets plain terrain, with tufts of the surrounding ground
+    const inset = (k: number, n: number, side: boolean) => (side ? 0 : 1 + Math.floor(h(origin, k * 7 + n, 3) * 2.5));
+
+    if (vertical) {
+      const Hc = dir === 0 ? TILE + Math.max(1, L - south) * LIFT : TILE;
+      const steps = dir === 0 ? 5 : 3;
+      const lightAt = (y: number) => { const a = dir === 0 ? y / (Hc - 1) : 1 - y / (TILE - 1); return kTop + (kBot - kTop) * a; };
+      // bed: the tile's own ground (earth where the stairs cut through the cliff) with smooth lighting
+      for (let x = 0; x < TILE; x++) for (let y = 0; y < Hc; y++) put(x, top + y, y < TILE ? gpx(x, y) : earth(x, y), y < TILE ? lightAt(y) : lightAt(y) * (0.62 + h(wx0 + x, y, 8) * 0.1));
+      for (let k = 0; k < steps; k++) {
+        const y0 = Math.round((k * Hc) / steps), y1 = Math.round(((k + 1) * Hc) / steps);
+        const J = joints(k);
+        const lo = inset(k, 0, sideA), hi = TILE - 1 - inset(k, 1, sideB);
+        for (let n = 0; n + 1 < J.length; n++) {
+          const xa = Math.max(lo, J[n] + 1), xb = Math.min(hi, J[n + 1] - 1);
+          if (xb < xa) continue;
+          const id = J[n] + origin;
+          const sy0 = y0 + (h(id, k, 5) < 0.35 ? 1 : 0), sy1 = y1 - 1 - (h(id, k, 12) < 0.25 && y1 - y0 > 4 ? 1 : 0);
+          const lum = 0.86 + h(id, k, 6) * 0.26, weather = h(id, k, 13);
+          const chip = h(id, k, 14) < 0.3;                        // a knocked-off corner here and there
+          for (let y = sy0; y <= sy1; y++) for (let x = xa; x <= xb; x++) {
+            if ((y === sy0 || y === sy1) && (x === xa || x === xb) && xb - xa > 1) continue; // rounded corners
+            if (chip && y === sy0 && x === xa + 1 && xb - xa > 3) continue;
+            let l: number;
+            const v = (y - sy0) / Math.max(1, sy1 - sy0);
+            if (dir === 0) l = y === sy0 ? 1.2 : v < 0.5 ? 1.05 : y === sy1 ? 0.48 : 0.72;   // lit tread, shaded front face, dark crease
+            else l = y === sy0 ? 1.24 : y === sy1 ? 0.7 : 1.02 - v * 0.08;                     // bright lip, occluded foot
+            if (x === xa) l *= 1.07; else if (x === xb) l *= 0.84;
+            // moss and grass creeping over the stone tops
+            if (mossy && y === sy0 && h(wx0 + x, rowGroundY + y, 15) < 0.28) { put(x, top + y, gpx(x, y), lightAt(y) * 1.1); continue; }
+            put(x, top + y, stone(x, y, weather), l * lum * lightAt(y) * speck(x, y));
+          }
+        }
+        // grass / moss creeping over the ragged ends
+        for (const [x0, x1] of [[0, lo], [hi + 1, TILE]] as [number, number][]) for (let x = x0; x < x1; x++) {
+          const y = y0 + Math.floor(h(wx0 + x, k, 9) * Math.max(1, y1 - y0));
+          if (y < TILE && h(wx0 + x, k, 10) < 0.7) { put(x, top + y, gpx(x, y), lightAt(y) * 1.15); put(x, top + y - 1, gpx(x, y), lightAt(y) * 1.28); }
+        }
+      }
+      if (dir === 1 && south < L) {
+        // stairs leading away still sit on a terrace edge: plain rock face below, like any cliff
+        const fh = (L - south) * LIFT;
+        for (let x = 0; x < TILE; x++) for (let y = 0; y < fh; y++) {
+          const idx = 3.2 - (y / Math.max(1, fh - 1)) * 2.4 + (h(wx0 + x, (y + rowGroundY) >> 2, 17) - 0.5) * 1.1;
+          put(x, top + TILE + y, y < 2 ? gpx(x, TILE - 1) : rk[Math.max(0, Math.min(rk.length - 1, Math.round(idx)))], y < 2 ? 0.7 - y * 0.08 : y === fh - 1 ? 0.6 : 1);
+        }
+      }
+      return;
+    }
+
+    // --- sideways stairs: the ground really steps down, a rock wall rises behind the lower treads ---
+    const steps = 4, sw = TILE / steps;
+    const east = dir === 2;
+    const stepOf = (x: number) => Math.min(steps - 1, Math.floor(x / sw));
+    const drop = (k: number) => Math.round(((east ? k : steps - 1 - k) * LIFT) / (steps - 1));
+    const fh = south < L ? (L - south) * LIFT : 0;
+    for (let x = 0; x < TILE; x++) {
+      const k = stepOf(x), o = drop(k);
+      const a = o / LIFT, lk = kTop + (kBot - kTop) * a;
+      // wall of the cut (the plateau's own rock), with a ground lip on top like every terrace edge
+      for (let y = 0; y < o; y++) {
+        const lip = 1 + Math.floor(h(wx0 + x, rowGroundY, 16) * 2.5);
+        if (y < lip) { put(x, top + y, gpx(x, y), y === 0 ? kTop * 1.14 : kTop * 0.78); continue; }
+        const fy = (y - lip) / Math.max(1, o - lip);
+        const rc = rk[Math.max(0, Math.min(rk.length - 1, Math.round(2.6 - fy * 1.6 + (h(wx0 + x, (y + rowGroundY) >> 1, 11) - 0.5) * 0.9)))];
+        put(x, top + y, mixRGB(rc, gpx(x, y), 0.3), (x % sw === 0 ? 1.06 : 0.94) * (y === o - 1 ? 0.7 : 1));
+      }
+      // tread bed
+      for (let y = 0; y < TILE; y++) put(x, top + o + y, gpx(x, y), lk);
+      // front face down to the terrain south of the stairs
+      for (let y = TILE + o; y < TILE + fh; y++) put(x, top + y, rk[Math.max(0, Math.round(3 - ((y - TILE - o) / Math.max(1, fh - o)) * 2.4))], y === TILE + fh - 1 ? 0.6 : 0.95);
+    }
+    for (let k = 0; k < steps; k++) {
+      const o = drop(k), lk = kTop + (kBot - kTop) * (o / LIFT);
+      const xa = k * sw, xb = xa + sw - 1;
+      const J = joints(k);
+      const lo = inset(k, 0, sideA), hi = TILE - 1 - inset(k, 1, sideB);
+      // which end of this tread is the drop to the next (lower) step
+      const lipX = east ? xb : xa, footX = east ? xa : xb;
+      const lowerNext = east ? k < steps - 1 : k > 0;
+      const higherPrev = east ? k > 0 : k < steps - 1;
+      for (let n = 0; n + 1 < J.length; n++) {
+        const ya = Math.max(lo, J[n] + 1), yb = Math.min(hi, J[n + 1] - 1);
+        if (yb < ya) continue;
+        const lum = 0.86 + h(J[n] + origin, k, 6) * 0.26, weather = h(J[n] + origin, k, 13);
+        for (let y = ya; y <= yb; y++) for (let x = xa; x <= xb; x++) {
+          if ((y === ya || y === yb) && (x === xa || x === xb)) continue;
+          if (mossy && y === ya && h(wx0 + x, rowGroundY + y, 15) < 0.28) { put(x, top + o + y, gpx(x, y), lk * 1.1); continue; }
+          let l = y === ya ? 1.14 : y === yb ? 0.66 : 1;          // lit back edge, shaded front edge
+          if (x === lipX && lowerNext) l *= 1.16;                  // step lip catching the light
+          if (x === footX && higherPrev) l *= 0.68;                // foot of the step above
+          put(x, top + o + y, stone(x, y, weather), l * lum * lk * speck(x, y));
+        }
+      }
+    }
   }
 
   /**
