@@ -18,11 +18,12 @@ import { useUniverseController } from './hooks/useUniverseController';
 import { GameApplication } from './components/Game/GameApplication';
 import { AssetGallery } from './components/Survival/AssetGallery';
 import { CreatureGenerator } from './components/Creature/CreatureGenerator';
+import { DemoReel } from './components/Demo/DemoReel';
 
 export default function App() {
   const { config, setConfig, bodies, isGenerating, handleGenerate, showZones, setShowZones } = useSolarSystemController();
   
-  const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator' | 'creature-generator'>(() => (typeof window !== 'undefined' && window.location.hash === '#criaturas' ? 'creature-generator' : 'menu'));
+  const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator' | 'creature-generator' | 'demo'>(() => (typeof window !== 'undefined' && window.location.hash === '#criaturas' ? 'creature-generator' : typeof window !== 'undefined' && window.location.hash.startsWith('#demo') ? 'demo' : 'menu'));
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
@@ -77,8 +78,14 @@ export default function App() {
         onUniverseStart={() => setCurrentView('universe-generator')}
         onPlay={() => setCurrentView('game')}
         onCreatureStart={() => setCurrentView('creature-generator')}
+        onDemo={() => setCurrentView('demo')}
       />
     );
+  }
+
+  if (currentView === 'demo') {
+    const m = /^#demo=(\d+)$/.exec(window.location.hash);
+    return <DemoReel onExit={() => { if (window.location.hash.startsWith('#demo')) window.location.hash = ''; setCurrentView('menu'); }} startAt={m ? +m[1] : -1} />;
   }
 
   if (currentView === 'creature-generator') {

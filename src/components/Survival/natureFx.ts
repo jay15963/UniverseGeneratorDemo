@@ -72,6 +72,14 @@ export class NatureFx {
   }
 
   get rainy() { return this.weather === 'rain' || this.weather === 'storm'; }
+  /** warm light around the player at night (off for the cinematic camera) */
+  lantern = true;
+  /** Pins the weather (scripted scenes); the random state machine stays off until `release`. */
+  force(w: Weather, instant = false) {
+    this.weather = w; this.nextWeather = 1e9;
+    if (instant) this.intensity = w === 'clear' ? 0 : w === 'cloudy' ? 0.45 : 1;
+  }
+  release() { this.nextWeather = 20; }
 
   update(c: FxContext) {
     const { dt, t } = c;
@@ -445,9 +453,11 @@ export class NatureFx {
       const [px, py] = toScreen(c.player.x, c.player.y - c.player.lift - 10);
       const flick = 1 + Math.sin(c.t * 11) * 0.02 + Math.sin(c.t * 7.3) * 0.03;
       const rad = 64 * S * flick;
-      const g = d.createRadialGradient(px, py, rad * 0.15, px, py, rad);
-      g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(0.6, 'rgba(0,0,0,0.55)'); g.addColorStop(1, 'rgba(0,0,0,0)');
-      d.fillStyle = g; d.fillRect(px - rad, py - rad, rad * 2, rad * 2);
+      if (this.lantern) {
+        const g = d.createRadialGradient(px, py, rad * 0.15, px, py, rad);
+        g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(0.6, 'rgba(0,0,0,0.55)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+        d.fillStyle = g; d.fillRect(px - rad, py - rad, rad * 2, rad * 2);
+      }
       for (const l of c.lavaSpots) {
         const [lx, ly] = toScreen(l.x, l.y - l.l * LIFT);
         const lr = 26 * S;
@@ -456,7 +466,7 @@ export class NatureFx {
         d.fillStyle = lg; d.fillRect(lx - lr, ly - lr, lr * 2, lr * 2);
       }
       ctx.drawImage(dc, 0, 0);
-      if (night > 0.2) {
+      if (night > 0.2 && this.lantern) {
         ctx.globalCompositeOperation = 'lighter';
         const wg = ctx.createRadialGradient(px, py, 0, px, py, rad * 0.8);
         wg.addColorStop(0, `rgba(255,170,80,${0.12 * night})`); wg.addColorStop(1, 'rgba(255,140,60,0)');
