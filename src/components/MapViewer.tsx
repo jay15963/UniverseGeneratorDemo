@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Download, Maximize, Globe2, Map as MapIcon, Cloud, Rocket, Eye } from 'lucide-react';
 import { SurvivalView } from './Survival/SurvivalView';
+import { CreatureGenerator } from './Creature/CreatureGenerator';
+import { Genome, CreatureParams, DEFAULT_PARAMS } from '../lib/creature/genome';
+import { PlanetType as PT } from '../lib/planet-generator/generator';
 import { LayerType, BIOME_NAMES, hasCapability, PlanetCapability, PlanetConfig } from '../lib/planet-generator/generator';
 import type { PlanetSession, PlanetProbe } from '../lib/planet-generator/planetClient';
 import { atmosphereFor } from '../lib/planet-generator/visualProfile';
@@ -33,6 +36,9 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
   // null = not choosing; 'player' walks the surface, 'spectator' is a free camera over the terrain
   const [landingMode, setLandingMode] = useState<null | 'player' | 'spectator'>(null);
   const [landing, setLanding] = useState<{ x: number; y: number; spectator: boolean } | null>(null);
+  // landing with the character: the player first designs their species (played in its tribal era)
+  const [pickFor, setPickFor] = useState<{ x: number; y: number; params: CreatureParams } | null>(null);
+  const [playerCreature, setPlayerCreature] = useState<{ genome: Genome; citizen: number } | null>(null);
   const canLand = config.planetType !== 'gas-giant';
   const [viewTransform, setViewTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [isDragging, setIsDragging] = useState(false);
@@ -187,7 +193,15 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
   const handlePointerUp = (e: React.PointerEvent) => {
     if (landingMode && session && Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y) < 6) {
       const px = getMapPixel(e.clientX, e.clientY);
-      if (px) { setLanding({ x: px.px, y: px.py, spectator: landingMode === 'spectator' }); setLandingMode(null); }
+      if (px && landingMode === 'spectator') { setLanding({ x: px.px, y: px.py, spectator: true }); setLandingMode(null); }
+      else if (px && session) {
+        const { px: lx, py: ly } = px;
+        setLandingMode(null);
+        session.probe(lx, ly).then(pr => {
+          const params: CreatureParams = pr ? { ...DEFAULT_PARAMS, temperature: Math.max(0, Math.min(1, pr.temperature)), water: Math.max(0, Math.min(1, pr.moisture)) } : DEFAULT_PARAMS;
+          setPickFor({ x: lx, y: ly, params });
+        }).catch(() => setPickFor({ x: lx, y: ly, params: DEFAULT_PARAMS }));
+      }
     }
     activePointers.current.delete(e.pointerId);
     if (activePointers.current.size < 2) lastPinchDistance.current = null;
@@ -346,8 +360,16 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
         )}
       </div>
 
+      {pickFor && (
+        <div className="fixed inset-0 z-[400] overflow-auto bg-black">
+          <CreatureGenerator onBack={() => setPickFor(null)} pick={{
+            params: pickFor.params, mode: config.planetType === PT.ALIEN_LIFE ? 'alien' : 'earth', planetName: worldName ?? config.seed,
+            onPick: (genome, citizen) => { setPlayerCreature({ genome, citizen }); setLanding({ x: pickFor.x, y: pickFor.y, spectator: false }); setPickFor(null); },
+          }} />
+        </div>
+      )}
       {landing && session && (
-        <SurvivalView session={session} mapX={landing.x} mapY={landing.y} spectator={landing.spectator} title={worldName ?? config.seed} onExit={() => setLanding(null)} />
+        <SurvivalView session={session} mapX={landing.x} mapY={landing.y} spectator={landing.spectator} playerCreature={landing.spectator ? null : playerCreature} title={worldName ?? config.seed} onExit={() => setLanding(null)} />
       )}
       <div className="mt-3 bg-black/30 p-3 sm:p-4 rounded-xl border border-white/5">
         <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500 mb-2">Legenda</h3>

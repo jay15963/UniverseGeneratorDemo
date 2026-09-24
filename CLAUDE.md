@@ -28,5 +28,12 @@ These were set by the project owner — keep them:
 - **Civilisations keep the species' anatomy**; only clothes and small personal objects change per era. Clothes are
   **civilian** — no armour, weapons, uniforms or work/profession gear (no knights, soldiers or astronauts). Each era has
   several options per slot and a citizen index picks the combination.
+- **No equipment at all** for civilisations: hands stay free - no tools, weapons, bags, baskets, canes or held objects.
+  Only civilian clothes, hats, shoes and jewellery.
+- Animations: idle, walk, run, fly (fliers; landed = wings folded), swim. Fliers take off, fly and land in-game; swimmers
+  surface for ~5 s (random) and dive again with splashes/ripples tinted by the planet's own water colour.
+- Living planets carry **200+ species** (`src/lib/fauna/species.ts`), animal stages only (no civilisations yet), spawned
+  per chunk by biome/water. Landing with the character opens the creature screen; the player plays their species'
+  tribal era.
 - Everything is a deterministic function of `(seed, params, mode)`; random numbers are drawn up-front in a fixed order so
   sliders morph the same species instead of reshuffling it.

@@ -259,8 +259,8 @@ export class NatureFx {
   }
 
   ring(x: number, y: number, max: number, col: string) { if (this.rings.length < 220) this.rings.push({ x, y, r: 0, max, life: 0, col }); }
-  splash(x: number, y: number, n: number) {
-    for (let k = 0; k < n; k++) this.motes.push({ x, y, vx: (this.rng() - 0.5) * 30, vy: -20 - this.rng() * 20, life: 0, max: 0.4, col: 'rgba(230,245,255,0.9)', size: 1 });
+  splash(x: number, y: number, n: number, col = 'rgba(230,245,255,0.9)', spread = 30) {
+    for (let k = 0; k < n; k++) this.motes.push({ x: x + (this.rng() - 0.5) * spread * 0.2, y, vx: (this.rng() - 0.5) * spread, vy: -20 - this.rng() * 22, life: 0, max: 0.35 + this.rng() * 0.25, col, size: this.rng() < 0.3 ? 2 : 1 });
   }
 
   /** Sway offset (px) for vegetation at a world position. */

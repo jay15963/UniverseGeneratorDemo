@@ -18,8 +18,12 @@ export interface LegSpec {
 /** Draws one leg; returns the foot position. */
 export function leg(S: Sketch, k: Kit, g: Genome, L: LegSpec, ph: number, o: PO = {}): V3 {
   const w = ph + L.phase;
-  const lift = Math.max(0, -Math.cos(w)) * L.len * 0.16;
-  const fwd = Math.sin(w) * L.stride;
+  const A = S.anim;
+  // idle: feet planted (a slow weight shift); walk; run: longer, higher strides; fly: tucked
+  const gait = A === 'idle' || A === 'swim' ? 0 : A === 'run' ? 1.7 : 1;
+  let lift = Math.max(0, -Math.cos(w)) * L.len * 0.16 * (A === 'run' ? 1.5 : 1) * gait;
+  let fwd = Math.sin(w) * L.stride * gait + (A === 'idle' ? Math.sin(ph + L.phase * 0.3) * L.len * 0.015 : 0);
+  if (A === 'fly') { lift = L.len * 0.55 + Math.sin(ph) * L.len * 0.03; fwd = -L.len * 0.35; }
   const r = L.r, lo = g.socks ? k.sock : k.limb;
   const out = L.type === 'sprawl' ? L.len * 0.6 : L.type === 'insectoid' ? L.len * 0.85 : L.type === 'tentacle' ? L.len * 0.3 : r * 0.3;
   const foot: V3 = [L.hip[0] + fwd, lift, L.hip[2] + L.side * out];
@@ -107,7 +111,7 @@ export function tail(S: Sketch, k: Kit, g: Genome, root: V3, len: number, r: num
   if (g.tail === 'none') return [root];
   const n = g.tail === 'whip' ? 9 : 7;
   const sway = (i: number): [number, number] => {
-    const wv = Math.sin(ph - i * 0.55) * 0.09;
+    const wv = Math.sin(ph - i * 0.55) * (S.anim === 'idle' ? 0.05 : S.anim === 'run' ? 0.13 : 0.09);
     if (g.tail === 'curl') return [i > 2 ? 0.5 : 0.1, wv];
     if (g.tail === 'stinger') return [i > 1 ? 0.55 : 0.2, wv * 0.5];
     if (g.tail === 'bushy') return [0.14, wv];
@@ -141,6 +145,18 @@ export function tail(S: Sketch, k: Kit, g: Genome, root: V3, len: number, r: num
 /** Pair of wings on the shoulders (flap 0..1 from folded-up to spread). */
 export function wings(S: Sketch, k: Kit, g: Genome, sh: V3, span: number, ph: number, halfWidth: number) {
   const insect = g.wings === 'insect';
+  const flying = S.anim === 'fly';
+  if (!flying) {
+    // folded along the back while walking or resting
+    for (const s of [-1, 1]) {
+      const root = add(sh, [0, 0, s * halfWidth * 0.75]);
+      const breathe = Math.sin(ph) * span * 0.02;
+      if (insect) { S.blob(add(root, [-span * 0.35, span * 0.08, 0]), [-1, 0.1, 0], span * 0.4, span * 0.1, { ...k.membrane, alpha: 0.5, tex: 'fin', line: [60, 70, 90] }, { flat: 0.4 }); continue; }
+      const m = g.wings === 'feather' ? { ...k.body, tex: 'feathers' as const, texScale: 1.1, belly: undefined, fuzz: 0.3 } : { ...k.membrane, alpha: 0.95 };
+      S.poly([add(root, [span * 0.1, span * 0.1 + breathe, 0]), add(root, [-span * 0.25, span * 0.22 + breathe, s * 2]), add(root, [-span * 0.8, span * 0.05, s * 2]), add(root, [-span * 0.55, -span * 0.12, s]), add(root, [0, -span * 0.08, 0])], m, { flat: 0.35 });
+    }
+    return;
+  }
   const flap = Math.sin(ph * (insect ? 2 : 1));
   const th = 0.55 + flap * 0.45;                                   // angle above horizontal
   for (const s of [-1, 1]) {
