@@ -55,6 +55,27 @@ Além do modo exploração, cada gerador pode ser usado separadamente pela tela 
 - **Menu vivo** — cena procedural animada com um mundo diferente do gerador a cada visita.
 - **Sem travamentos** — toda geração de planeta roda em **Web Workers** (pool para texturas + worker dedicado para a superfície em 2048×1024), com cache LRU de texturas.
 
+### 🏕️ Modo Sobrevivência (pouso na superfície)
+
+No mapa de superfície de qualquer planeta sólido, clique em **Pousar** e escolha um ponto: você desce e explora a pé um terreno em pixel art gerado **a partir dos dados reais do planeta** (bioma, clima, costa, rios, rochas, minérios e fertilidade daquele ponto do mapa).
+
+- **Mundo contínuo em chunks** de 32×32 tiles, gerados no Web Worker (≈80 ms cada) e carregados ao redor do jogador.
+- **Solos**: gramados, capim seco, tundra, neve, serrapilheira, folhiço de pinheiro, solo de selva, terra, lama, argila vermelha/azul, turfa, brejo, areia, cascalho, salina, afloramentos rochosos (8 tipos de rocha: granito, andesito, basalto, calcário, arenito, giz, xisto, peridotito), além de regolito, gelo, lava, cinzas, enxofre e grafite em mundos sem vida.
+- **Água**: oceanos com espuma na costa, rios que seguem o mapa do planeta, riachos, lagoas e pântanos.
+- **Florestas densas de verdade**: copas entrelaçadas, sub-bosque com samambaias, arbustos, cogumelos, gravetos, troncos caídos e tocos. Espécies por bioma: carvalho, bétula, bordo, pinheiro, abeto (com neve), acácia, sumaúma com cipós, palmeira, salgueiro e árvores mortas.
+- **Recursos para crafting (inspirados em Vintage Story)**: graveto, pedras soltas de cada rocha, pederneira, cobre nativo, cassiterita, quartzo aurífero, limonita, capim, junco, taboa, linho, samambaia, mirtilo, framboesa, amora, cogumelos, cenoura/cebola/nabo/abóbora/trigo selvagens, conchas, flores; e em outros mundos: cristais de gelo, obsidiana, enxofre, diamante bruto e sal-gema.
+- **Relevo de verdade**: o terreno tem até 24 níveis de altura. Montanhas são platôs empilhados com **paredões de rocha estratificada** (face sul visível, sombra projetada, cantos arredondados, bordas de grama/neve), picos nevados e encostas de cascalho. Paredões são **intransponíveis** — sobe-se e desce-se apenas por **rampas** naturais. Rios que cruzam um degrau viram **cachoeiras animadas** com névoa.
+- **Lente de visão**: quando um paredão ou uma copa esconde o personagem, abre-se uma janela circular com borda pontilhada que revela o que está atrás, sem precisar girar a câmera.
+- **Natureza viva**: copas balançando com o vento (tronco fixo), capim e juncos ondulando, folhas caindo e se acumulando no chão, borboletas nas flores, bandos de pássaros com sombra, peixes saltando, ondulações na água, pólen no ar, sombras de nuvens, vaga-lumes à noite, lanterna do personagem, brasas de lava, e clima dinâmico (nublado, chuva, tempestade com relâmpagos, neve).
+- **Personagem tribal** pintado por código (cabelo com trança, penas, pintura facial, colete de pele de lobo, colar de osso, lança de pedra) com animações de caminhada (6 quadros), respiração/piscar e coleta, nas 4 direções.
+- **Água viva**: rios correm na direção da descida, lagos ondulam com o vento, pântanos cintilam e lava pulsa (quadros de animação pré-gerados no worker).
+- **Escadarias de pedra** bem visíveis marcam onde subir/descer os paredões (também destacadas no minimapa).
+- **Tempestades**: chuva inclinada pelo vento, gotas criando ondulações na água e respingos no chão, raios ramificados com clarão e trovão que treme a câmera, árvores envergando e folhas/detritos voando.
+- **Desempenho**: terreno gerado em paralelo por um worker por núcleo da CPU; renderização sem limite de FPS além da taxa do monitor; contador de FPS/tempo de CPU (tecla P ou F3).
+- **Coleta e mochila** persistentes por planeta; frutinhas rebrotam após um dia; árvores, pedregulhos e troncos exigem ferramentas (próximo passo: crafting).
+- **Toda a arte é gerada por código** (sem arquivos de imagem): galeria em `#galeria` na URL.
+- Controles: WASD/setas, E/Espaço/clique para coletar, roda para zoom, I mochila, M minimapa, P/F3 desempenho, Esc sair; no celular, joystick virtual + botão de ação.
+
 ### ⌨️ Atalhos no Sistema Solar
 
 | Tecla | Ação |
@@ -172,7 +193,8 @@ src/
 │   ├── galaxy/                  # Gerador de galáxia
 │   ├── solar-system/            # Gerador de sistema solar
 │   ├── planet-generator/        # Gerador de superfície + Web Worker + perfis visuais
-│   └── render/                  # Esferas planetárias, estrelas, anéis, galáxias, fundo espacial
+│   ├── render/                  # Esferas planetárias, estrelas, anéis, galáxias, fundo espacial
+│   └── terrain/                 # Terreno jogável: gerador, solos, recursos, pixel art procedural
 └── hooks/                       # Controllers dos geradores individuais
 ```
 
@@ -186,6 +208,9 @@ src/
 - [x] Gerador de universo com milhares de galáxias
 - [x] Modo Exploração com LOD e transições de hiperespaço
 - [ ] Jogo Grand Strategy estilo "War" com Supabase multiplayer
+- [x] Terreno jogável com recursos coletáveis (modo sobrevivência)
+- [ ] Crafting (machado de pedra, faca de pederneira, fogueira, cestos)
+- [ ] Fauna procedural e tribos/NPCs
 - [ ] Terraformação e construção de bases planetárias
 - [ ] Nações, cidades e controle territorial por sistema solar
 

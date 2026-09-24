@@ -11,9 +11,23 @@ import { createNoise3D } from 'simplex-noise';
 import { PlanetGenerator, LayerType, PlanetConfig } from './generator';
 import type { WorkerRequest, WorkerResponse, PlanetProbe } from './workerProtocol';
 import { cloudProfileFor } from './visualProfile';
+import { TerrainGenerator, cropFields } from '../terrain/terrainGen';
+
+const fieldsOf = (g: PlanetGenerator) => ({ config: g.config, elevation: g.elevation, temperature: g.temperature, moisture: g.moisture, fertility: g.fertility, ores: g.ores, waterAccumulation: g.waterAccumulation });
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const sessions = new Map<string, PlanetGenerator>();
+const terrains = new Map<string, TerrainGenerator>();
+function terrainFor(sessionId: string): TerrainGenerator {
+  let t = terrains.get(sessionId);
+  if (!t) {
+    const gen = sessions.get(sessionId);
+    if (!gen) throw new Error('Unknown session ' + sessionId);
+    t = new TerrainGenerator({ ...fieldsOf(gen), ox: 0, oy: 0, fw: gen.config.width, fh: gen.config.height });
+    terrains.set(sessionId, t);
+  }
+  return t;
+}
 
 function post(msg: WorkerResponse, transfer: Transferable[] = []) {
   ctx.postMessage(msg, transfer);
@@ -106,8 +120,26 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         post({ kind: 'probe', id: msg.id, probe: gen ? probe(gen, msg.x, msg.y) : null });
         break;
       }
+      case 'chunk': {
+        const chunk = terrainFor(msg.sessionId).chunk(msg.cx, msg.cy);
+        post({ kind: 'chunk', id: msg.id, chunk }, [...chunk.rows.flatMap(r => [r.px.buffer, ...(r.anim ?? []).map(a => a.buffer)]), chunk.ground.buffer, chunk.biome.buffer, chunk.rock.buffer, chunk.temp.buffer, chunk.level.buffer, chunk.ramp.buffer, chunk.lava.buffer, chunk.mini.buffer]);
+        break;
+      }
+      case 'spawn': {
+        const sp = terrainFor(msg.sessionId).spawn(msg.x, msg.y);
+        post({ kind: 'spawn', id: msg.id, tx: sp.tx, ty: sp.ty });
+        break;
+      }
+      case 'fields': {
+        const gen = sessions.get(msg.sessionId);
+        if (!gen) throw new Error('Unknown session ' + msg.sessionId);
+        const f = cropFields(fieldsOf(gen), msg.x, msg.y, msg.size);
+        post({ kind: 'fields', id: msg.id, fields: f }, [f.elevation.buffer, f.temperature.buffer, f.moisture.buffer, f.fertility.buffer, f.ores.buffer, f.waterAccumulation.buffer]);
+        break;
+      }
       case 'close': {
         sessions.delete(msg.sessionId);
+        terrains.delete(msg.sessionId);
         break;
       }
     }

@@ -16,6 +16,7 @@ import { UniverseSidebar } from './components/Universe/UniverseSidebar';
 import { UniverseViewer } from './components/Universe/UniverseViewer';
 import { useUniverseController } from './hooks/useUniverseController';
 import { GameApplication } from './components/Game/GameApplication';
+import { AssetGallery } from './components/Survival/AssetGallery';
 
 export default function App() {
   const { config, setConfig, bodies, isGenerating, handleGenerate, showZones, setShowZones } = useSolarSystemController();
@@ -63,6 +64,8 @@ export default function App() {
   const solarSystemCtrl = useSolarSystemController();
   const galaxyCtrl = useGalaxyController();
   const universeCtrl = useUniverseController();
+
+  if (typeof window !== 'undefined' && window.location.hash === '#galeria') return <AssetGallery />;
 
   if (currentView === 'menu') {
     return (
