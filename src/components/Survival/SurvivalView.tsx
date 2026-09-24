@@ -514,7 +514,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     const overlay = overlayRef.current!;
     // WebGL2 batched renderer; Canvas2D only as a fallback for browsers without it
     let gl: GLWorld | null = null;
-    try { gl = GLWorld.create(canvas); } catch (e) { console.warn('WebGL2 indisponível, usando Canvas2D', e); }
+    try { gl = GLWorld.create(canvas, !!cine); } catch (e) { console.warn('WebGL2 indisponível, usando Canvas2D', e); }
     glRef.current = gl;
     const ctx = gl ? null : (canvas.getContext('2d', { alpha: false }) ?? canvas.getContext('2d'))!;
     const octx = overlay.getContext('2d')!;
@@ -1213,8 +1213,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
 
   const ui = cine ? (
     <div className="fixed inset-0 z-[300] bg-black select-none pointer-events-none" style={{ visibility: standby ? 'hidden' : 'visible' }}>
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" style={{ imageRendering: 'pixelated' }} />
-      <canvas ref={overlayRef} className="absolute inset-0 w-full h-full" />
+      <canvas ref={canvasRef} data-cine="world" className="absolute inset-0 w-full h-full" style={{ imageRendering: 'pixelated' }} />
+      <canvas ref={overlayRef} data-cine="overlay" className="absolute inset-0 w-full h-full" />
       {loading && <div className="absolute inset-0 bg-black" />}
     </div>
   ) : (

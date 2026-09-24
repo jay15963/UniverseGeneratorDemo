@@ -58,7 +58,13 @@ These were set by the project owner — keep them:
   + 8 eras (1 s each, space age held 3 s) → 2:17 end card for 5 s: "Made with Claude Opus 5.5", "running in a web
   browser at 500+ FPS", "@jaayyyy.ay" and the music credit. Keep it mysterious (no genre labels).
 - The clock is the music itself (`public/trailer/leaf.mp3` if present - gitignored, the licence covers use with credit,
-  not redistribution - otherwise the YouTube player). Heavy things are prepared before the title cards.
+  not redistribution - otherwise a hidden YouTube player). Heavy things are prepared before the title cards.
+- All on-screen text (title cards, end card, the animated "now playing" badge that credits the track for the whole film)
+  is drawn on the trailer canvas (`overlay.ts`) so it is part of the recorded video. No YouTube thumbnail on screen.
+- Menu "Baixar" (next to "Assistir trailer") records the film while it plays: the surface canvases (cinematic GL uses
+  `preserveDrawingBuffer`) + the trailer canvas are composited and encoded with WebCodecs (H.264, VP9 fallback; AAC or
+  Opus) into a regular MP4 via `mp4-muxer`, timestamps from the music clock, music encoded from the file. It needs the
+  music file: the local one, or the viewer picks it. MediaRecorder is the fallback without WebCodecs.
 - Cosmos renderers (`cosmos.ts`) reuse the game's generators/sprites with a scripted camera; `creatures.ts` renders
   sheets through `SpriteStore` workers. `#trailer=S` starts at second S; `#trailer=S,0.0333` runs a silent fixed-step
   clock (for slow test machines).

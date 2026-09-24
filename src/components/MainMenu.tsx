@@ -1,6 +1,7 @@
-import React, { useMemo } from 'react';
-import { Rocket, Globe2, Sun, Sparkles, Orbit, Settings, Dna, Clapperboard, Film } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Rocket, Globe2, Sun, Sparkles, Orbit, Settings, Dna, Clapperboard, Film, Download } from 'lucide-react';
 import { MenuScene } from './MenuScene';
+import { LOCAL_SOUNDTRACK } from './Trailer/Trailer';
 
 interface MainMenuProps {
   onStart: () => void;
@@ -11,9 +12,20 @@ interface MainMenuProps {
   onCreatureStart: () => void;
   onDemo: () => void;
   onTrailer: () => void;
+  /** record the trailer into a video file, with this soundtrack URL */
+  onTrailerDownload: (soundtrack: string) => void;
 }
 
-export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onCreatureStart, onDemo, onTrailer }: MainMenuProps) {
+export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onCreatureStart, onDemo, onTrailer, onTrailerDownload }: MainMenuProps) {
+  // the recording needs the music as a file: the one served with the site, or one the viewer picks
+  const [localTrack, setLocalTrack] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    fetch(LOCAL_SOUNDTRACK, { method: 'HEAD' })
+      .then(r => setLocalTrack(r.ok && (r.headers.get('content-type') ?? '').startsWith('audio')))
+      .catch(() => setLocalTrack(false));
+  }, []);
+  const download = () => { if (localTrack) onTrailerDownload(LOCAL_SOUNDTRACK); else fileRef.current?.click(); };
   // A different showcase world every time the menu opens
   const sceneSeed = useMemo(() => 'menu-' + Math.random().toString(36).slice(2, 8), []);
 
@@ -36,7 +48,17 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
 
         <div className="flex flex-col gap-1.5 w-full max-w-[22rem]">
           <MenuButton label="Jogar" hint="Explore um universo inteiro" icon={<Rocket className="w-5 h-5" />} onClick={onPlay} primary />
-          <MenuButton label="Assistir trailer" icon={<Film className="w-4 h-4" />} onClick={onTrailer} badge="NOVO" />
+          <div className="flex items-stretch gap-1.5">
+            <div className="flex-1 min-w-0"><MenuButton label="Assistir trailer" icon={<Film className="w-4 h-4" />} onClick={onTrailer} badge="NOVO" /></div>
+            <button onClick={download}
+              title={localTrack ? 'Baixar o trailer em vídeo (grava enquanto ele passa, ~2:30)' : 'Baixar o trailer em vídeo: escolha o arquivo da música "Leaf" (Infraction); ele é gravado enquanto passa (~2:30)'}
+              className="group flex items-center gap-1.5 px-3 rounded-xl border border-white/10 bg-white/[0.04] hover:bg-white/[0.1] hover:border-white/25 text-cyan-200/80 hover:text-cyan-100 transition-all">
+              <Download className="w-4 h-4 group-hover:translate-y-0.5 transition-transform" />
+              <span className="text-xs font-bold tracking-wide whitespace-nowrap">Baixar</span>
+            </button>
+            <input ref={fileRef} type="file" accept="audio/*" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onTrailerDownload(URL.createObjectURL(f)); }} />
+          </div>
           <MenuButton label="Assistir demo" icon={<Clapperboard className="w-4 h-4" />} onClick={onDemo} />
           <MenuButton label="Gerador de Criaturas" icon={<Dna className="w-4 h-4" />} onClick={onCreatureStart} />
           <MenuButton label="Gerador de Planeta" icon={<Globe2 className="w-4 h-4" />} onClick={onStart} />
@@ -79,7 +101,7 @@ function MenuButton({ label, hint, icon, onClick, disabled, primary, badge }: Me
     >
       <span className={`${primary ? 'text-white' : 'text-cyan-200/70 group-hover:text-cyan-200'} transition-colors`}>{icon}</span>
       <span className="flex flex-col">
-        <span className={`font-bold tracking-wide ${primary ? 'text-lg' : 'text-sm sm:text-base text-neutral-200 group-hover:text-white'}`}>{label}</span>
+        <span className={`font-bold tracking-wide whitespace-nowrap ${primary ? 'text-lg' : 'text-sm sm:text-base text-neutral-200 group-hover:text-white'}`}>{label}</span>
         {hint && <span className="text-[11px] text-white/70 font-medium">{hint}</span>}
       </span>
       {badge && <span className="ml-auto text-[9px] font-black tracking-widest px-1.5 py-0.5 rounded bg-fuchsia-500/80 text-white">{badge}</span>}

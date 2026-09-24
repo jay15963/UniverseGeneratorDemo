@@ -24,6 +24,7 @@ import { SpaceShot } from '../Demo/spaceShot';
 import { WORLDS, STARS, GIANT, cfg } from '../Demo/worlds';
 import { UniverseScene, GalaxyScene, SystemScene, EarthStar, drawHyperspace, drawCloudFog, warmFog, ease, zoomLerp } from './cosmos';
 import { CreatureMontage } from './creatures';
+import { drawTitles, drawNowPlaying, FilmRecorder } from './overlay';
 
 // ---------------------------------------------------------------------------------------------------
 // Timeline (seconds on the soundtrack)
@@ -37,6 +38,8 @@ const T = {
 };
 const HYPER_IN = 0.6, HYPER_OUT = 0.5;
 const MUSIC = { title: 'Leaf', artist: 'Infraction', youtube: 'oeCvq6VbtmY' };
+/** the soundtrack served with the site, when present (it is not in the repository: see CLAUDE.md) */
+export const LOCAL_SOUNDTRACK = `${import.meta.env.BASE_URL}trailer/leaf.mp3`;
 
 type Key = keyof typeof WORLDS;
 interface SurfacePlan { world: Key; prepareAt: number; end: number; shots: ShotSpec[] }
@@ -99,8 +102,13 @@ class Soundtrack {
   started = false;
   private corr = 0;
 
-  constructor(private host: HTMLElement, private seek: number) {
-    const url = `${import.meta.env.BASE_URL}trailer/leaf.mp3`;
+  private actx: AudioContext | null = null;
+  private tap: MediaStreamAudioDestinationNode | null = null;
+
+  /** `file`: a soundtrack the viewer picked (always used, and recordable) */
+  constructor(private host: HTMLElement, private seek: number, file?: string) {
+    if (file) { this.audio = new Audio(file); this.audio.preload = 'auto'; return; }
+    const url = LOCAL_SOUNDTRACK;
     fetch(url, { method: 'HEAD' }).then(r => {
       if (r.ok && (r.headers.get('content-type') ?? '').startsWith('audio')) {
         this.audio = new Audio(url);
@@ -148,8 +156,21 @@ class Soundtrack {
     }
     return this.startAt + (performance.now() - this.startPerf) / 1000 + this.corr;
   }
+  /** The music as a recordable track (local file only): routed through Web Audio to the speakers and a tap. */
+  audioTrack(): MediaStreamTrack | null {
+    if (!this.audio) return null;
+    if (!this.tap) {
+      this.actx = new AudioContext();
+      const src = this.actx.createMediaElementSource(this.audio);
+      this.tap = this.actx.createMediaStreamDestination();
+      src.connect(this.actx.destination);
+      src.connect(this.tap);
+      this.actx.resume().catch(() => { /* resumed by the next gesture */ });
+    }
+    return this.tap.stream.getAudioTracks()[0] ?? null;
+  }
   stop() { try { this.audio?.pause(); this.yt?.pauseVideo(); } catch { /* ignore */ } }
-  dispose() { this.stop(); try { this.yt?.destroy(); } catch { /* ignore */ } }
+  dispose() { this.stop(); try { this.yt?.destroy(); this.actx?.close(); } catch { /* ignore */ } }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -157,12 +178,15 @@ class Soundtrack {
 // ---------------------------------------------------------------------------------------------------
 interface Mounted { key: string; session: PlanetSession; cine: SurfaceCine; x: number; y: number; standby: boolean }
 
-export function Trailer({ onExit, seek = -INTRO, step = 0 }: { onExit: () => void; seek?: number; /** fixed clock step per frame (testing: no music) */ step?: number }) {
+export function Trailer({ onExit, seek = -INTRO, step = 0, record }: {
+  onExit: () => void; seek?: number;
+  /** fixed clock step per frame (testing: no music) */ step?: number;
+  /** record the film into a video file (the value is the soundtrack URL) */ record?: string;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ytRef = useRef<HTMLDivElement>(null);
   const prepRef = useRef<HTMLDivElement>(null);
-  const introA = useRef<HTMLDivElement>(null), introB = useRef<HTMLDivElement>(null);
-  const endA = useRef<HTMLDivElement>(null), endB = useRef<HTMLDivElement>(null), endC = useRef<HTMLDivElement>(null), endD = useRef<HTMLDivElement>(null);
+  const recRef = useRef<HTMLDivElement>(null);
   const [surfaces, setSurfaces] = useState<Mounted[]>([]);
   const [chrome, setChrome] = useState(false);
   const exitRef = useRef(onExit);
@@ -181,7 +205,8 @@ export function Trailer({ onExit, seek = -INTRO, step = 0 }: { onExit: () => voi
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext('2d')!;
     let alive = true, raf = 0;
-    const music = new Soundtrack(ytRef.current!, seek);
+    const music = new Soundtrack(ytRef.current!, seek, record);
+    const recorder = record ? new FilmRecorder(record, INTRO) : null;
     // the directors on the ground read the trailer's time (set once per frame below)
     let curT = -INTRO;
     const clock = () => curT;
@@ -262,11 +287,12 @@ export function Trailer({ onExit, seek = -INTRO, step = 0 }: { onExit: () => voi
         const t1 = performance.now();
         while (performance.now() - t1 < 12 && !universe.warm(4));
         warmFog();
-        const ok = (firstWorld.cine?.ready && firstWorld.cine.idle && globe.tex && universe.warm(0)) || nowMs - prepT0 > 40000;
+        const ok = ((firstWorld.cine?.ready && firstWorld.cine.idle && globe.tex && universe.warm(0)) || nowMs - prepT0 > 40000) && (!recorder || recorder.ready);
         if (prepRef.current) prepRef.current.style.opacity = String(Math.min(1, (nowMs - prepT0) / 800) * 0.6);
         if (!ok) { raf = requestAnimationFrame(frame); return; }
         if (prepRef.current) prepRef.current.style.opacity = '0';
         started = true; t0 = nowMs;
+        if (recorder) { recorder.start(canvas, () => music.audioTrack()); if (recRef.current) recRef.current.style.opacity = '1'; }
       }
       // before the music: a plain clock through the title cards
       const pre = step ? seek + frames++ * step : seek + (nowMs - t0) / 1000;
@@ -286,21 +312,17 @@ export function Trailer({ onExit, seek = -INTRO, step = 0 }: { onExit: () => voi
       if (t > 55 && !montage.length) for (const c of MONTAGE) montage.push(new SpaceShot(c, [255, 236, 210], c.planetType === PlanetType.GAS_GIANT, 30));
       if (t > 60 && !preloaded) { preloaded = true; creatures.preload(); }
 
-      // --- title cards ---
-      const vis = (el: HTMLDivElement | null, o: number) => { if (el) el.style.opacity = String(o); };
-      vis(introA.current, t < 0 ? lin(t, -INTRO + 0.6) : 0);
-      vis(introB.current, t < 0 ? lin(t, -INTRO + 2.4) : 0);
-      vis(endA.current, lin(t, T.end + 0.3));
-      vis(endB.current, lin(t, T.end + 1.6));
-      vis(endC.current, lin(t, T.end + 2.9));
-      vis(endD.current, lin(t, T.end + 2.9));
-
       // bake the universe's galaxy sprites through the title cards (~3 ms per frame instead of one long stall)
       if (t < 0) { const t1 = performance.now(); while (performance.now() - t1 < 6 && !universe.warm(4)); if (t > -1.5) warmFog(); }
 
       if (t < 0 || t >= T.end) {
         ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
-        if (t >= T.final) { alive = false; music.stop(); exitRef.current(); return; }
+        if (t >= T.final) {
+          alive = false;
+          music.stop();
+          if (recorder) recorder.finish().then(() => exitRef.current()); else exitRef.current();
+          return;
+        }
       } else if (t < T.galaxy) {
         // --- the universe; then a spiral galaxy rushes in ---
         const k = ease((t - T.universeZoom) / (T.galaxy - HYPER_IN * 0.5 - T.universeZoom));
@@ -398,6 +420,9 @@ export function Trailer({ onExit, seek = -INTRO, step = 0 }: { onExit: () => voi
       } else {
         creatures.drawEvolution(ctx, w, h, Math.min(12, Math.floor(t - T.evolution)), t);
       }
+      drawTitles(ctx, w, h, t);
+      if (t >= 0) drawNowPlaying(ctx, w, h, t, Math.min(1, t / 0.8));
+      if (recorder && t >= -INTRO) recorder.frame(canvas, t);
       raf = requestAnimationFrame(frame);
     };
     // give the first paint a moment, then roll
@@ -407,13 +432,13 @@ export function Trailer({ onExit, seek = -INTRO, step = 0 }: { onExit: () => voi
       clearTimeout(id);
       cancelAnimationFrame(raf);
       music.dispose();
+      recorder?.cancel();
       creatures.dispose();
       for (const p of plans) { p.job?.cancel(); p.session?.dispose(); }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const title = 'absolute left-0 right-0 text-center text-white font-light tracking-[0.04em] transition-none';
   return (
     <>
       {surfaces.map(s => (
@@ -421,23 +446,17 @@ export function Trailer({ onExit, seek = -INTRO, step = 0 }: { onExit: () => voi
           <SurvivalView session={s.session} mapX={s.x} mapY={s.y} title="" onExit={onExit} cinematic={s.cine} standby={s.standby} />
         </React.Fragment>
       ))}
-      {/* the YouTube player (fallback soundtrack) sits under the picture */}
-      <div ref={ytRef} className="fixed left-0 bottom-0 z-[350] pointer-events-none" style={{ width: 200, height: 200 }} />
+      {/* the YouTube player (fallback soundtrack) is hidden under everything; the film shows a "now playing" badge */}
+      <div ref={ytRef} className="fixed left-0 bottom-0 z-[1] pointer-events-none" style={{ width: 200, height: 200, opacity: 0 }} />
       <div className="fixed inset-0 z-[400] select-none pointer-events-none" style={{ fontFamily: '"Inter", ui-sans-serif, system-ui, sans-serif' }}>
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
-        <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <div className="relative w-full" style={{ height: '9rem' }}>
-            <div ref={introA} className={`${title} top-0 text-4xl sm:text-6xl`} style={{ opacity: 0 }}>Claude gave me $100</div>
-            <div ref={introB} className={`${title} top-[4.8rem] text-4xl sm:text-6xl font-semibold`} style={{ opacity: 0 }}>and I cooked.</div>
-            <div ref={endA} className={`${title} top-0 text-3xl sm:text-5xl`} style={{ opacity: 0 }}>Made with Claude Opus 5.5</div>
-            <div ref={endB} className={`${title} top-[4.6rem] text-lg sm:text-3xl text-white/75`} style={{ opacity: 0 }}>running in a web browser at 500+ FPS</div>
+        <div ref={prepRef} className="absolute left-0 right-0 bottom-8 text-center text-white text-xs tracking-[0.3em]" style={{ opacity: 0 }}>{record ? 'PREPARANDO A GRAVAÇÃO…' : 'PREPARANDO…'}</div>
+        {/* shown on screen only - not part of the recorded video */}
+        {record && (
+          <div ref={recRef} className="absolute top-3 left-3 flex items-center gap-2 bg-black/60 rounded-full px-3 py-1.5 text-[11px] text-white/85 font-mono transition-opacity" style={{ opacity: 0 }}>
+            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /> GRAVANDO · mantenha esta aba aberta e visível
           </div>
-        </div>
-        <div ref={endC} className="absolute left-0 right-0 bottom-[12%] text-center text-white/90 text-xl sm:text-2xl tracking-[0.12em]" style={{ opacity: 0 }}>@jaayyyy.ay</div>
-        <div ref={endD} className="absolute left-0 right-0 bottom-5 text-center text-white/45 text-[11px] sm:text-xs tracking-wide" style={{ opacity: 0 }}>
-          Music: “{MUSIC.title}” by {MUSIC.artist} [No Copyright Music] · youtube.com/@Infraction
-        </div>
-        <div ref={prepRef} className="absolute left-0 right-0 bottom-8 text-center text-white text-xs tracking-[0.3em]" style={{ opacity: 0 }}>PREPARANDO…</div>
+        )}
         <button onClick={onExit} title="Sair (Esc)"
           className={`pointer-events-auto absolute top-3 right-3 p-2 rounded-full bg-black/50 text-white/80 hover:text-white transition-opacity duration-500 ${chrome ? 'opacity-100' : 'opacity-0'}`}>
           <X className="w-5 h-5" />

@@ -26,6 +26,8 @@ export default function App() {
   
   const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator' | 'creature-generator' | 'demo' | 'trailer'>(() => (typeof window !== 'undefined' && window.location.hash === '#criaturas' ? 'creature-generator' : typeof window !== 'undefined' && window.location.hash.startsWith('#demo') ? 'demo' : typeof window !== 'undefined' && window.location.hash.startsWith('#trailer') ? 'trailer' : 'menu'));
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  // soundtrack URL when the trailer is being recorded into a video file
+  const [trailerRecord, setTrailerRecord] = useState<string | undefined>(undefined);
 
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
   const closeSidebar = () => setIsSidebarOpen(false);
@@ -80,7 +82,8 @@ export default function App() {
         onPlay={() => setCurrentView('game')}
         onCreatureStart={() => setCurrentView('creature-generator')}
         onDemo={() => setCurrentView('demo')}
-        onTrailer={() => setCurrentView('trailer')}
+        onTrailer={() => { setTrailerRecord(undefined); setCurrentView('trailer'); }}
+        onTrailerDownload={url => { setTrailerRecord(url); setCurrentView('trailer'); }}
       />
     );
   }
@@ -88,7 +91,7 @@ export default function App() {
   if (currentView === 'trailer') {
     // #trailer=SECONDS starts from that point of the soundtrack; #trailer=SECONDS,STEP runs a silent fixed-step clock (testing)
     const m = /^#trailer=(-?[\d.]+)(?:,([\d.]+))?$/.exec(window.location.hash);
-    return <Trailer onExit={() => { if (window.location.hash.startsWith('#trailer')) window.location.hash = ''; setCurrentView('menu'); }} seek={m ? +m[1] : undefined} step={m?.[2] ? +m[2] : 0} />;
+    return <Trailer onExit={() => { if (window.location.hash.startsWith('#trailer')) window.location.hash = ''; setCurrentView('menu'); }} seek={m ? +m[1] : undefined} step={m?.[2] ? +m[2] : 0} record={trailerRecord} />;
   }
 
   if (currentView === 'demo') {
