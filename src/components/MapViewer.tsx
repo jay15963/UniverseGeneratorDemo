@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Download, Maximize, Globe2, Map as MapIcon, Cloud, Rocket } from 'lucide-react';
+import { Download, Maximize, Globe2, Map as MapIcon, Cloud, Rocket, Eye } from 'lucide-react';
 import { SurvivalView } from './Survival/SurvivalView';
 import { LayerType, BIOME_NAMES, hasCapability, PlanetCapability, PlanetConfig } from '../lib/planet-generator/generator';
 import type { PlanetSession, PlanetProbe } from '../lib/planet-generator/planetClient';
@@ -30,8 +30,9 @@ const LAYER_LABELS: Record<string, string> = {
 };
 
 export function MapViewer({ layer, config, isGenerating, progress, status, session, compact, worldName }: MapViewerProps) {
-  const [landingMode, setLandingMode] = useState(false);
-  const [landing, setLanding] = useState<{ x: number; y: number } | null>(null);
+  // null = not choosing; 'player' walks the surface, 'spectator' is a free camera over the terrain
+  const [landingMode, setLandingMode] = useState<null | 'player' | 'spectator'>(null);
+  const [landing, setLanding] = useState<{ x: number; y: number; spectator: boolean } | null>(null);
   const canLand = config.planetType !== 'gas-giant';
   const [viewTransform, setViewTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [isDragging, setIsDragging] = useState(false);
@@ -186,7 +187,7 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
   const handlePointerUp = (e: React.PointerEvent) => {
     if (landingMode && session && Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y) < 6) {
       const px = getMapPixel(e.clientX, e.clientY);
-      if (px) { setLanding({ x: px.px, y: px.py }); setLandingMode(false); }
+      if (px) { setLanding({ x: px.px, y: px.py, spectator: landingMode === 'spectator' }); setLandingMode(null); }
     }
     activePointers.current.delete(e.pointerId);
     if (activePointers.current.size < 2) lastPinchDistance.current = null;
@@ -260,11 +261,18 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
             </button>
           )}
           {canLand && (
-            <button onClick={() => { setMode('map'); setLandingMode(m => !m); }} disabled={!session}
-              title="Escolha um ponto no mapa para pousar e explorar a pé"
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors disabled:opacity-40 ${landingMode ? 'bg-amber-400 text-black border-amber-200 animate-pulse' : 'bg-gradient-to-r from-orange-500 to-amber-500 text-black border-amber-300/50 hover:from-orange-400'}`}>
-              <Rocket className="w-3.5 h-3.5" /> {landingMode ? 'Clique no mapa…' : 'Pousar'}
-            </button>
+            <div className="flex rounded-lg overflow-hidden border border-amber-300/50">
+              <button onClick={() => { setMode('map'); setLandingMode(m => (m === 'player' ? null : 'player')); }} disabled={!session}
+                title="Pousar com o personagem: explore a pé, colete recursos"
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold transition-colors disabled:opacity-40 ${landingMode === 'player' ? 'bg-amber-400 text-black animate-pulse' : 'bg-gradient-to-r from-orange-500 to-amber-500 text-black hover:from-orange-400'}`}>
+                <Rocket className="w-3.5 h-3.5" /> {landingMode === 'player' ? 'Clique no mapa…' : 'Pousar'}
+              </button>
+              <button onClick={() => { setMode('map'); setLandingMode(m => (m === 'spectator' ? null : 'spectator')); }} disabled={!session}
+                title="Pousar como espectador: câmera livre sobre o terreno (WASD ou arrastar; quanto mais afastado o zoom, mais rápido)"
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold border-l border-amber-300/50 transition-colors disabled:opacity-40 ${landingMode === 'spectator' ? 'bg-sky-300 text-black animate-pulse' : 'bg-black/50 text-amber-200 hover:bg-white/10'}`}>
+                <Eye className="w-3.5 h-3.5" /> {landingMode === 'spectator' ? 'Clique no mapa…' : 'Espectador'}
+              </button>
+            </div>
           )}
           <button onClick={handleExport} className="flex items-center gap-1.5 px-2.5 py-1 bg-black/40 border border-white/10 hover:bg-white/10 rounded-lg text-xs">
             <Download className="w-3.5 h-3.5" /> PNG
@@ -329,7 +337,7 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
 
         {landingMode && mode === 'map' && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-amber-400 text-black text-xs font-bold px-3 py-1.5 rounded-full shadow-xl pointer-events-none">
-            Escolha o local de pouso — clique em terra firme
+            {landingMode === 'spectator' ? 'Escolha onde a câmera desce — clique em qualquer ponto' : 'Escolha o local de pouso — clique em terra firme'}
           </div>
         )}
         {mode === 'globe' && (
@@ -339,7 +347,7 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
       </div>
 
       {landing && session && (
-        <SurvivalView session={session} mapX={landing.x} mapY={landing.y} title={worldName ?? config.seed} onExit={() => setLanding(null)} />
+        <SurvivalView session={session} mapX={landing.x} mapY={landing.y} spectator={landing.spectator} title={worldName ?? config.seed} onExit={() => setLanding(null)} />
       )}
       <div className="mt-3 bg-black/30 p-3 sm:p-4 rounded-xl border border-white/5">
         <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500 mb-2">Legenda</h3>

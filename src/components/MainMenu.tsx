@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Rocket, Globe2, Sun, Sparkles, Orbit, Settings } from 'lucide-react';
+import { Rocket, Globe2, Sun, Sparkles, Orbit, Settings, Dna } from 'lucide-react';
 import { MenuScene } from './MenuScene';
 
 interface MainMenuProps {
@@ -8,9 +8,10 @@ interface MainMenuProps {
   onGalaxyStart: () => void;
   onUniverseStart: () => void;
   onPlay: () => void;
+  onCreatureStart: () => void;
 }
 
-export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay }: MainMenuProps) {
+export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onCreatureStart }: MainMenuProps) {
   // A different showcase world every time the menu opens
   const sceneSeed = useMemo(() => 'menu-' + Math.random().toString(36).slice(2, 8), []);
 
@@ -33,6 +34,7 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
 
         <div className="flex flex-col gap-1.5 w-full max-w-[22rem]">
           <MenuButton label="Jogar" hint="Explore um universo inteiro" icon={<Rocket className="w-5 h-5" />} onClick={onPlay} primary />
+          <MenuButton label="Gerador de Criaturas" icon={<Dna className="w-4 h-4" />} onClick={onCreatureStart} badge="NOVO" />
           <MenuButton label="Gerador de Planeta" icon={<Globe2 className="w-4 h-4" />} onClick={onStart} />
           <MenuButton label="Gerador de Sistema Solar" icon={<Sun className="w-4 h-4" />} onClick={onSolarSystemStart} />
           <MenuButton label="Gerador de Galáxia" icon={<Orbit className="w-4 h-4" />} onClick={onGalaxyStart} />
@@ -58,9 +60,10 @@ interface MenuButtonProps {
   onClick?: () => void;
   disabled?: boolean;
   primary?: boolean;
+  badge?: string;
 }
 
-function MenuButton({ label, hint, icon, onClick, disabled, primary }: MenuButtonProps) {
+function MenuButton({ label, hint, icon, onClick, disabled, primary, badge }: MenuButtonProps) {
   return (
     <button
       onClick={disabled ? undefined : onClick}
@@ -75,6 +78,7 @@ function MenuButton({ label, hint, icon, onClick, disabled, primary }: MenuButto
         <span className={`font-bold tracking-wide ${primary ? 'text-lg' : 'text-sm sm:text-base text-neutral-200 group-hover:text-white'}`}>{label}</span>
         {hint && <span className="text-[11px] text-white/70 font-medium">{hint}</span>}
       </span>
+      {badge && <span className="ml-auto text-[9px] font-black tracking-widest px-1.5 py-0.5 rounded bg-fuchsia-500/80 text-white">{badge}</span>}
       {primary && <span className="ml-auto text-white/80 group-hover:translate-x-1 transition-transform">→</span>}
     </button>
   );

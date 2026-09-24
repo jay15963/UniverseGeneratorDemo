@@ -82,6 +82,20 @@ No mapa de superfície de qualquer planeta sólido, clique em **Pousar** e escol
 - **Toda a arte é gerada por código** (sem arquivos de imagem): galeria em `#galeria` na URL.
 - Controles: WASD/setas, E/Espaço/clique para coletar, roda ou +/- para zoom (local → regional → mapa-múndi), I mochila, M minimapa, P/F3 desempenho, Esc sair; no celular, joystick virtual + botão de ação.
 
+- **Dois modos de pouso**: *Pousar* (com o personagem) ou *Espectador* — uma câmera livre sobre o terreno: WASD/setas ou arrastar com o mouse/dedo, Shift acelera, e quanto mais afastado o zoom, mais rápido ela voa (dá para cruzar o planeta inteiro no mapa-múndi). Os workers de terreno se reposicionam automaticamente quando a câmera vai longe.
+
+## 🧬 Gerador de Criaturas
+
+Uma nova tela no menu inicial, inspirada em **Spore**: cada espécie é uma função pura da **semente** e do **mundo natal** (gravidade, temperatura, umidade, atmosfera, tipo de estrela, dieta, exotismo e porte). Mover um controle adapta a *mesma* espécie em vez de sortear outra.
+
+- **14 estágios de evolução** num único controle: celular → aquática inicial → aquática → aquática gigante → transição anfíbia → terrestre → tribal → medieval → clássica (1500) → vitoriana/industrial → moderna (1900–1950) → contemporânea → futurista (2050–2100) → espacial (2100+).
+- **Linhagem coerente**: cores, padrão, olhos e plano corporal atravessam as fases — um crustáceo vira lagosta gigante, depois um andarilho quitinoso; um peixe vira leviatã e depois salamandra.
+- **Planos corporais**: quadrúpede, bípede, hexápode, serpente e voador (asas de penas, de membrana ou de inseto); coberturas de escamas, penas, pelos, pele, quitina ou placas ósseas; bicos, mandíbulas, dentes, presas, chifres, galhadas, cristas, golas, velas dorsais, carapaças, antenas, olhos pedunculados e compostos, bioluminescência.
+- **Civilizações**: a fisionomia não muda — só roupas, chapéus e ferramentas de cada era (lança e peles, cota de malha e espada, gola rufo e florete, cartola e bengala, fedora e maleta, moletom e celular, traje com circuitos luminosos, traje espacial com capacete de vidro). Hexápodes ganham quatro braços; serpentes viram nagas.
+- **Pixel art por código**: rasterizador próprio de volumes (elipses, cápsulas afiladas, polígonos) com sombreamento em rampas de cor com *hue-shift*, pontilhado ordenado, texturas de escamas/penas/pelos/quitina/tecido, contorno seletivo e linhas internas; pernas por cinemática inversa e 8 quadros de animação (respiração, passos, cauda, asas, flagelos, piscar).
+- **Cenários animados** para cada fase: sopa primordial, recife, abismo, praia, planícies do mundo natal e o horizonte de cada era (aldeia, castelo, catedral e galeão, fábricas, arranha-céus art déco, torres de vidro, cidade neon, estação orbital).
+- Nome científico procedural, sociedade por era, ficha de traços, paleta, **exportar PNG** e **folha da linhagem**. Atalho direto: `#criaturas` na URL.
+
 ### ⌨️ Atalhos no Sistema Solar
 
 | Tecla | Ação |

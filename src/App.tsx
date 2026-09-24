@@ -17,11 +17,12 @@ import { UniverseViewer } from './components/Universe/UniverseViewer';
 import { useUniverseController } from './hooks/useUniverseController';
 import { GameApplication } from './components/Game/GameApplication';
 import { AssetGallery } from './components/Survival/AssetGallery';
+import { CreatureGenerator } from './components/Creature/CreatureGenerator';
 
 export default function App() {
   const { config, setConfig, bodies, isGenerating, handleGenerate, showZones, setShowZones } = useSolarSystemController();
   
-  const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator'>('menu');
+  const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator' | 'creature-generator'>(() => (typeof window !== 'undefined' && window.location.hash === '#criaturas' ? 'creature-generator' : 'menu'));
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
@@ -75,8 +76,13 @@ export default function App() {
         onGalaxyStart={() => setCurrentView('galaxy-generator')}
         onUniverseStart={() => setCurrentView('universe-generator')}
         onPlay={() => setCurrentView('game')}
+        onCreatureStart={() => setCurrentView('creature-generator')}
       />
     );
+  }
+
+  if (currentView === 'creature-generator') {
+    return <CreatureGenerator onBack={() => setCurrentView('menu')} />;
   }
 
   if (currentView === 'game') {

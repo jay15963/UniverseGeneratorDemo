@@ -19,6 +19,8 @@ interface Props {
   mapY: number;
   title: string;
   onExit: () => void;
+  /** Free camera instead of the character: no collisions, speed grows as the zoom widens, drag to pan. */
+  spectator?: boolean;
 }
 
 /** A drawable image: a GPU texture region (WebGL path) or a canvas (Canvas2D fallback). */
@@ -132,7 +134,7 @@ const DAY_SECONDS = 360;
 const REACH = 26;
 const SPEED = 74;
 
-export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
+export function SurvivalView({ session, mapX, mapY, title, onExit, spectator = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const miniRef = useRef<HTMLCanvasElement>(null);
   const cfg = session.config;
@@ -151,6 +153,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   const player = useMemo(() => paintTribalPlayer(), []);
   const poolRef = useRef<TerrainPool | null>(null);
   const glRef = useRef<GLWorld | null>(null);
+  const poolCenter = useRef({ x: mapX, y: mapY });
+  const poolMoving = useRef(false);
+  const dragRef = useRef<{ id: number; x: number; y: number } | null>(null);
   const aliveRef = useRef(true);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const [lodLabel, setLodLabel] = useState<{ lod: Lod; zoom: number }>({ lod: 'local', zoom: 3 });
@@ -208,8 +213,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
   // ---------------------------------------------------------------------------
   useEffect(() => {
     let alive = true;
-    session.spawn(mapX, mapY).then(({ tx, ty }) => {
+    // the spectator camera goes exactly where it was dropped (even over the ocean)
+    const S = WORLD_TILES_X / session.width;
+    const start = spectator ? Promise.resolve({ tx: Math.floor((mapX + 0.5) * S), ty: Math.floor((mapY + 0.5) * S) }) : session.spawn(mapX, mapY);
+    start.then(({ tx, ty }) => {
       if (!alive) return;
+      poolCenter.current = { x: mapX, y: mapY };
       G.current.x = tx * TILE + TILE / 2;
       G.current.y = ty * TILE + TILE / 2;
       G.current.zoomIdx = ZOOMS.indexOf(window.innerWidth < 700 ? 2 : 3);
@@ -222,7 +231,21 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       }).catch(() => { /* keep using the session worker */ });
     }).catch(e => setLoading('Falha ao pousar: ' + e.message));
     return () => { alive = false; poolRef.current?.dispose(); poolRef.current = null; };
-  }, [session, mapX, mapY]);
+  }, [session, mapX, mapY, spectator]);
+
+  /** Re-seats the parallel terrain workers around a new map point once the camera travelled far from the old window. */
+  const recenterPool = (mx: number, my: number) => {
+    if (poolMoving.current) return;
+    poolMoving.current = true;
+    session.terrainPool(mx, my).then(pool => {
+      poolMoving.current = false;
+      if (!aliveRef.current) { pool.dispose(); return; }
+      const old = poolRef.current;
+      poolRef.current = pool;
+      poolCenter.current = { x: mx, y: my };
+      old?.dispose();
+    }).catch(() => { poolMoving.current = false; });
+  };
 
   // ---------------------------------------------------------------------------
   // Chunk streaming
@@ -353,7 +376,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
 
   const interact = (f: Feature | null) => {
     const g = G.current;
-    if (!f) return;
+    if (!f || spectator) return;
     if (f.l !== g.level) { flash(f.l > g.level ? 'Está no alto — encontre uma rampa para subir' : 'Está lá embaixo — desça por uma rampa'); return; }
     if (Math.hypot(f.x - g.x, f.y - g.y) > REACH + 14) { flash('Muito longe — aproxime-se'); return; }
     const h = harvestFor(f);
@@ -374,7 +397,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
     const down = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); if (bagOpen) setBagOpen(false); else onExit(); return; }
       const k = e.key.toLowerCase();
-      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { e.preventDefault(); G.current.keys.add(k); }
+      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k)) { e.preventDefault(); G.current.keys.add(k); }
       if (k === 'e' || k === ' ') { e.preventDefault(); interact(G.current.target); }
       if (k === 'i' || k === 'tab') { e.preventDefault(); setBagOpen(o => !o); }
       if (k === 'm') setMiniOn(o => !o);
@@ -567,7 +590,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       const rowFrom = Math.floor(y0 / TILE) - 1, rowTo = Math.floor((y1 + MAX_LEVEL * LIFT) / TILE) + 1;
       const cx0 = Math.floor(x0 / CHUNK_PX), cx1 = Math.floor(x1 / CHUNK_PX);
       const pf = playerFrame();
-      const prow = g.ready ? Math.floor(g.y / TILE) : -1e9;
+      const prow = g.ready && !spectator ? Math.floor(g.y / TILE) : -1e9;
       const liquidFrame = Math.floor(t * 7) % LIQUID_FRAMES;
       const nowMs = performance.now();
       const fx0 = x0 - 40, fx1 = x1 + 40;
@@ -656,8 +679,25 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
     };
 
     /** Pulsing "you are here" marker for the zoomed-out views (overlay, device px). */
-    const drawPlayerMarker = (sx: number, sy: number, t: number, dpr: number, big: boolean) => {
+    const drawPlayerMarker = (sx: number, sy: number, t: number, dpr: number, big: boolean, cam = false) => {
       const pulse = (t * 1.2) % 1;
+      if (cam) {
+        // spectator: a camera reticle instead of the character pin
+        octx.save();
+        octx.strokeStyle = `rgba(125,211,252,${1 - pulse})`; octx.lineWidth = 2 * dpr;
+        octx.beginPath(); octx.arc(sx, sy, (8 + pulse * 18) * dpr, 0, Math.PI * 2); octx.stroke();
+        octx.strokeStyle = '#e0f2fe'; octx.lineWidth = 1.5 * dpr;
+        octx.beginPath();
+        for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { octx.moveTo(sx + ax * 4 * dpr, sy + ay * 4 * dpr); octx.lineTo(sx + ax * 10 * dpr, sy + ay * 10 * dpr); }
+        octx.stroke();
+        if (big) {
+          octx.font = `600 ${11 * dpr}px ui-sans-serif, system-ui`; octx.textAlign = 'left';
+          octx.fillStyle = 'rgba(0,0,0,0.7)'; octx.fillText('Câmera', sx + 13 * dpr + 1, sy - 9 * dpr + 1);
+          octx.fillStyle = '#e0f2fe'; octx.fillText('Câmera', sx + 13 * dpr, sy - 9 * dpr);
+        }
+        octx.restore();
+        return;
+      }
       octx.save();
       octx.lineWidth = 2 * dpr;
       octx.strokeStyle = `rgba(255,90,58,${1 - pulse})`;
@@ -679,7 +719,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       }
     };
 
-    let fpsFrames = 0, fpsT = performance.now(), cpuAcc = 0;
+    let fpsFrames = 0, fpsT = performance.now(), cpuAcc = 0, last0 = 0;
     const frame = (now: number) => {
       const cpu0 = performance.now();
       const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
@@ -689,15 +729,44 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       const DW = Math.round(W * dpr), DH = Math.round(H * dpr);
       if (canvas.width !== DW || canvas.height !== DH) { canvas.width = DW; canvas.height = DH; }
       if (overlay.width !== DW || overlay.height !== DH) { overlay.width = DW; overlay.height = DH; }
-      requestChunks();
+      if (!spectator || lodOf(g.zoomView) === 'local') requestChunks();
+      // keep the worker field window under the camera / player
+      if (g.ready && Math.floor(now / 1000) !== Math.floor(last0 / 1000)) {
+        const mpx = g.x / TILE / (WORLD_TILES_X / session.width), mpy = g.y / TILE / (WORLD_TILES_X / session.width);
+        let dxm = Math.abs(mpx - poolCenter.current.x) % session.width;
+        dxm = Math.min(dxm, session.width - dxm);
+        if (dxm > 70 || Math.abs(mpy - poolCenter.current.y) > 70) recenterPool(Math.round(((mpx % session.width) + session.width) % session.width), Math.round(mpy));
+      }
+      last0 = now;
 
       if (!g.ready) {
         const c = chunkAt(g.x, g.y);
         if (c && g.x) { g.ready = true; setLoading(''); g.level = levelAt(g.x, g.y) ?? 0; g.lift = liftAt(g.x, g.y); }
       }
 
+      // --- spectator camera: free flight, faster the further the zoom is pulled out ---
+      if (spectator && g.ready) {
+        let mx = 0, my = 0;
+        const K = g.keys;
+        if (K.has('a') || K.has('arrowleft')) mx -= 1;
+        if (K.has('d') || K.has('arrowright')) mx += 1;
+        if (K.has('w') || K.has('arrowup')) my -= 1;
+        if (K.has('s') || K.has('arrowdown')) my += 1;
+        const len = Math.hypot(mx, my);
+        if (len > 0) {
+          const sp = (K.has('shift') ? 1400 : 520) / g.zoomView; // screen px per second, whatever the zoom
+          g.x += (mx / len) * sp * dt; g.y += (my / len) * sp * dt;
+        }
+        const worldH = WORLD_PX * (session.height / session.width);
+        g.y = Math.max(TILE, Math.min(worldH - TILE, g.y));
+        g.moving = false;
+        const q = cellAt(g.x, g.y);
+        if (q) { g.level = q.c.data.level[q.k]; g.lift += (liftAt(g.x, g.y) - g.lift) * Math.min(1, dt * 8); }
+        g.time += dt;
+      }
+
       // --- movement ---
-      if (g.ready) {
+      if (g.ready && !spectator) {
         let mx = 0, my = 0;
         const K = g.keys;
         if (K.has('a') || K.has('arrowleft')) mx -= 1;
@@ -743,7 +812,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
 
       // --- interaction target (same terrace only; hand-gatherables win over tool-only things) ---
       let target: Feature | null = null, td = REACH, toolT: Feature | null = null, toolD = REACH - 6;
-      if (g.ready && local) nearbyFeatures(g.x, g.y, f => {
+      if (g.ready && local && !spectator) nearbyFeatures(g.x, g.y, f => {
         if (f.l !== g.level) return;
         const h = harvestFor(f);
         if (h.kind === 'none' || (h.kind === 'pick' && g.picked.has(f.id))) return;
@@ -837,7 +906,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
           if (Math.abs(f.x - g.x) < s.c.width / 2 - 3 && fy - s.ay < feet - 8 && fy > head + 6) occ = true;
         });
         g.lensK += ((occ ? 1 : 0) - g.lensK) * Math.min(1, dt * 7);
-        lensOn = g.lensK > 0.04;
+        lensOn = g.lensK > 0.04 && !spectator;
       } else g.lensK = 0;
       const lensX = g.x, lensY = g.y - g.lift - 10;
       const lensStop = { row: Math.floor(g.y / TILE), y: g.y };
@@ -935,7 +1004,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
         const [px, py] = toScreen(g.x, g.y - g.lift);
         for (let k = -1; k <= 1; k++) {
           const sx = px + k * WORLD_PX * S;
-          if (sx > -40 && sx < DW + 40) drawPlayerMarker(sx, py, t, dpr, lod === 'world');
+          if (sx > -40 && sx < DW + 40) drawPlayerMarker(sx, py, t, dpr, lod === 'world', spectator);
         }
         if (lod === 'world') {
           // latitude / longitude graticule
@@ -1030,10 +1099,24 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full touch-none"
-        style={{ imageRendering: 'pixelated', cursor: 'crosshair' }}
-        onPointerMove={e => { if (e.pointerType === 'mouse') G.current.mouse = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY }; }}
+        style={{ imageRendering: 'pixelated', cursor: spectator ? (dragRef.current ? 'grabbing' : 'grab') : 'crosshair' }}
+        onPointerMove={e => {
+          if (e.pointerType === 'mouse') G.current.mouse = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY };
+          const d = dragRef.current;
+          if (d && d.id === e.pointerId) {
+            // drag the terrain under the cursor: one screen pixel = 1/zoom world pixels
+            const g = G.current;
+            g.x -= (e.clientX - d.x) / g.zoomView; g.y -= (e.clientY - d.y) / g.zoomView;
+            d.x = e.clientX; d.y = e.clientY;
+          }
+        }}
         onPointerLeave={() => { G.current.mouse = { x: -1, y: -1 }; }}
         onPointerDown={e => {
+          if (spectator) {
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+            dragRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
+            return;
+          }
           if (e.pointerType !== 'mouse' && e.clientX < window.innerWidth * 0.5) {
             (e.target as HTMLElement).setPointerCapture(e.pointerId);
             joyRef.current = { id: e.pointerId, ox: e.clientX, oy: e.clientY };
@@ -1043,8 +1126,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
           const w = screenToWorld(e.nativeEvent.offsetX, e.nativeEvent.offsetY);
           interact(featureUnder(w.x, w.y) ?? G.current.target);
         }}
-        onPointerUp={e => { if (joyRef.current?.id === e.pointerId) { joyRef.current = null; G.current.joy = { x: 0, y: 0 }; setJoyVis(null); } }}
-        onPointerCancel={() => { joyRef.current = null; G.current.joy = { x: 0, y: 0 }; setJoyVis(null); }}
+        onPointerUp={e => { if (dragRef.current?.id === e.pointerId) dragRef.current = null; if (joyRef.current?.id === e.pointerId) { joyRef.current = null; G.current.joy = { x: 0, y: 0 }; setJoyVis(null); } }}
+        onPointerCancel={() => { dragRef.current = null; joyRef.current = null; G.current.joy = { x: 0, y: 0 }; setJoyVis(null); }}
         onPointerMoveCapture={e => {
           const j = joyRef.current;
           if (!j || j.id !== e.pointerId) return;
@@ -1069,7 +1152,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
         </div>
       )}
       {!loading && lodLabel.lod !== 'local' && (
-        <div className="absolute left-1/2 -translate-x-1/2 bottom-[76px] pointer-events-none bg-black/70 border border-white/15 rounded-lg px-3 py-1.5 text-center">
+        <div className={`absolute left-1/2 -translate-x-1/2 ${spectator ? 'bottom-[70px]' : 'bottom-[76px]'} pointer-events-none bg-black/70 border border-white/15 rounded-lg px-3 py-1.5 text-center`}>
           <div className="text-white font-bold text-sm tracking-wide">{LOD_NAME[lodLabel.lod]}</div>
           <div className="text-[11px] font-mono text-neutral-400">
             {lodLabel.lod === 'regional' ? `1 px ≈ ${(1 / (TILE * lodLabel.zoom)).toFixed(lodLabel.zoom > 1 / 32 ? 1 : 0)} m · a região ao redor` : 'superfície do planeta inteiro'} · roda para voltar
@@ -1120,8 +1203,15 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
       )}
       {toast && <div className="absolute left-1/2 -translate-x-1/2 top-20 bg-black/80 border border-amber-300/30 text-amber-200 text-sm rounded-lg px-3 py-1.5 pointer-events-none">{toast}</div>}
 
+      {spectator && !loading && (
+        <div className="absolute left-1/2 -translate-x-1/2 bottom-3 pointer-events-none bg-black/65 backdrop-blur-md border border-sky-300/25 rounded-xl px-3 py-2 text-center">
+          <div className="text-sky-200 font-bold text-xs tracking-[0.25em]">MODO ESPECTADOR</div>
+          <div className="text-[11px] font-mono text-neutral-300">WASD / setas ou arrastar · Shift acelera · roda: zoom (mais afastado = mais rápido)</div>
+        </div>
+      )}
+
       {/* Hotbar */}
-      <div className="absolute left-1/2 -translate-x-1/2 bottom-3 flex items-center gap-1 bg-black/60 backdrop-blur-md border border-white/10 rounded-xl p-1.5 max-w-[calc(100%-16px)] overflow-x-auto no-scrollbar">
+      {!spectator && <div className="absolute left-1/2 -translate-x-1/2 bottom-3 flex items-center gap-1 bg-black/60 backdrop-blur-md border border-white/10 rounded-xl p-1.5 max-w-[calc(100%-16px)] overflow-x-auto no-scrollbar">
         {Array.from({ length: 9 }).map((_, i) => {
           const id = order[i];
           const it = id ? ITEMS[id] : undefined;
@@ -1133,13 +1223,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit }: Props) {
           );
         })}
         <button onClick={() => setBagOpen(o => !o)} title="Mochila (I)" className="w-11 h-11 sm:w-12 sm:h-12 rounded-lg bg-amber-500/20 border border-amber-300/30 text-amber-200 flex items-center justify-center shrink-0"><Backpack className="w-5 h-5" /></button>
-      </div>
+      </div>}
 
       {/* Mobile action button */}
-      <button
+      {!spectator && <button
         className="sm:hidden absolute right-4 bottom-24 w-16 h-16 rounded-full bg-emerald-500/80 border-2 border-white/40 text-black flex items-center justify-center shadow-2xl active:scale-95"
         onPointerDown={e => { e.stopPropagation(); interact(G.current.target); }}
-      ><Hand className="w-7 h-7" /></button>
+      ><Hand className="w-7 h-7" /></button>}
       {joyVis && (
         <div className="absolute pointer-events-none" style={{ left: joyVis.ox - 50, top: joyVis.oy - 50 }}>
           <div className="w-[100px] h-[100px] rounded-full border-2 border-white/30 bg-white/5" />
