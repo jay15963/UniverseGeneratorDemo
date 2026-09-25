@@ -203,6 +203,10 @@ Owner's rules - keep them:
 - **Population (visual only)**: citizens of the species that built the city (genome from the culture seed/params, like
   the structure generator's builders; clothes of the city's era, several citizen indices) stroll along the visible
   street tiles (`Survival/citizens.ts`, `CITIZEN_K` 0.32) - no AI, just walking, turning at crossings and pausing.
+- **Every civilised creature in the world uses `CITIZEN_K`** (the player's own species too: `PLAYER_K = CITIZEN_K`).
+  The city panel's "Entrar como cidadão" drops the spectator in as a citizen of that city (its species, era clothes,
+  normal walking with collisions; graded streets can be climbed one level in any direction); Esc / "Voltar ao
+  espectador" returns to the free camera.
 - The city panel has "Ocultar cores dos distritos e zonas" (streets and walls stay painted; `cityZones` in the terrain
   workers). Spectator mode has a sun button that holds the clock at day.
 - Cities live only for the session (testing). The plan runs in the planet session worker; chunk overlays
