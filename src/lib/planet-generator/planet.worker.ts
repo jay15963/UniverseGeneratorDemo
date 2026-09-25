@@ -13,6 +13,7 @@ import type { WorkerRequest, WorkerResponse, PlanetProbe } from './workerProtoco
 import { cloudProfileFor } from './visualProfile';
 import { TerrainGenerator, cropFields, cityAdd, cityLevel, cityRemove, cityZones } from '../terrain/terrainGen';
 import { planCity } from '../city/plan';
+import { planLinks, CityLink } from '../city/links';
 import type { CityPlan } from '../city/codes';
 
 const fieldsOf = (g: PlanetGenerator) => ({ config: g.config, elevation: g.elevation, temperature: g.temperature, moisture: g.moisture, fertility: g.fertility, ores: g.ores, waterAccumulation: g.waterAccumulation });
@@ -21,6 +22,12 @@ const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const sessions = new Map<string, PlanetGenerator>();
 const terrains = new Map<string, TerrainGenerator>();
 const cityPlans = new Map<string, Map<number, CityPlan>>();
+const cityLinks = new Map<string, Map<number, CityLink>>();
+function dropLinks(sessionId: string, cityId: number) {
+  const L = cityLinks.get(sessionId);
+  if (!L) return;
+  for (const [id, l] of L) if (l.a === cityId || l.b === cityId) { cityRemove(id); L.delete(id); }
+}
 function terrainFor(sessionId: string): TerrainGenerator {
   let t = terrains.get(sessionId);
   if (!t) {
@@ -149,16 +156,23 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         cityRemove(msg.cityId);
         cityAdd(msg.cityId, plan.meta.era, msg.p, plan.chunks);
         m.set(msg.cityId, plan);
-        post({ kind: 'city', id: msg.id, plan });
+        // main roads and sea lanes to the nearby cities
+        dropLinks(msg.sessionId, msg.cityId);
+        let L = cityLinks.get(msg.sessionId);
+        if (!L) { L = new Map(); cityLinks.set(msg.sessionId, L); }
+        const links = planLinks(tg, plan, others);
+        for (const l of links) { L.set(l.id, l); if (l.chunks) cityAdd(l.id, plan.meta.era, 254, l.chunks); }
+        post({ kind: 'city', id: msg.id, plan, links });
         break;
       }
       case 'cityLevel': cityLevel(msg.cityId, msg.p); break;
       case 'cityZones': cityZones(msg.on); break;
-      case 'cityRemove': cityRemove(msg.cityId); cityPlans.get(msg.sessionId)?.delete(msg.cityId); break;
+      case 'cityRemove': cityRemove(msg.cityId); cityPlans.get(msg.sessionId)?.delete(msg.cityId); dropLinks(msg.sessionId, msg.cityId); break;
       case 'close': {
         sessions.delete(msg.sessionId);
         terrains.delete(msg.sessionId);
         cityPlans.delete(msg.sessionId);
+        cityLinks.delete(msg.sessionId);
         break;
       }
     }

@@ -20,6 +20,8 @@ import { frameMeter } from '../../lib/render/frameMeter';
 import { StructPool } from '../../lib/structure/structPool';
 import { CITY_K } from '../../lib/structure/render';
 import { CloudField } from './clouds';
+import { Traffic, VehDraw } from './traffic';
+import { wallSegment, WALL_DIRS } from '../../lib/structure/wallseg';
 import { Citizens, CitizenDraw, CITIZEN_K, cityGenome, streetCity } from './citizens';
 import type { CityBuilding, CityPlan } from '../../lib/city/codes';
 import type { Cinematic, CineApi } from '../Demo/cinema';
@@ -222,6 +224,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   useEffect(() => () => store.dispose(), [store]);
   const fauna = useMemo(() => new Fauna(planetFauna(cfg), store, cfg.seed), [cfg, store]);
   const citizens = useMemo(() => new Citizens(store), [store]);
+  // vehicles and ships (rendered by a small pool of vehicle workers, created on first use)
+  const vpoolRef = useRef<StructPool | null>(null);
+  const traffic = useMemo(() => new Traffic(() => (vpoolRef.current ??= new StructPool(2, () => new Worker(new URL('../../lib/vehicle/vehicle.worker.ts', import.meta.url), { type: 'module' })))), []);
+  useEffect(() => () => { vpoolRef.current?.dispose(); vpoolRef.current = null; }, []);
   const player = useMemo(() => paintTribalPlayer(), []);
   const poolRef = useRef<TerrainPool | null>(null);
   const glRef = useRef<GLWorld | null>(null);
@@ -236,7 +242,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const fx = useMemo(() => new NatureFx(seedToInt(cfg.seed + '_fx')), [cfg]);
   const clouds = useMemo(() => new CloudField(seedToInt(cfg.seed + '_clouds')), [cfg]);
   // Dev-only handle for automated visual checks (time of day, weather...)
-  useEffect(() => { if (import.meta.env.DEV) (window as any).__survival = { G, fx, fauna, store }; }, [fx]);
+  useEffect(() => { if (import.meta.env.DEV) (window as any).__survival = { G, fx, fauna, store, session, gen: (tx: number, ty: number, era: number) => generateCity(tx, ty, era, 100) }; });
 
   // Mutable game state (kept out of React to avoid per-frame renders)
   const G = useRef({
@@ -893,6 +899,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         if (!playerDone) drawPlayer();
         const rowCit = citRows.get(r);
         if (rowCit) for (const c of rowCit) p.sprite(c.sheet.canvas, c.frame * c.sheet.cw, c.row * c.sheet.ch, c.sheet.cw, c.sheet.ch, Math.round(c.x - c.sheet.ax), Math.round(c.y - c.sheet.ay));
+        const rowVeh = vehRows.get(r);
+        if (rowVeh) for (const v of rowVeh) p.sprite(v.sheet.c, v.frame * v.sheet.w, 0, v.sheet.w, v.sheet.h, Math.round(v.x - v.sheet.ax), Math.round(v.y - v.sheet.ay));
+        // wall segments ending on this row (the towers, drawn with the buildings, stand over them)
+        const rw = wallRows.get(r);
+        if (rw) for (const w of rw) p.sprite(w.c, 0, 0, w.c.width, w.c.height, w.x, w.y);
         // 4. city structures whose lot ends on this row (they stand over the rows behind them)
         const rb = cityRows.get(r);
         if (rb) {
@@ -906,6 +917,51 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     };
     let animalDraws: AnimalDraw[] = [];
     let citRows = new Map<number, CitizenDraw[]>();
+    let vehRows = new Map<number, VehDraw[]>();
+    // --- wall rings: straight segments tile to tile in the 8 directions (structure/wallseg.ts) ---
+    const wallSprites = new Map<string, { c: HTMLCanvasElement; ax: number; ay: number }>();
+    let wallRows = new Map<number, { c: HTMLCanvasElement; x: number; y: number }[]>();
+    const wallTile = (id: number, tx: number, ty: number) => {
+      const c = session.cities.get(id)!;
+      const key = `${Math.floor(tx / CHUNK)},${Math.floor(ty / CHUNK)}`, q = (ty - Math.floor(ty / CHUNK) * CHUNK) * CHUNK + tx - Math.floor(tx / CHUNK) * CHUNK;
+      const ch = c.plan.chunks[key];
+      return !!ch && (ch.code[q] === 30 || ch.code[q] === 31) && ch.stage[q] <= c.p;
+    };
+    const collectWalls = (x0: number, x1: number, y0: number, y1: number) => {
+      wallRows = new Map();
+      for (const [id, c] of session.cities) {
+        const m = c.plan.meta;
+        for (const ring of m.walls) for (let i = 0; i < ring.length; i++) {
+          const A = ring[i], B = ring[(i + 1) % ring.length];
+          const sx = Math.sign(B[0] - A[0]), sy = Math.sign(B[1] - A[1]), n = Math.max(Math.abs(B[0] - A[0]), Math.abs(B[1] - A[1]));
+          const d = WALL_DIRS.findIndex(([a, b]) => a === sx && b === sy);
+          if (d < 0) continue;
+          for (let k = 0; k < n; k++) {
+            const ax = A[0] + sx * k, ay = A[1] + sy * k, bx = ax + sx, by = ay + sy;
+            const px = (ax + 0.5) * TILE, py = (ay + 0.5) * TILE;
+            if (px < x0 - 40 || px > x1 + 40 || py < y0 - 40 || py > y1 + 60) continue;
+            if (!wallTile(id, ax, ay) || !wallTile(id, bx, by)) continue;
+            const la = levelAt(px, py), lb = levelAt((bx + 0.5) * TILE, (by + 0.5) * TILE);
+            if (la === null || lb === null || Math.abs(lb - la) > 1) continue;
+            const key = `${m.culture.seed}|${m.era}|${d}|${lb - la}`;
+            let sp = wallSprites.get(key);
+            if (!sp) {
+              const w = wallSegment(m.culture, m.era, d, TILE, LIFT, lb - la);
+              const cv = document.createElement('canvas');
+              cv.width = w.w; cv.height = w.h;
+              cv.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(w.data), w.w, w.h), 0, 0);
+              sp = { c: cv, ax: w.ax, ay: w.ay };
+              wallSprites.set(key, sp);
+            }
+            const row = Math.max(ay, by);
+            let l = wallRows.get(row);
+            if (!l) wallRows.set(row, l = []);
+            l.push({ c: sp.c, x: Math.round(px - sp.ax), y: Math.round(py - la * LIFT - sp.ay) });
+            if (row > cityRowMax) cityRowMax = row;
+          }
+        }
+      }
+    };
 
     // --- city structures: one culture per city, designs rendered by a pool of structure workers ---
     const CITY_FRAMES = 4;
@@ -1083,6 +1139,22 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       x.putImageData(im, 0, 0);
       terrCache.set(ck, { plan: c0.plan, p, c });
       return c;
+    };
+    /** main roads and sea lanes between cities on the zoomed-out maps */
+    const drawLinks = (toScreen: (x: number, y: number) => [number, number], dpr: number) => {
+      if (!session.links.size) return;
+      octx.save();
+      octx.lineCap = 'round'; octx.lineJoin = 'round';
+      for (const l of session.links.values()) {
+        const road = l.kind === 'road';
+        octx.setLineDash(road ? [] : [6 * dpr, 5 * dpr]);
+        octx.strokeStyle = road ? 'rgba(120,84,52,0.9)' : 'rgba(170,225,255,0.85)';
+        octx.lineWidth = (road ? 2 : 1.5) * dpr;
+        octx.beginPath();
+        l.path.forEach(([tx, ty], i) => { const [x, y] = toScreen((tx + 0.5) * TILE, (ty + 0.5) * TILE); if (i) octx.lineTo(x, y); else octx.moveTo(x, y); });
+        octx.stroke();
+      }
+      octx.restore();
     };
     const drawCityLabels = (toScreen: (x: number, y: number) => [number, number], dpr: number, S: number, world: boolean, DW: number, outline = false) => {
       const hits: { id: number; x: number; y: number; w: number; h: number }[] = [];
@@ -1367,6 +1439,23 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }
         for (const l of citRows.values()) l.sort((a, b) => a.gy - b.gy);
       } else citizens.clear();
+      vehRows = new Map();
+      if (local && g.ready && session.cities.size) {
+        collectWalls(x0, x1, y0, y1);
+        traffic.update(dt, session.cities, session.links, { x0, y0, x1, y1 }, (x, y) => {
+          const q = cellAt(x, y);
+          if (!q) return null;
+          const gr = q.c.data.ground[q.k] as Ground;
+          return !!GROUND_INFO[gr].water && gr !== Ground.SWAMP_WATER;
+        }, Math.random);
+        for (const v of traffic.collect(session.cities, liftAt, g.x, g.y)) {
+          const rr = Math.floor(v.gy / TILE);
+          let l = vehRows.get(rr);
+          if (!l) vehRows.set(rr, l = []);
+          l.push(v);
+        }
+        for (const l of vehRows.values()) l.sort((a, b) => a.gy - b.gy);
+      } else { traffic.clear(); wallRows = new Map(); }
       // --- render the world ---
       if (gl) {
         gl.begin(camX, camY, S, [0.02, 0.027, 0.047]);
@@ -1489,7 +1578,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
           octx.stroke();
         }
-        if (spectator || regional) drawCityLabels(toScreen, dpr, S, true, DW, regional);
+        if (spectator || regional) { drawLinks(toScreen, dpr); drawCityLabels(toScreen, dpr, S, true, DW, regional); }
       }
 
       if (cineFade > 0.002) {

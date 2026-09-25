@@ -209,6 +209,15 @@ Owner's rules - keep them:
   espectador" returns to the free camera.
 - The city panel has "Ocultar cores dos distritos e zonas" (streets and walls stay painted; `cityZones` in the terrain
   workers). Spectator mode has a sun button that holds the clock at day.
+- **Traffic (visual placeholders, `Survival/traffic.ts`)**: vehicles designed by the city's culture and era (vehicle
+  generator, `VEH_K` = 0.45 x gameplay LOD, rendered by a `StructPool` of vehicle workers) drive the city's streets;
+  cargo vehicles travel the **main roads between nearby cities**; ships sail the water around cities (no harbours yet)
+  and the **sea lanes** between cities on the same water. `city/links.ts` plans the links when a city is planned
+  (A* over 3-tile cells: roads with the planner's terrain scoring, painted as 3-tile arteries outside what the cities
+  planned; sea lanes over water only, from the water nearest each centre); the zoomed-out maps draw them as lines.
+- **Wall rings** are drawn with `structure/wallseg.ts`: the simplest wall asset, one straight segment from a tile to
+  the next in any of the 8 directions (terrain projection, so segments join end to end; palisade / stone / brick /
+  concrete / steel / energy by era); watchtowers stand on the ring's towers; gates stay open.
 - Cities live only for the session (testing). The plan runs in the planet session worker; chunk overlays
   (`cityAdd/cityLevel/cityRemove` in `terrainGen.ts`) are broadcast to every terrain worker and painted natively in
   `chunk()` (`city/paint.ts` colours); the view redraws the chunks a change touches in place.

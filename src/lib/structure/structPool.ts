@@ -11,9 +11,10 @@ export class StructPool {
   private nextId = 1;
   private waiting = new Map<number, (m: any) => void>(); // eslint-disable-line @typescript-eslint/no-explicit-any
 
-  constructor(size = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 2))) {
+  /** `make`: another worker with the same protocol ({ spec, dir, frames, k } -> frames, w, h, ax, ay), e.g. vehicles */
+  constructor(size = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 2)), make?: () => Worker) {
     for (let i = 0; i < size; i++) {
-      const w = new Worker(new URL('./struct.worker.ts', import.meta.url), { type: 'module' });
+      const w = make ? make() : new Worker(new URL('./struct.worker.ts', import.meta.url), { type: 'module' });
       const slot = { w, busy: false };
       w.onmessage = (ev: MessageEvent) => { const cb = this.waiting.get(ev.data.id); this.waiting.delete(ev.data.id); slot.busy = false; cb?.(ev.data); this.pump(); };
       this.workers.push(slot);
@@ -21,7 +22,8 @@ export class StructPool {
   }
   get pending() { return this.queue.size; }
   /** queue a render (or refresh the priority of one already queued) */
-  request(key: string, spec: StructSpec, dir: Dir8, k: number, frames: number, prio: number): Promise<SData | null> | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  request(key: string, spec: StructSpec | any, dir: Dir8, k: number, frames: number, prio: number): Promise<SData | null> | null {
     const q = this.queue.get(key);
     if (q) { q.prio = Math.min(q.prio, prio); return null; }
     const p = new Promise<SData | null>(resolve => this.queue.set(key, { key, spec, dir, k, frames, prio, resolve }));
