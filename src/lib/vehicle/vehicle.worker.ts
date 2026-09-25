@@ -7,10 +7,10 @@ ctx.onmessage = (ev: MessageEvent) => {
   const m = ev.data;
   try {
     if (m.kind === 'sheet') {
-      const sh = vehicleSheet(m.spec, m.k);
+      const sh = vehicleSheet(m.spec, m.k, undefined, m.layer ?? 'all');
       ctx.postMessage({ id: m.id, ok: true, ...sh }, [sh.data.buffer]);
     } else {
-      const d = vehicleData(m.spec, m.dir, m.frames, m.k);
+      const d = vehicleData(m.spec, m.dir, m.frames, m.k, m.layer ?? 'all');
       ctx.postMessage({ id: m.id, ok: true, ...d }, d.frames.map(f => f.buffer));
     }
   } catch (e) {

@@ -135,20 +135,38 @@ Owner's rules - keep them:
 Owner's rules - keep them:
 - Same art as the structures/creatures: flat 2D pieces drafted per facing (`structure/draft.ts`), painted by
   `creature/raster.ts`; 8 facings (5 drawn, 3 mirrored), 8 frames per animation: idle (Parado), move (Andando /
-  Navegando / Voando) and use (the type's action: fire, throw, ram, drop the bridge, dive, transform, bomb).
-- Domains **land / naval / air**; sizes small / medium / large like the structures, shown beside a citizen of the
-  builders' species in the era's clothes. **Naval is always twice the size of land/air at the same tier**
-  (`tierZ` in `catalog.ts`). Beast-drawn carts change only a little between tiers (more cargo, not a bigger cart).
-- Every era is covered, but a type may not exist in an era (`names[era] === ''`): no tanks before the industrial
-  era, aircraft only from the industrial era on. Siege: ballista small only, catapult single size, trebuchet is a
-  large vehicle; from the industrial era they turn into artillery.
+  Navegando / Voando) and use (the role's action: fire, throw, ram, drop the bridge, dive, transform, bomb).
+- **Modular, not fixed types**: the catalogue (`catalog.ts`) only lists *roles* (cargo, passengers, siege lines, light /
+  medium / heavy war, transform per domain); each builder assembles the vehicle from modules picked by the design
+  numbers (`d`, seed + role + variant) weighted by the culture (plan, exotic, climate) and names it (`x.label`).
+  Land: chassis (slab, wedge, pod, hex, tub, beetle), running gear (drag poles, runners, wheels of every era, tracks,
+  half-tracks, mechanical legs, hover, ball wheels, screw drives), cab, loads, armour add-ons, paint schemes.
+  Naval: lofted hulls with sheer / flare / bow and stern shapes, mono / cat / tri / outrigger / raft / reed, rigs
+  (square, lateen, junk, crab-claw, gaff), paddle wheels, funnels, superstructures, masts, rotor and wing sails,
+  hydrofoils, hover. Air: envelopes, wing planforms (incl. biplane / triplane / bat), tails, engines, rotors, fans,
+  ornithopters, saucers, mantas. Keep it open: not only what humans built.
+- Domains land / naval / air; sizes small / medium / large, shown beside a citizen of the builders' species in the era's
+  clothes. **Naval is always twice the size of land/air at the same tier** (`tierZ`). Beast-drawn carts change only a
+  little between tiers. Roles exist only in their eras (`eras` in `catalog.ts`; aircraft from the industrial era).
+- **Siege lines** (`siege.ts`): ballista (medieval, steel ballista in the classical era) -> mounted machine gun from the
+  industrial era (Gatling, Maxim, HMG, grenade launcher) -> rail autogun -> plasma repeater; catapult -> cannon in
+  the classical era -> anti-tank gun (industrial on) -> AT missile / recoilless -> rail / plasma lance; trebuchet ->
+  bombard / siege mortar -> howitzer -> heavy howitzer / rocket artillery -> mass driver -> plasma artillery. The
+  catapult arm rests pointing back and throws forward. Ram (tribal-industrial), siege tower (medieval-classical).
+- **Turrets are separate from the body** (`weapons.ts` `turret()`): drawn under their own tag, they turn on their own
+  (sweep) or aim at a commanded absolute direction (`VSpec.aim`, the generator's TORRETA pad), and every shot follows
+  its barrel. The sprite download exports the body, each turret (rows = the turret's own facing, anchored on its
+  pivot) and a JSON of mount points per hull facing.
+- **Firing**: automatic weapons (machine guns, rotary, autocannons, flamers) fire on every frame (alternating
+  flashes, tracer streams, casings, shaking barrel); single shots land on frame 4 (recoil, star flash, smoke ring,
+  shell, dust); lasers / plasma charge on frames 2-3; rockets ripple on frames 4-7; broadsides ripple down the side.
+- **Painting order** (`Draft.level`): depth sorts within a level; anything mounted on top of a body is drawn a level up
+  (`up()` / `at()`), so it never disappears behind the body it sits on. Shells that come down beside wheels or tracks
+  (cabs, boxes, hull sides) stay on the ground level so near wheels still cover them.
 - Carts/carriages/war carts are pulled by creatures coupled in gameplay: **no animals in the asset**. The builder
   sets `x.hitch`; the preview alone draws a placeholder beast there.
-- Tanks and every gun mount use `turret()` (`vparts.ts`): a separate turret with its own yaw, independent of the body.
-- Not fixed on human tech: culture plan/exotic pick forms (pods, hex turrets), running gear (wheels, tracks,
-  mechanical legs, hover pads) and palette; design numbers (`d`, seed + type + variant) keep a design recognisable
-  across eras. Classes: civil, siege, light / medium / heavy war, transform.
-- New types = one builder (`land.ts` / `naval.ts` / `air.ts`) + one entry in `catalog.ts`.
+- New modules go in the domain file (`land.ts` / `naval.ts` / `air.ts` / `siege.ts`); new roles = a builder + a
+  catalogue entry. Audit with several seeds, exotic levels and climates, all facings (turret aim too).
 - Menu → "Gerador de Veículos" (`#veiculos`).
 
 ## Death animations (`src/lib/creature/death.ts`)
