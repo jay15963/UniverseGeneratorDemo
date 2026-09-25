@@ -226,5 +226,14 @@ Owner's rules - keep them:
 - Held items are dropped, fly with a severed arm or are flung by an explosion.
 
 ## Gameplay map zoom (`SurvivalView.tsx`)
-- Only two levels: the **gameplay world** (full detail) from close-up down to 1/4 (chunks streamed for the whole view)
-  and the **world map**. The simplified regional LOD was removed at the owner's request.
+Four levels (owner's request; `lodOf`):
+- **local** (down to 1/2): the gameplay world in full detail.
+- **far** (1/4, the heaviest gameplay stop): same chunks, but small things are skipped (`SMALL_FEATS`: grass, flowers,
+  sticks, pebbles, nuggets, reeds, ferns...); the first real clouds float over the land (few).
+- **regional** (1/8 .. 1/128): sampled terrain blocks (`TerrainGenerator.region`, cities painted in: streets, walls,
+  zone tints unless hidden) - no terrain detail, creatures, bushes or rocks; more clouds; city territories outlined
+  with their name pills. Loaded chunks fill in (bare ground) while blocks stream.
+- **world**: the planet map.
+- **Clouds are procedural** (`Survival/clouds.ts`): a world-space field of cells, each cloud with its own baked shape
+  (blobs + noise, lit pixel-art tones, darker in rain/storms) and a matching ground shadow; coverage follows the
+  weather, it drifts with the wind; a coarser layer of bigger clouds takes over when zoomed out.
