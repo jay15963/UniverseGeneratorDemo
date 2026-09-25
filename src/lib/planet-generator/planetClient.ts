@@ -10,6 +10,7 @@ import { CHUNK, WORLD_TILES_X } from '../terrain/types';
 import type { PlanetFields } from '../terrain/terrainGen';
 import type { CityPlan } from '../city/codes';
 import type { CityLink } from '../city/links';
+import type { CitySite } from '../city/sites';
 
 export type { PlanetProbe };
 
@@ -169,6 +170,8 @@ export interface PlanetSession {
   /** Plans a city around a tile (replacing city `cityId` when given) and paints it into every terrain worker. */
   planCity(tx: number, ty: number, era: number, p: number, cityId?: number, name?: string): Promise<CityPlan>;
   setCityLevel(cityId: number, p: number): void;
+  /** where the cities of the whole planet should go (clusters, habitability) */
+  citySites(count: number, seed: number): Promise<CitySite[]>;
   /** main roads and sea lanes between nearby cities */
   links: Map<number, CityLink>;
   removeCity(cityId: number): void;
@@ -280,6 +283,11 @@ export function openPlanetSession(
           pool.broadcast({ kind: 'cityAdd', cityId: id, era: res.plan.meta.era, p, chunks: res.plan.chunks });
         }
         return res.plan;
+      },
+      citySites: async (count, seed) => {
+        const res = await call({ kind: 'citySites', id: nextId++, sessionId, count, seed });
+        if (res.kind !== 'citySites') throw new Error('unexpected response');
+        return res.sites;
       },
       setCityLevel: (id, p) => {
         const c = cities.get(id);

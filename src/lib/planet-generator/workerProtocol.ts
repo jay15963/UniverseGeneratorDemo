@@ -3,6 +3,7 @@ import type { ChunkData } from '../terrain/types';
 import type { PlanetFields } from '../terrain/terrainGen';
 import type { CityPlan } from '../city/codes';
 import type { CityLink } from '../city/links';
+import type { CitySite } from '../city/sites';
 
 export interface PlanetProbe {
   elevation: number;
@@ -32,6 +33,7 @@ export type WorkerRequest =
   | { kind: 'cityLevel'; sessionId: string; cityId: number; p: number }
   | { kind: 'cityRemove'; sessionId: string; cityId: number }
   | { kind: 'cityZones'; sessionId: string; on: boolean }
+  | { kind: 'citySites'; id: number; sessionId: string; count: number; seed: number }
   | { kind: 'region'; id: number; sessionId: string; tx: number; ty: number; step: number; n: number }
   | { kind: 'close'; sessionId: string };
 
@@ -46,4 +48,5 @@ export type WorkerResponse =
   | { kind: 'fields'; id: number; fields: PlanetFields }
   | { kind: 'city'; id: number; plan: CityPlan; links: CityLink[] }
   | { kind: 'region'; id: number; px: Uint8ClampedArray }
+  | { kind: 'citySites'; id: number; sites: CitySite[] }
   | { kind: 'error'; id: number; message: string };

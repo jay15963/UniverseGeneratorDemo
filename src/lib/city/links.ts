@@ -7,6 +7,7 @@
 import type { TerrainGenerator } from '../terrain/terrainGen';
 import { Ground, CHUNK } from '../terrain/types';
 import { CZ, CityChunkData, CityPlan } from './codes';
+import { MAX_BRIDGE } from './plan';
 
 const C = 3;
 /** cities closer than this (tiles) get a road, and a sea lane when both touch water */
@@ -51,7 +52,7 @@ export function search(tg: TerrainGenerator, from: [number, number], to: [number
   const x0 = Math.min(ax, bx) - M, y0 = Math.min(ay, by) - M, W = Math.abs(ax - bx) + 2 * M + 1, H = Math.abs(ay - by) + 2 * M + 1;
   const N = W * H;
   const g = new Uint8Array(N).fill(255), lv = new Uint8Array(N), fo = new Uint8Array(N);
-  const dist = new Float32Array(N).fill(Infinity), par = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+  const dist = new Float32Array(N).fill(Infinity), par = new Int32Array(N).fill(-1), done = new Uint8Array(N), wrun = new Uint8Array(N);
   const sample = (c: number) => {
     if (g[c] !== 255) return;
     const tx = (x0 + (c % W)) * C, ty = (y0 + ((c / W) | 0)) * C;
@@ -88,6 +89,10 @@ export function search(tg: TerrainGenerator, from: [number, number], to: [number
         const dl = Math.abs(lv[n] - lv[c]);
         if (dl >= 3) continue;
         step = isWaterG(g[n]) ? 14 : 1 + (fo[n] / 255) * 5 + (dl === 1 ? 2.5 : dl === 2 ? 9 : 0);
+        // bridges only over rivers: a few cells of water in a row at most, never across a sea
+        const run = isWaterG(g[n]) ? wrun[c] + (dx && dy ? 2 : 1) : 0;
+        if (run > MAX_BRIDGE) continue;
+        if (dist[c] + step * (dx && dy ? 1.4142 : 1) < dist[n]) wrun[n] = run;
       }
       const nd = dist[c] + step * (dx && dy ? 1.4142 : 1);
       if (nd < dist[n]) { dist[n] = nd; par[n] = c; heap.push(n, nd + hx(n) * (sea ? 1 : 1.05)); }

@@ -29,6 +29,8 @@ const IND_FRAC = [0.03, 0.05, 0.06, 0.16, 0.18, 0.15, 0.12, 0.1];
 const COM_P = [0.2, 0.35, 0.5, 0.6, 0.65, 0.7, 0.7, 0.7];
 const OUTPOSTS = [0, 1, 2, 2, 3, 3, 3, 3];
 const WALL_STAGE = Math.round(254 * 0.18);
+/** longest bridge, in 3-tile cells crossed in a row (a diagonal cell counts twice): ~5-6 tiles, wide rivers yes, seas no */
+export const MAX_BRIDGE = 2;
 
 const K_STREET = 2, K_TRACK = 1, K_ARTERY = 3;
 
@@ -147,6 +149,8 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
   const dist = new Float32Array(G2).fill(Infinity);
   const par = new Int32Array(G2).fill(-1);
   const done = new Uint8Array(G2);
+  /** water cells crossed in a row on the way here: bridges span rivers, never a whole sea (<= MAX_BRIDGE cells) */
+  const wrun = new Uint8Array(G2);
   let order = new Int32Array(65536), nOrder = 0;
   const c0 = RC * GS + RC;
   sample(c0);
@@ -177,8 +181,10 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
       const dl = Math.abs(lv[n] - lv[c]);
       if (dl >= (isWaterG(g) || isWaterG(gnd[c]) ? 4 : 3)) continue;
       const slope = dl === 0 ? 0 : dl === 1 ? 2.5 : 9;   // ramp / cut-and-fill
+      const run = isWaterG(g) ? wrun[c] + (d & 1 ? 2 : 1) : 0;
+      if (run > MAX_BRIDGE) continue;
       const nd = dist[c] + (base + slope) * (d & 1 ? 1.4142 : 1);
-      if (nd < dist[n]) { dist[n] = nd; par[n] = c; heap.push(n, nd); }
+      if (nd < dist[n]) { dist[n] = nd; par[n] = c; wrun[n] = run; heap.push(n, nd); }
     }
   }
 
