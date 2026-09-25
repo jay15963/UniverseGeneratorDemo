@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Backpack, Map as MapIcon, Hand, ZoomIn, ZoomOut, Building2, Crosshair, Trash2, LocateFixed } from 'lucide-react';
+import { X, Backpack, Map as MapIcon, Hand, ZoomIn, ZoomOut, Building2, Crosshair, Trash2, LocateFixed, Sun } from 'lucide-react';
 import type { PlanetSession, TerrainPool } from '../../lib/planet-generator/planetClient';
 import { PlanetType, BiomeType } from '../../lib/planet-generator/generator';
 import { ChunkData, Feature, Feat, CHUNK, CHUNK_PX, TILE, GROUND_INFO, Ground, solidRadius, WORLD_TILES_X, LIFT, MAX_LEVEL, TREES, LIQUID_FRAMES } from '../../lib/terrain/types';
@@ -19,6 +19,7 @@ import { LayerType } from '../../lib/planet-generator/generator';
 import { frameMeter } from '../../lib/render/frameMeter';
 import { StructPool } from '../../lib/structure/structPool';
 import { CITY_K } from '../../lib/structure/render';
+import { Citizens, CitizenDraw } from './citizens';
 import type { CityBuilding, CityPlan } from '../../lib/city/codes';
 import type { Cinematic, CineApi } from '../Demo/cinema';
 import { ERA_NAMES, type CityMeta } from '../../lib/city/codes';
@@ -172,6 +173,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const [prompt, setPrompt] = useState<{ text: string; action: string | null } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   // --- city generator (spectator) ---
+  const [dayLock, setDayLock] = useState(false);
+  const dayLockRef = useRef(false);
+  dayLockRef.current = dayLock;
+  const [hideZones, setHideZones] = useState(false);
   const [cityPick, setCityPick] = useState(false);
   const cityPickRef = useRef(false);
   cityPickRef.current = cityPick;
@@ -189,6 +194,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const store = useMemo(() => new SpriteStore(), []);
   useEffect(() => () => store.dispose(), [store]);
   const fauna = useMemo(() => new Fauna(planetFauna(cfg), store, cfg.seed), [cfg, store]);
+  const citizens = useMemo(() => new Citizens(store), [store]);
   const player = useMemo(() => paintTribalPlayer(), []);
   const poolRef = useRef<TerrainPool | null>(null);
   const glRef = useRef<GLWorld | null>(null);
@@ -755,6 +761,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }
         if (rowAnimals) while (ai < rowAnimals.length) drawAnimal(rowAnimals[ai++]);
         if (!playerDone) drawPlayer();
+        const rowCit = citRows.get(r);
+        if (rowCit) for (const c of rowCit) p.sprite(c.sheet.canvas, c.frame * c.sheet.cw, c.row * c.sheet.ch, c.sheet.cw, c.sheet.ch, Math.round(c.x - c.sheet.ax), Math.round(c.y - c.sheet.ay));
         // 4. city structures whose lot ends on this row (they stand over the rows behind them)
         const rb = cityRows.get(r);
         if (rb) {
@@ -767,6 +775,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       }
     };
     let animalDraws: AnimalDraw[] = [];
+    let citRows = new Map<number, CitizenDraw[]>();
 
     // --- city structures: one culture per city, designs rendered by a pool of structure workers ---
     const CITY_FRAMES = 4;
@@ -1060,7 +1069,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         g.moving = false;
         const q = cellAt(g.x, g.y);
         if (q) { g.level = q.c.data.level[q.k]; g.lift += (liftAt(g.x, g.y) - g.lift) * Math.min(1, dt * 8); }
-        g.time += dt;
+        // "always day": hold the clock at late morning
+        if (dayLockRef.current) g.time = Math.floor(g.time / DAY_SECONDS) * DAY_SECONDS + 0.45 * DAY_SECONDS;
+        else g.time += dt;
       }
 
       // --- movement ---
@@ -1209,6 +1220,17 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
 
       animalDraws = local && g.ready ? fauna.collect(x0, y0, x1, y1) : [];
       if (local && g.ready) collectBuildings(x0, x1, y0, y1, g.x, g.y); else { cityRows = new Map(); cityRowMax = -1e9; }
+      citRows = new Map();
+      if (local && g.ready && session.cities.size) {
+        citizens.update(dt, session.cities, { x0, y0, x1, y1 }, (x, y) => !!chunkAt(x, y), Math.random);
+        for (const c of citizens.collect(session.cities, liftAt)) {
+          const rr = Math.floor(c.gy / TILE);
+          let l = citRows.get(rr);
+          if (!l) citRows.set(rr, l = []);
+          l.push(c);
+        }
+        for (const l of citRows.values()) l.sort((a, b) => a.gy - b.gy);
+      } else citizens.clear();
       // --- render the world ---
       if (gl) {
         gl.begin(camX, camY, S, [0.02, 0.027, 0.047]);
@@ -1514,6 +1536,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       <div className="absolute top-3 right-3 flex flex-col items-end gap-2">
         <div className="flex gap-2">
           <div className="bg-black/60 backdrop-blur-md border border-white/10 rounded-xl px-3 py-2 text-white font-mono text-sm tabular-nums" title="Hora e clima">{({ clear: '☀️', cloudy: '☁️', rain: '🌧️', snow: '❄️', storm: '⛈️' } as Record<string, string>)[hud.weather] ?? ''} {hud.clock}</div>
+          {spectator && <button onClick={() => setDayLock(v => !v)} title={dayLock ? 'Voltar ao ciclo de dia e noite' : 'Ficar sempre de dia'}
+            className={`border rounded-xl p-2 ${dayLock ? 'bg-amber-400/25 border-amber-300/50 text-amber-200' : 'bg-black/60 border-white/10 text-neutral-300 hover:text-white'}`}><Sun className="w-4 h-4" /></button>}
           <button onClick={() => setMiniOn(o => !o)} title="Minimapa (M)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><MapIcon className="w-4 h-4" /></button>
           <button onClick={onExit} title="Voltar à órbita (Esc)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><X className="w-4 h-4" /></button>
         </div>
@@ -1581,6 +1605,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
                   </div>
                 )}
                 {sel && <button onClick={() => { setSelCity(null); setCityPick(true); }} className="w-full flex items-center justify-center gap-1.5 bg-sky-500/10 border border-sky-300/20 text-sky-100 rounded-lg py-1.5 text-xs hover:bg-sky-500/20"><Building2 className="w-3.5 h-3.5" /> Gerar outra cidade</button>}
+                <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer select-none">
+                  <input type="checkbox" checked={hideZones} className="accent-sky-400"
+                    onChange={e => { const v = e.target.checked; setHideZones(v); session.setCityZones(!v); markStale(...[...session.cities.values()].map(c => c.plan.meta.bbox)); }} />
+                  Ocultar cores dos distritos e zonas
+                </label>
                 <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pt-1 border-t border-white/10">
                   {LEGEND.map(([c, n]) => <div key={n} className="flex items-center gap-1.5 text-[10px] text-neutral-300"><span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: c }} />{n}</div>)}
                 </div>
