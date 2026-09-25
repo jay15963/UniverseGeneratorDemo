@@ -1,3 +1,4 @@
+import { assignLife } from './life';
 import seedrandom from 'seedrandom';
 import { CelestialBody, CelestialBodyType, SolarSystemConfig, Orbit, StarClass } from './types';
 import { PlanetConfig, PlanetType } from '../planet-generator/generator';
@@ -54,7 +55,8 @@ export class SolarSystemGenerator {
     // 4. Generate Comets (Oort cloud visitors)
     this.generateComets();
 
-    return this.bodies;
+    // 5. What lives there (microbes .. intelligent species and their era)
+    return assignLife(this.bodies, this.config.systemAge);
   }
 
   private generateStars() {

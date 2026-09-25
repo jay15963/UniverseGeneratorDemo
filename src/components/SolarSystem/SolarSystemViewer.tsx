@@ -15,6 +15,8 @@ interface ViewerProps {
   bodies: CelestialBody[];
   showZones?: boolean;
   systemAge?: number;
+  /** body to focus once the system is shown (the life scanner's pick) */
+  focus?: string | null;
 }
 
 // Simulation time: a 1 AU orbit takes this many ticks (see orbitalSpeed) and represents one year.
@@ -29,7 +31,7 @@ const SPEEDS = [1, 4, 16, 64];
 
 interface ScreenBody { x: number; y: number; r: number; visible: boolean }
 
-export function SolarSystemViewer({ bodies, showZones = false, systemAge = 1 }: ViewerProps) {
+export function SolarSystemViewer({ bodies, showZones = false, systemAge = 1, focus = null }: ViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -114,6 +116,7 @@ export function SolarSystemViewer({ bodies, showZones = false, systemAge = 1 }: 
     setViewingSurface(null);
     sim.current = { ticks: 0, spin: 0 };
     fitSystem(true);
+    if (focus && byId.has(focus)) focusBody(focus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bodies]);
 

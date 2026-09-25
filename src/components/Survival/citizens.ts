@@ -30,11 +30,11 @@ export interface CitizenDraw { x: number; y: number; gy: number; sheet: Sheet; f
 const GENOMES = new Map<string, Genome>();
 /** the species that built a city (same recipe as the structure generator's builders) */
 export function cityGenome(plan: CityPlan): Genome {
-  const c = plan.meta.culture, key = c.seed + c.mode;
+  const c = plan.meta.culture, sp = plan.meta.species ?? c.seed, key = sp + c.mode;
   let g = GENOMES.get(key);
   if (!g) {
     const p = c.params;
-    g = makeGenome(c.seed, { gravity: p.gravity, temperature: p.temperature, water: p.water, atmosphere: 0.5, star: p.star, diet: 0.5, exotic: p.exotic, size: 0.5 }, c.mode);
+    g = makeGenome(sp, { gravity: p.gravity, temperature: p.temperature, water: p.water, atmosphere: 0.5, star: p.star, diet: 0.5, exotic: p.exotic, size: 0.5 }, c.mode);
     GENOMES.set(key, g);
   }
   return g;

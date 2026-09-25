@@ -586,3 +586,8 @@ export class GalaxyGenerator {
     return { x, y };
   }
 }
+
+/** the galaxy a universe entry expands to (the same one the explorer and the life scanner see) */
+export function galaxyConfigFor(meta: { galaxySeed: string; shape: GalaxyConfig['shape']; age: number; starCount: number }): GalaxyConfig {
+  return { seed: meta.galaxySeed, shape: meta.shape, age: meta.age, numStars: Math.min(meta.starCount, 5000), anomalyFactor: 0.5, radius: 400 };
+}

@@ -630,17 +630,17 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     }
   };
   /** cities for the whole planet: clusters picked in the worker, then planned one by one (capitals first) */
-  const generateWorld = async () => {
+  const generateWorld = async (count = worldCount, era = cityEra, species?: string, seed = (Math.random() * 2 ** 31) | 0) => {
     worldCancel.current = false;
-    setWorldProg({ done: 0, total: worldCount, name: 'Escolhendo os locais…' });
+    setWorldProg({ done: 0, total: count, name: 'Escolhendo os locais…' });
     try {
-      const sites = await session.citySites(worldCount, (Math.random() * 2 ** 31) | 0);
+      const sites = await session.citySites(count, seed);
       let made = 0;
       for (let i = 0; i < sites.length && !worldCancel.current; i++) {
         const s = sites[i];
         setWorldProg({ done: i, total: sites.length, name: s.capital ? 'Capital…' : 'Cidade…' });
         try {
-          const plan = await session.planCity(s.tx, s.ty, cityEra, toP(s.evo));
+          const plan = await session.planCity(s.tx, s.ty, era, toP(s.evo), undefined, undefined, species);
           if (!aliveRef.current) return;
           made++;
           markStale(plan.meta.bbox);
@@ -659,6 +659,17 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       setWorldOpen(false);
     }
   };
+  // a planet with an intelligent species already has its cities (one species, many cultures), in its era
+  const civDone = useRef(false);
+  useEffect(() => {
+    const life = cfg.life;
+    if (cine || civDone.current || life?.level !== 'intelligent' || session.cities.size) return;
+    civDone.current = true;
+    const era = life.era ?? 0;
+    // the species' own tribal hunter keeps the player's creature; the cities are the natives
+    generateWorld(4 + era * 2, era, `${cfg.seed}:natives`, seedToInt(cfg.seed + ':cities'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
   const selectCity = (id: number) => {
     const c = session.cities.get(id);
     if (!c) return;
@@ -1842,6 +1853,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       )}
       {toast && <div className="absolute left-1/2 -translate-x-1/2 top-20 bg-black/80 border border-amber-300/30 text-amber-200 text-sm rounded-lg px-3 py-1.5 pointer-events-none">{toast}</div>}
 
+      {worldProg && !free && !loading && (
+        <div className="absolute left-1/2 -translate-x-1/2 top-12 w-[280px] bg-black/70 backdrop-blur-md border border-amber-300/30 rounded-xl px-3 py-2 text-white text-xs pointer-events-none">
+          <div className="flex justify-between"><span className="text-amber-200 font-semibold">Civilização · gerando cidades</span><span className="font-mono">{worldProg.done}/{worldProg.total}</span></div>
+          <div className="mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-amber-400" style={{ width: `${(worldProg.done / Math.max(1, worldProg.total)) * 100}%` }} /></div>
+        </div>
+      )}
       {avatar && !loading && (
         <div className="absolute left-1/2 -translate-x-1/2 top-12 flex items-center gap-3 bg-black/70 backdrop-blur-md border border-emerald-300/30 rounded-xl px-3 py-1.5 text-sm text-white">
           <span>Cidadão de <b>{avatar.city}</b></span>
@@ -1889,7 +1906,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
                       </select>
                     </label>
                     <div className="text-[11px] text-neutral-400">Aglomerados em volta de capitais, em terras férteis perto de água; climas extremos quase sem cidades.</div>
-                    <button onClick={generateWorld} className="w-full bg-emerald-500/20 border border-emerald-300/30 text-emerald-100 rounded-lg py-1.5 text-xs font-semibold hover:bg-emerald-500/30">Gerar</button>
+                    <button onClick={() => generateWorld()} className="w-full bg-emerald-500/20 border border-emerald-300/30 text-emerald-100 rounded-lg py-1.5 text-xs font-semibold hover:bg-emerald-500/30">Gerar</button>
                   </>
                 ) : (
                   <>

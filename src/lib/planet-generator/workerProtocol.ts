@@ -29,7 +29,7 @@ export type WorkerRequest =
   | { kind: 'chunk'; id: number; sessionId: string; cx: number; cy: number }
   | { kind: 'spawn'; id: number; sessionId: string; x: number; y: number }
   | { kind: 'fields'; id: number; sessionId: string; x: number; y: number; size: number }
-  | { kind: 'city'; id: number; sessionId: string; cityId: number; tx: number; ty: number; era: number; seed: number; p: number; name?: string }
+  | { kind: 'city'; id: number; sessionId: string; cityId: number; tx: number; ty: number; era: number; seed: number; p: number; name?: string; species?: string }
   | { kind: 'cityLevel'; sessionId: string; cityId: number; p: number }
   | { kind: 'cityRemove'; sessionId: string; cityId: number }
   | { kind: 'cityZones'; sessionId: string; on: boolean }

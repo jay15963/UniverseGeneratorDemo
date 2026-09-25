@@ -70,6 +70,10 @@ interface GameEngineState {
   enterGalaxy: (galaxyMeta: UniverseGalaxyMetadata) => void;
   enterSystem: (starMeta: StellarSystemMetadata) => void;
   goBack: () => void;
+  /** body the system view focuses when it opens (set by jumpToSystem) */
+  focusBodyId: string | null;
+  /** straight to a star system anywhere in the universe (life scanner) */
+  jumpToSystem: (galaxyMeta: UniverseGalaxyMetadata, starMeta: StellarSystemMetadata, bodyId?: string) => void;
 
   // --- Reset ---
   resetGame: () => void;
@@ -166,6 +170,26 @@ export const useGameEngine = create<GameEngineState>((set, get) => ({
       set({
         currentLevel: 'system',
         activeStarMeta: starMeta,
+        focusBodyId: null,
+        isTransitioning: false,
+      });
+    }, 800);
+  },
+
+  focusBodyId: null,
+  jumpToSystem: (galaxyMeta, starMeta, bodyId) => {
+    set({ isTransitioning: true, transitionDirection: 'in' });
+    setTimeout(() => {
+      set({
+        currentLevel: 'system',
+        navigationStack: [
+          { level: 'universe', label: 'Universo' },
+          { level: 'galaxy', label: galaxyMeta.name, galaxySeed: galaxyMeta.galaxySeed, galaxyAge: galaxyMeta.age, galaxyStarCount: galaxyMeta.starCount, galaxyShape: galaxyMeta.shape },
+        ],
+        activeGalaxyMeta: galaxyMeta,
+        // the galaxy is regenerated if the player goes back to it
+        galaxyStars: [], galaxyConfig: null,
+        activeStarMeta: starMeta, systemBodies: [], systemConfig: null, focusBodyId: bodyId ?? null,
         isTransitioning: false,
       });
     }, 800);
