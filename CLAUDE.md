@@ -181,7 +181,8 @@ Owner's rules - keep them:
   design's real footprint, sit on one zone, dry land and at most one level of slope. One seat of government in the
   administrative quarter, farmsteads / camps / mine heads spread over the fields, watchtowers on the wall towers.
   The view renders designs with a pool of structure workers (`structPool.ts`, 4 frames) and draws them by the row of
-  their lot's front edge.
+  their lot's front edge. **In the world they use `CITY_K` (0.55 x the generator's gameplay LOD)** so buildings stay in
+  proportion with the world's trees and animals (owner's request: the generator scale looked far too big there).
 - Streets by era: tribal / medieval / classical dirt, industrial / modern cobbles ("ladrilho"), contemporary / futurist
   asphalt, space era dark composite panels with glowing seams. Zones: residential green, commercial blue, industrial
   yellow, administrative light blue (the centre), military red; specialised fields (farm, lumber, mine, quarry,

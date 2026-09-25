@@ -9,7 +9,7 @@
 import { fbm2, hash3 } from '../terrain/noise';
 import { TILE } from '../terrain/types';
 import type { Culture, Size } from '../structure/genome';
-import { buildParts, shapeBox, LOD_K } from '../structure/render';
+import { buildParts, shapeBox, CITY_K } from '../structure/render';
 import type { Dir8 } from '../creature/pose';
 import { CZ, CityBuilding, isField, isZone } from './codes';
 
@@ -91,7 +91,7 @@ export function placeBuildings(p: LotInput): CityBuilding[] {
       let w = 0;
       for (const d of ['S', 'E'] as Dir8[]) {
         let x0 = 1e9, x1 = -1e9;
-        for (const part of buildParts({ culture, type: t, size: s, era, variant: 0, night: false }, d, 0, 8, LOD_K.gameplay)) {
+        for (const part of buildParts({ culture, type: t, size: s, era, variant: 0, night: false }, d, 0, 8, CITY_K)) {
           const b = shapeBox(part); x0 = Math.min(x0, b[0]); x1 = Math.max(x1, b[2]);
         }
         w = Math.max(w, x1 - x0);
