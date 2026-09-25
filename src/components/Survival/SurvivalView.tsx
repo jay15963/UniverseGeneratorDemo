@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Backpack, Map as MapIcon, Hand, ZoomIn, ZoomOut } from 'lucide-react';
+import { X, Backpack, Map as MapIcon, Hand, ZoomIn, ZoomOut, Building2, Crosshair, Trash2, LocateFixed } from 'lucide-react';
 import type { PlanetSession, TerrainPool } from '../../lib/planet-generator/planetClient';
 import { PlanetType, BiomeType } from '../../lib/planet-generator/generator';
 import { ChunkData, Feature, Feat, CHUNK, CHUNK_PX, TILE, GROUND_INFO, Ground, solidRadius, WORLD_TILES_X, LIFT, MAX_LEVEL, TREES, LIQUID_FRAMES } from '../../lib/terrain/types';
@@ -18,6 +18,7 @@ import { Genome, Stage as CStage } from '../../lib/creature/genome';
 import { LayerType } from '../../lib/planet-generator/generator';
 import { frameMeter } from '../../lib/render/frameMeter';
 import type { Cinematic, CineApi } from '../Demo/cinema';
+import { ERA_NAMES, type CityMeta } from '../../lib/city/codes';
 
 interface Props {
   session: PlanetSession;
@@ -167,6 +168,18 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const [hud, setHud] = useState({ biome: '', ground: '', temp: 0, lat: 0, lon: 0, clock: '08:00', rock: '', alt: 0, weather: 'clear' });
   const [prompt, setPrompt] = useState<{ text: string; action: string | null } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // --- city generator (spectator) ---
+  const [cityPick, setCityPick] = useState(false);
+  const cityPickRef = useRef(false);
+  cityPickRef.current = cityPick;
+  const [cityBusy, setCityBusy] = useState<string | null>(null);
+  const [cityList, setCityList] = useState<{ id: number; meta: CityMeta; p: number }[]>([]);
+  const [selCity, setSelCity] = useState<number | null>(null);
+  const [cityEra, setCityEra] = useState(1);
+  const [cityEvo, setCityEvo] = useState(100);
+  /** Name pills drawn on the overlay this frame (CSS px), for clicks. */
+  const cityHits = useRef<{ id: number; x: number; y: number; w: number; h: number }[]>([]);
+  const evoTimer = useRef(0);
 
   const bank = useMemo(() => new SpriteBank(vegetationHueShift(cfg.vegetationHue, cfg.planetType === PlanetType.ALIEN_LIFE)), [cfg]);
   // wildlife: 200+ species for living worlds, sprites rendered by workers on demand
@@ -194,6 +207,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     keys: new Set<string>(), joy: { x: 0, y: 0 },
     zoom: 3, zoomView: 3, zoomIdx: 3, dir8: 2,
     chunks: new Map<string, LoadedChunk>(), pending: new Set<string>(),
+    /** chunks painted before a city change: redrawn in place (the old one stays on screen until then) */
+    staleGen: new Map<string, number>(), cityGen: 0,
     taken: new Set<string>(), picked: new Map<string, number>(),
     target: null as Feature | null, hover: null as Feature | null,
     floaters: [] as { x: number; y: number; t: number; text: string }[],
@@ -295,12 +310,17 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     want.sort((a, b) => a[2] - b[2]);
     for (const [cx, cy] of want) {
       const key = `${cx},${cy}`;
-      if (g.chunks.has(key) || g.pending.has(key)) continue;
+      if ((g.chunks.has(key) && !g.staleGen.has(key)) || g.pending.has(key)) continue;
       if (g.pending.size >= (pool ? pool.size + 1 : 2)) break;
       g.pending.add(key);
+      const gen0 = g.cityGen;
       (pool ?? session).chunk(cx, cy).then(data => {
         g.pending.delete(key);
         if (!aliveRef.current) return;
+        const sg = g.staleGen.get(key);
+        if (sg !== undefined && sg <= gen0) g.staleGen.delete(key);
+        const old = g.chunks.get(key);
+        if (old?.tex) glRef.current?.deleteTexture(old.tex);
         const gl = glRef.current;
         let rows: LoadedRow[], tex: WebGLTexture | null = null;
         if (gl) ({ rows, tex } = packChunkRows(gl, data));
@@ -313,12 +333,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         mini.width = CHUNK; mini.height = CHUNK;
         mini.getContext('2d')!.putImageData(new ImageData(data.mini as Uint8ClampedArray<ArrayBuffer>, CHUNK, CHUNK), 0, 0);
         g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow, tex });
-        fauna.spawnChunk(data.cx, data.cy, world);
+        if (!old) fauna.spawnChunk(data.cx, data.cy, world);
         const zv = Math.max(window.innerWidth, window.innerHeight) / 2 / Math.max(MIN_LOCAL_ZOOM, G.current.zoomView) / CHUNK_PX + 2;
         const cap = Math.max(cine ? 150 : 64, Math.ceil((2 * zv + 1) ** 2) + 16);
         if (g.chunks.size > cap) {
           const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - cap);
-          for (const [k, c] of far) { g.chunks.delete(k); fauna.removeChunk(k); if (c.tex) glRef.current?.deleteTexture(c.tex); }
+          for (const [k, c] of far) { g.chunks.delete(k); g.staleGen.delete(k); fauna.removeChunk(k); if (c.tex) glRef.current?.deleteTexture(c.tex); }
         }
         requestChunks();
       }).catch(() => g.pending.delete(key));
@@ -442,7 +462,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); if (bagOpen) setBagOpen(false); else onExit(); return; }
+      if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); if (bagOpen) setBagOpen(false); else if (cityPickRef.current) setCityPick(false); else onExit(); return; }
       if (cine) return;
       const k = e.key.toLowerCase();
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k)) { e.preventDefault(); G.current.keys.add(k); }
@@ -506,6 +526,79 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       }
     });
     return best as Feature | null;
+  };
+
+  // ---------------------------------------------------------------------------
+  // City generator (spectator): pick a centre, plan it in the worker, repaint the chunks it covers
+  // ---------------------------------------------------------------------------
+  const markStale = (...boxes: (CityMeta['bbox'] | undefined)[]) => {
+    const g = G.current;
+    g.cityGen++;
+    for (const b of boxes) {
+      if (!b || !isFinite(b.tx0)) continue;
+      const cx0 = Math.floor(b.tx0 / CHUNK) - 1, cx1 = Math.floor(b.tx1 / CHUNK) + 1;
+      const cy0 = Math.floor(b.ty0 / CHUNK) - 1, cy1 = Math.floor(b.ty1 / CHUNK) + 1;
+      for (const [key, c] of g.chunks) if (c.data.cx >= cx0 && c.data.cx <= cx1 && c.data.cy >= cy0 && c.data.cy <= cy1) g.staleGen.set(key, g.cityGen);
+    }
+  };
+  const refreshCities = () => setCityList([...session.cities].map(([id, c]) => ({ id, meta: c.plan.meta, p: c.p })));
+  const toP = (v: number) => Math.round((v / 100) * 254);
+  /** Tile under a screen point (terraces raise tiles by their level, so the rows below are searched too). */
+  const tileAtScreen = (sx: number, sy: number) => {
+    const w = screenToWorld(sx, sy);
+    const tx = Math.floor(w.x / TILE), r0 = Math.floor(w.y / TILE);
+    if (lodOf(G.current.zoomView) !== 'local') return { tx, ty: r0 };
+    for (let r = r0 + MAX_LEVEL; r >= r0; r--) {
+      const L = levelAt(w.x, r * TILE + TILE / 2);
+      if (L === null) continue;
+      const top = r * TILE - L * LIFT;
+      if (w.y >= top && w.y < top + TILE) return { tx, ty: r };
+    }
+    return { tx, ty: r0 };
+  };
+  const generateCity = async (tx: number, ty: number, era: number, evo: number, id?: number) => {
+    const prev = id !== undefined ? session.cities.get(id)?.plan.meta.bbox : undefined;
+    setCityBusy(id !== undefined ? 'Replanejando a cidade…' : 'Planejando a cidade…');
+    try {
+      const plan = await session.planCity(tx, ty, era, toP(evo), id);
+      if (!aliveRef.current) return;
+      markStale(prev, plan.meta.bbox);
+      refreshCities();
+      setSelCity(plan.meta.id);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCityBusy(null);
+    }
+  };
+  const selectCity = (id: number) => {
+    const c = session.cities.get(id);
+    if (!c) return;
+    setCityPick(false);
+    setSelCity(id);
+    setCityEra(c.plan.meta.era);
+    setCityEvo(Math.round((c.p / 254) * 100));
+  };
+  const setEvolution = (id: number, v: number) => {
+    setCityEvo(v);
+    window.clearTimeout(evoTimer.current);
+    evoTimer.current = window.setTimeout(() => {
+      session.setCityLevel(id, toP(v));
+      markStale(session.cities.get(id)?.plan.meta.bbox);
+      refreshCities();
+    }, 160);
+  };
+  const deleteCity = (id: number) => {
+    const b = session.cities.get(id)?.plan.meta.bbox;
+    session.removeCity(id);
+    markStale(b);
+    refreshCities();
+    setSelCity(null);
+  };
+  const goToCity = (m: CityMeta) => {
+    const g = G.current;
+    g.x = m.tx * TILE + TILE / 2; g.y = m.ty * TILE + TILE / 2;
+    if (lodOf(g.zoomView) !== 'local') g.zoomIdx = ZOOMS.indexOf(1 / 4);
   };
 
   // ---------------------------------------------------------------------------
@@ -723,6 +816,72 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         octx.fillStyle = 'rgba(0,0,0,0.7)'; octx.fillText('Você está aqui', sx + 12 * dpr + 1, sy - 9 * dpr + 1);
         octx.fillStyle = '#fff'; octx.fillText('Você está aqui', sx + 12 * dpr, sy - 9 * dpr);
       }
+    };
+
+    // --- cities: territories on the world map, name pills (clickable) everywhere ---
+    const terrCache = new Map<number, { plan: unknown; p: number; c: HTMLCanvasElement }>();
+    const cityRGB = (id: number): [number, number, number] => {
+      const h = ((id * 137.508) % 360) / 60, x = 1 - Math.abs((h % 2) - 1);
+      const [r, g, b] = h < 1 ? [1, x, 0] : h < 2 ? [x, 1, 0] : h < 3 ? [0, 1, x] : h < 4 ? [0, x, 1] : h < 5 ? [x, 0, 1] : [1, 0, x];
+      return [Math.round(70 + r * 185), Math.round(70 + g * 185), Math.round(70 + b * 185)];
+    };
+    const territoryCanvas = (id: number) => {
+      const c0 = session.cities.get(id)!;
+      const e = terrCache.get(id);
+      if (e && e.plan === c0.plan && e.p === c0.p) return e.c;
+      const m = c0.plan.meta, GS = m.gs, T = c0.plan.territory, p = c0.p;
+      const c = e?.c ?? document.createElement('canvas');
+      c.width = GS; c.height = GS;
+      const x = c.getContext('2d')!;
+      const im = x.createImageData(GS, GS);
+      const [r, g, b] = cityRGB(id);
+      const inside = (i: number, j: number) => i >= 0 && j >= 0 && i < GS && j < GS && T[j * GS + i] <= p;
+      for (let j = 0; j < GS; j++) for (let i = 0; i < GS; i++) {
+        if (!inside(i, j)) continue;
+        const edge = !inside(i + 1, j) || !inside(i - 1, j) || !inside(i, j + 1) || !inside(i, j - 1);
+        const o = (j * GS + i) * 4;
+        im.data[o] = r; im.data[o + 1] = g; im.data[o + 2] = b; im.data[o + 3] = edge ? 235 : 80;
+      }
+      x.putImageData(im, 0, 0);
+      terrCache.set(id, { plan: c0.plan, p, c });
+      return c;
+    };
+    const drawCityLabels = (toScreen: (x: number, y: number) => [number, number], dpr: number, S: number, world: boolean, DW: number) => {
+      const hits: { id: number; x: number; y: number; w: number; h: number }[] = [];
+      for (const [id, c] of session.cities) {
+        const m = c.plan.meta;
+        for (let k = world ? -1 : 0; k <= (world ? 1 : 0); k++) {
+          if (world) {
+            // territory (dilated edge so it reads even when the map shows the whole planet)
+            const cv = territoryCanvas(id);
+            const [sx0, sy0] = toScreen((m.ox - 1) * TILE + k * WORLD_PX, (m.oy - 1) * TILE);
+            const size = m.gs * m.c * TILE * S;
+            if (sx0 + size < 0 || sx0 > DW) continue;
+            octx.imageSmoothingEnabled = size < m.gs;
+            octx.drawImage(cv, sx0, sy0, size, size);
+          }
+          const L = world ? 0 : levelAt(m.tx * TILE, m.ty * TILE) ?? 0;
+          const [cx, cy] = toScreen(m.tx * TILE + TILE / 2 + k * WORLD_PX, m.ty * TILE - L * LIFT);
+          if (cx < -200 || cx > DW + 200) continue;
+          const [r, g, b] = cityRGB(id);
+          octx.font = `700 ${12 * dpr}px ui-sans-serif, system-ui`;
+          const sub = `${ERA_NAMES[m.era]} · ${Math.round((c.p / 254) * 100)}%`;
+          const w1 = octx.measureText(m.name).width;
+          octx.font = `500 ${9.5 * dpr}px ui-sans-serif, system-ui`;
+          const w2 = octx.measureText(sub).width;
+          const w = Math.max(w1, w2) + 16 * dpr, h = 32 * dpr;
+          const x = cx - w / 2, y = cy - h - 10 * dpr;
+          octx.fillStyle = 'rgba(8,10,16,0.78)';
+          octx.strokeStyle = `rgb(${r},${g},${b})`; octx.lineWidth = 1.5 * dpr;
+          octx.beginPath(); octx.roundRect(x, y, w, h, 7 * dpr); octx.fill(); octx.stroke();
+          octx.beginPath(); octx.moveTo(cx - 5 * dpr, y + h); octx.lineTo(cx, y + h + 7 * dpr); octx.lineTo(cx + 5 * dpr, y + h); octx.fill();
+          octx.textAlign = 'center';
+          octx.fillStyle = '#fff'; octx.font = `700 ${12 * dpr}px ui-sans-serif, system-ui`; octx.fillText(m.name, cx, y + 14 * dpr);
+          octx.fillStyle = `rgb(${r},${g},${b})`; octx.font = `500 ${9.5 * dpr}px ui-sans-serif, system-ui`; octx.fillText(sub, cx, y + 26 * dpr);
+          hits.push({ id, x: x / dpr, y: y / dpr, w: w / dpr, h: (h + 8 * dpr) / dpr });
+        }
+      }
+      cityHits.current = hits;
     };
 
     // --- demo reel: the director drives camera, clock and weather ---
@@ -1037,6 +1196,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }
         if (sun > -0.2 && sun < 0.25) { octx.fillStyle = `rgba(255,120,40,${(1 - Math.abs(sun - 0.02) / 0.23) * 0.12})`; octx.fillRect(0, 0, DW, DH); }
         fx.drawScreen(octx, DW, DH, S, fxc, toScreen);
+        if (spectator && !cine) drawCityLabels(toScreen, dpr, S, false, DW);
       } else if (g.ready && !cine) {
         // zoomed-out views: a clear "you are here" marker (drawn at every horizontal wrap of the planet)
         const [px, py] = toScreen(g.x, g.y - g.lift);
@@ -1056,6 +1216,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
           octx.stroke();
         }
+        if (spectator) drawCityLabels(toScreen, dpr, S, lod === 'world', DW);
       }
 
       if (cineFade > 0.002) {
@@ -1151,7 +1312,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full touch-none"
-        style={{ imageRendering: 'pixelated', cursor: spectator ? (dragRef.current ? 'grabbing' : 'grab') : 'crosshair' }}
+        style={{ imageRendering: 'pixelated', cursor: spectator && !cityPick ? (dragRef.current ? 'grabbing' : 'grab') : 'crosshair' }}
         onPointerMove={e => {
           if (e.pointerType === 'mouse') G.current.mouse = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY };
           const d = dragRef.current;
@@ -1165,6 +1326,16 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         onPointerLeave={() => { G.current.mouse = { x: -1, y: -1 }; }}
         onPointerDown={e => {
           if (spectator) {
+            const ox = e.nativeEvent.offsetX, oy = e.nativeEvent.offsetY;
+            const hit = cityHits.current.find(h => ox >= h.x && ox <= h.x + h.w && oy >= h.y && oy <= h.y + h.h);
+            if (hit) { selectCity(hit.id); return; }
+            if (cityPick && !cityBusy) {
+              const t = tileAtScreen(ox, oy);
+              setCityPick(false);
+              if (lodOf(G.current.zoomView) !== 'local') { G.current.x = t.tx * TILE + TILE / 2; G.current.y = t.ty * TILE + TILE / 2; }
+              generateCity(t.tx, t.ty, cityEra, cityEvo);
+              return;
+            }
             (e.target as HTMLElement).setPointerCapture(e.pointerId);
             dragRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
             return;
@@ -1262,6 +1433,60 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           <div className="text-[11px] font-mono text-neutral-300">WASD / setas ou arrastar · Shift acelera · roda: zoom (mais afastado = mais rápido)</div>
         </div>
       )}
+
+      {spectator && !loading && (() => {
+        const sel = cityList.find(c => c.id === selCity) ?? null;
+        const LEGEND: [string, string][] = [['#50c85a', 'Residencial'], ['#4682eb', 'Comercial'], ['#ebcd3c', 'Industrial'], ['#82d2f5', 'Administrativo'],
+          ['#dc3c37', 'Militar'], ['#a05ad2', 'Campos (fazenda, mina…)'], ['#8a857c', 'Muralhas e torres'], ['#9a7048', 'Ruas (material da era)']];
+        return (
+          <div className="absolute left-3 top-[122px] flex flex-col gap-2 w-[270px] max-w-[calc(100vw-24px)]">
+            {!cityPick && !sel && (
+              <button onClick={() => { setCityPick(true); setSelCity(null); }} disabled={!!cityBusy}
+                className="self-start flex items-center gap-2 bg-black/65 backdrop-blur-md border border-sky-300/30 rounded-xl px-3 py-2 text-sky-100 text-sm font-semibold hover:bg-sky-900/40 disabled:opacity-50">
+                <Building2 className="w-4 h-4" /> Gerar cidade
+              </button>
+            )}
+            {(cityPick || sel) && (
+              <div className="bg-black/75 backdrop-blur-md border border-white/15 rounded-xl p-3 text-white text-sm space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-mono tracking-[0.2em] text-sky-300/80 uppercase">{sel ? 'Cidade' : 'Nova cidade'}</div>
+                    <div className="font-bold truncate">{sel ? sel.meta.name : 'Escolha o centro'}</div>
+                  </div>
+                  <button onClick={() => { setCityPick(false); setSelCity(null); }} title="Fechar" className="text-neutral-400 hover:text-white shrink-0"><X className="w-4 h-4" /></button>
+                </div>
+                {cityPick && <div className="flex items-start gap-2 text-sky-200 text-xs"><Crosshair className="w-4 h-4 shrink-0" /> Clique no terreno (ou no mapa-múndi) para escolher o centro da cidade.</div>}
+                <label className="block text-xs text-neutral-300">
+                  Era
+                  <select value={cityEra} disabled={!!cityBusy}
+                    onChange={e => { const v = +e.target.value; setCityEra(v); if (sel) generateCity(sel.meta.tx, sel.meta.ty, v, cityEvo, sel.id); }}
+                    className="mt-1 w-full bg-neutral-900 border border-white/15 rounded-lg px-2 py-1 text-white text-sm">
+                    {ERA_NAMES.map((n, i) => <option key={i} value={i}>{n}</option>)}
+                  </select>
+                </label>
+                <label className="block text-xs text-neutral-300">
+                  <div className="flex justify-between"><span>Evolução</span><span className="font-mono text-white">{cityEvo}%</span></div>
+                  <input type="range" min={0} max={100} value={cityEvo} disabled={!!cityBusy}
+                    onChange={e => { const v = +e.target.value; if (sel) setEvolution(sel.id, v); else setCityEvo(v); }}
+                    className="w-full accent-sky-400" />
+                  <div className="flex justify-between text-[10px] text-neutral-500"><span>só o centro</span><span>metrópole</span></div>
+                </label>
+                {sel && (
+                  <div className="flex gap-2">
+                    <button onClick={() => goToCity(sel.meta)} className="flex-1 flex items-center justify-center gap-1.5 bg-white/5 border border-white/10 rounded-lg py-1.5 text-xs hover:bg-white/10"><LocateFixed className="w-3.5 h-3.5" /> Ir até</button>
+                    <button onClick={() => deleteCity(sel.id)} disabled={!!cityBusy} className="flex-1 flex items-center justify-center gap-1.5 bg-red-500/10 border border-red-300/20 text-red-200 rounded-lg py-1.5 text-xs hover:bg-red-500/20"><Trash2 className="w-3.5 h-3.5" /> Remover</button>
+                  </div>
+                )}
+                {sel && <button onClick={() => { setSelCity(null); setCityPick(true); }} className="w-full flex items-center justify-center gap-1.5 bg-sky-500/10 border border-sky-300/20 text-sky-100 rounded-lg py-1.5 text-xs hover:bg-sky-500/20"><Building2 className="w-3.5 h-3.5" /> Gerar outra cidade</button>}
+                <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pt-1 border-t border-white/10">
+                  {LEGEND.map(([c, n]) => <div key={n} className="flex items-center gap-1.5 text-[10px] text-neutral-300"><span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: c }} />{n}</div>)}
+                </div>
+              </div>
+            )}
+            {cityBusy && <div className="self-start bg-black/75 border border-sky-300/25 rounded-lg px-3 py-1.5 text-xs text-sky-100 animate-pulse">{cityBusy}</div>}
+          </div>
+        );
+      })()}
 
       {/* Hotbar */}
       {!spectator && <div className="absolute left-1/2 -translate-x-1/2 bottom-3 flex items-center gap-1 bg-black/60 backdrop-blur-md border border-white/10 rounded-xl p-1.5 max-w-[calc(100%-16px)] overflow-x-auto no-scrollbar">

@@ -1,6 +1,7 @@
 import type { LayerType, PlanetConfig } from './generator';
 import type { ChunkData } from '../terrain/types';
 import type { PlanetFields } from '../terrain/terrainGen';
+import type { CityPlan } from '../city/codes';
 
 export interface PlanetProbe {
   elevation: number;
@@ -26,6 +27,9 @@ export type WorkerRequest =
   | { kind: 'chunk'; id: number; sessionId: string; cx: number; cy: number }
   | { kind: 'spawn'; id: number; sessionId: string; x: number; y: number }
   | { kind: 'fields'; id: number; sessionId: string; x: number; y: number; size: number }
+  | { kind: 'city'; id: number; sessionId: string; cityId: number; tx: number; ty: number; era: number; seed: number; p: number; name?: string }
+  | { kind: 'cityLevel'; sessionId: string; cityId: number; p: number }
+  | { kind: 'cityRemove'; sessionId: string; cityId: number }
   | { kind: 'close'; sessionId: string };
 
 export type WorkerResponse =
@@ -37,4 +41,5 @@ export type WorkerResponse =
   | { kind: 'chunk'; id: number; chunk: ChunkData }
   | { kind: 'spawn'; id: number; tx: number; ty: number }
   | { kind: 'fields'; id: number; fields: PlanetFields }
+  | { kind: 'city'; id: number; plan: CityPlan }
   | { kind: 'error'; id: number; message: string };
