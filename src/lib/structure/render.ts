@@ -15,6 +15,11 @@ export const SFRAMES = 8;
  */
 export const LOD_K = { gameplay: 4.5, regional: 1 } as const;
 export type Lod = keyof typeof LOD_K;
+/**
+ * Structures placed in the game world (cities): smaller than the generator's gameplay LOD so they sit in proportion
+ * with the world's trees and animals (a tribal hut about as tall as a tree).
+ */
+export const CITY_K = LOD_K.gameplay * 0.55;
 /** the creatures' gameplay scale (SurvivalView PLAYER_K) */
 export const CREATURE_K = 0.4;
 export interface StructSpec { culture: Culture; type: string; size: Size; era: number; variant: number; night: boolean }

@@ -18,7 +18,7 @@ import { Genome, Stage as CStage } from '../../lib/creature/genome';
 import { LayerType } from '../../lib/planet-generator/generator';
 import { frameMeter } from '../../lib/render/frameMeter';
 import { StructPool } from '../../lib/structure/structPool';
-import { LOD_K } from '../../lib/structure/render';
+import { CITY_K } from '../../lib/structure/render';
 import type { CityBuilding, CityPlan } from '../../lib/city/codes';
 import type { Cinematic, CineApi } from '../Demo/cinema';
 import { ERA_NAMES, type CityMeta } from '../../lib/city/codes';
@@ -791,7 +791,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     };
     const loadDesign = (key: string, plan: CityPlan, b: CityBuilding, prio: number) => {
       spool ??= new StructPool();
-      const job = spool.request(key, { culture: plan.meta.culture, type: b.type, size: b.size, era: plan.meta.era, variant: b.variant, night: false }, b.dir, LOD_K.gameplay, CITY_FRAMES, prio);
+      const job = spool.request(key, { culture: plan.meta.culture, type: b.type, size: b.size, era: plan.meta.era, variant: b.variant, night: false }, b.dir, CITY_K, CITY_FRAMES, prio);
       if (!job) return;
       const d: Design = { img: null, tex: null, fw: 0, fh: 0, ax: 0, ay: 0, cols: 1, used: performance.now() };
       designs.set(key, d);
