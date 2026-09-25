@@ -1,5 +1,7 @@
 // Shared city tile codes (planner <-> terrain painter <-> UI).
 import { Feat } from '../terrain/types';
+import type { Culture, Size } from '../structure/genome';
+import type { Dir8 } from '../creature/pose';
 
 export const CZ = {
   NONE: 0,
@@ -40,12 +42,25 @@ export interface CityMeta {
   walls: [number, number][][];
   towers: [number, number][];
   gates: [number, number][];
+  /** the city's building culture: every structure uses the same architectural language */
+  culture: Culture;
+}
+
+/** One structure placed by the planner (drawn by the view from the structure generator). */
+export interface CityBuilding {
+  type: string; size: Size; variant: number; dir: Dir8;
+  /** world px of the ground centre */
+  x: number; y: number;
+  /** tile row of the lot's front edge (painting order), terrain level, footprint side in tiles */
+  row: number; l: number; w: number;
+  stage: number;
 }
 
 export interface CityPlan {
   meta: CityMeta;
   territory: Uint8Array;           // gs*gs stage per cell (255 = outside)
   chunks: Record<string, CityChunkData>;
+  buildings: CityBuilding[];
 }
 
 const SMALL = new Set<Feat>([Feat.FLOWER, Feat.TALL_GRASS, Feat.MUSHROOM]);

@@ -172,7 +172,16 @@ Owner's rules - keep them:
 ## City generator (`src/lib/city/`, spectator mode in `SurvivalView.tsx`)
 Owner's rules - keep them:
 - Spectator mode -> "Gerar cidade": click the terrain (or the world map) to pick the centre; the whole city is planned
-  from there. For now it **only paints the ground** (Cities: Skylines style) - no structures.
+  from there. The ground is painted Cities: Skylines style and the lots are **populated with structures** from the
+  structure generator.
+- **One culture per city** (`plan.ts` -> `makeCulture('city:<seed>', ...)`, params from the site: temperature, water,
+  planet size, alien planets exotic): every building of a city shares the same architectural language; never mix
+  random styles. `build.ts` picks building families per zone / era / density (the old centre is taller) with a slow
+  noise so neighbourhoods are coherent; lots follow the street frontage (door facing the street), are sized from each
+  design's real footprint, sit on one zone, dry land and at most one level of slope. One seat of government in the
+  administrative quarter, farmsteads / camps / mine heads spread over the fields, watchtowers on the wall towers.
+  The view renders designs with a pool of structure workers (`structPool.ts`, 4 frames) and draws them by the row of
+  their lot's front edge.
 - Streets by era: tribal / medieval / classical dirt, industrial / modern cobbles ("ladrilho"), contemporary / futurist
   asphalt, space era dark composite panels with glowing seams. Zones: residential green, commercial blue, industrial
   yellow, administrative light blue (the centre), military red; specialised fields (farm, lumber, mine, quarry,
