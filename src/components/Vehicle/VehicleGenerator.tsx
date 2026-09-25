@@ -7,8 +7,8 @@ import { renderCreature, CreatureSprite } from '../../lib/creature/render';
 import { makeKit } from '../../lib/structure/kit';
 import { drawStructBackdrop } from '../../lib/structure/backdrop';
 import { Dir8, DIRS, DIR_PT } from '../../lib/creature/pose';
-import { DOMAINS, CLASSES, VSIZES, Domain, VClass, VSize, vtypesFor, vtypeById, vtypeName, available, firstEra, VType } from '../../lib/vehicle/catalog';
-import { vehicleData, VSpec, VFRAMES } from '../../lib/vehicle/render';
+import { DOMAINS, CLASSES, VSIZES, Domain, VClass, VSize, vtypesFor, vtypeById, available, firstEra, VType } from '../../lib/vehicle/catalog';
+import { vehicleData, VSpec, VFRAMES, Layer } from '../../lib/vehicle/render';
 import { renderVehicleAsync, vehicleSheetAsync, VehSprite } from '../../lib/vehicle/vehAsync';
 import type { VAnim } from '../../lib/vehicle/vparts';
 
@@ -95,6 +95,8 @@ export function VehicleGenerator({ onBack }: Props) {
   const [dir, setDir] = useState<Dir8>('SE');
   const [night, setNight] = useState(false);
   const [anim, setAnim] = useState<VAnim>('move');
+  // turrets: sweep on their own (null) or aim at an absolute direction, independent of the hull
+  const [aim, setAim] = useState<Dir8 | null>(null);
   const [paused, setPaused] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -108,9 +110,9 @@ export function VehicleGenerator({ onBack }: Props) {
   const types = vtypesFor(domain, classes.some(c => c.id === cls) ? cls : classes[0].id);
   const type: VType = types.find(t => t.id === typeSel) ?? types[variant % types.length];
   const size: VSize = type.sizes.includes(sizeSel) ? sizeSel : type.sizes[Math.min(type.sizes.length - 1, 1)] ?? type.sizes[0];
-  const exists = available(type, era, size);
+  const exists = available(type, era);
   const vAnim: VAnim = anim === 'use' && !type.use ? 'move' : anim;
-  const spec: VSpec = useMemo(() => ({ culture, type: type.id, size, era, variant, night, anim: vAnim }), [culture, type.id, size, era, variant, night, vAnim]);
+  const spec: VSpec = useMemo(() => ({ culture, type: type.id, size, era, variant, night, anim: vAnim, aim }), [culture, type.id, size, era, variant, night, vAnim, aim]);
 
   const [sprite, setSprite] = useState<VehSprite | null>(null);
   const [busy, setBusy] = useState(false);
@@ -133,7 +135,8 @@ export function VehicleGenerator({ onBack }: Props) {
   const beast = useMemo(() => (pulled ? renderCreature(beastG, Stage.LAND, dir, 0, 8, vAnim === 'move' ? 'walk' : 'idle', CREATURE_K) : null), [pulled, beastG, dir, vAnim]);
   const K = useMemo(() => makeKit(culture, era, night), [culture, era, night]);
   const meta = eraMeta(ERAS[era]);
-  const title = exists ? vtypeName(type, era, size) : vtypeName(type, firstEra(type), size);
+  const title = exists && sprite ? sprite.label : type.name;
+  const hasTurrets = !!sprite && sprite.mounts.length > 0;
 
   const sp = sprite;
   const extra = beast && sp?.hitch ? beast.w * 1.2 : 0;
@@ -181,7 +184,7 @@ export function VehicleGenerator({ onBack }: Props) {
     const run = () => {
       if (cancelled || i >= ERAS.length) return;
       const e = i++;
-      if (available(type, e, size)) { const d = vehicleData({ ...spec, era: e, anim: 'idle' }, 'SE', 1, 0.5); next[e] = toCanvas(d.frames[0], d.w, d.h); } else next[e] = null;
+      if (available(type, e)) { const d = vehicleData({ ...spec, era: e, anim: 'idle' }, 'SE', 1, 0.5); next[e] = toCanvas(d.frames[0], d.w, d.h); } else next[e] = null;
       setEraThumbs({ ...next });
       setTimeout(run, 0);
     };
@@ -223,15 +226,25 @@ export function VehicleGenerator({ onBack }: Props) {
       o.imageSmoothingEnabled = false;
       o.drawImage(c, 0, 0, W * k, H * k);
     } else if (what === 'sheet') {
-      // one row per facing (E, SE, S, SW, W, NW, N, NE), one column per frame, 1:1 pixels, current animation
+      // one row per facing (E, SE, S, SW, W, NW, N, NE), one column per frame, 1:1 pixels, current animation.
+      // With turrets: the body alone + one sheet per turret (rows = the turret's own facing, anchored on its pivot)
+      // + the mount points of every turret for every hull facing, so the game turns them independently.
       setBusy(true);
-      const sh = await vehicleSheetAsync(spec, LOD_K.gameplay);
+      const save = (name: string, data: Uint8ClampedArray, w: number, h: number) => { const c = toCanvas(data, w, h), a = document.createElement('a'); a.download = name.replace(/\s+/g, '_'); a.href = c.toDataURL('image/png'); a.click(); };
+      const base = `${culture.name}-${type.id}-${size}-${meta.name}-${vAnim}`;
+      const layers: Layer[] = hasTurrets ? ['body', ...sprite!.mounts.map(m => `t${m.id}`)] : ['all'];
+      const mounts: unknown[] = [];
+      for (const layer of layers) {
+        const sh = await vehicleSheetAsync({ ...spec, aim: null }, LOD_K.gameplay, layer);
+        if (!sh) continue;
+        save(`${base}-${layer === 'all' ? 'sprites' : layer === 'body' ? 'corpo' : `torreta-${layer.slice(1)}`}.png`, sh.data, sh.cw * sh.frames, sh.ch * DIRS.length);
+        if (layer === 'body') mounts.push(...sh.mounts.map(m => ({ facing: m.dir, turrets: m.mounts.map(t => ({ id: t.id, x: Math.round(t.x), y: Math.round(t.y), inFront: t.z > 0 })) })));
+      }
+      if (mounts.length) { const a = document.createElement('a'); a.download = `${base}-torretas.json`.replace(/\s+/g, '_'); a.href = URL.createObjectURL(new Blob([JSON.stringify({ frame: { anchorX: 'ax', anchorY: 'ay' }, mounts }, null, 1)], { type: 'application/json' })); a.click(); }
       setBusy(false);
-      if (!sh) return;
-      out.width = sh.cw * sh.frames; out.height = sh.ch * DIRS.length;
-      o.drawImage(toCanvas(sh.data, out.width, out.height), 0, 0);
+      return;
     } else {
-      const es = ERAS.map((_, e) => e).filter(e => available(type, e, size));
+      const es = ERAS.map((_, e) => e).filter(e => available(type, e));
       const sps = es.map(e => vehicleData({ ...spec, era: e, anim: 'idle' }, dir, 1, 2));
       const cw = Math.max(...sps.map(s => s.w)) + 16, ch = Math.max(...sps.map(s => s.h)) + 30;
       out.width = cw * 4; out.height = ch * Math.ceil(sps.length / 4) + 40;
@@ -240,11 +253,11 @@ export function VehicleGenerator({ onBack }: Props) {
       sps.forEach((s, i) => {
         const x = (i % 4) * cw, y = 40 + Math.floor(i / 4) * ch;
         o.drawImage(toCanvas(s.frames[0], s.w, s.h), x + (cw - s.w) / 2, y + ch - 26 - s.h);
-        o.fillStyle = '#9aa3b8'; o.font = '13px ui-sans-serif, system-ui'; o.fillText(`${eraMeta(ERAS[es[i]]).name} · ${vtypeName(type, es[i], size)}`, x + 8, y + ch - 8);
+        o.fillStyle = '#9aa3b8'; o.font = '13px ui-sans-serif, system-ui'; o.fillText(`${eraMeta(ERAS[es[i]]).name} · ${s.label}`, x + 8, y + ch - 8);
       });
     }
     const a = document.createElement('a');
-    a.download = `${culture.name}-${type.id}-${size}${what === 'eras' ? '-eras' : `-${meta.name}${what === 'sheet' ? `-${vAnim}-sprites` : ''}`}.png`.replace(/\s+/g, '_');
+    a.download = `${culture.name}-${type.id}-${size}${what === 'eras' ? '-eras' : `-${meta.name}`}.png`.replace(/\s+/g, '_');
     a.href = out.toDataURL('image/png');
     a.click();
   };
@@ -291,7 +304,7 @@ export function VehicleGenerator({ onBack }: Props) {
           <section>
             <Label>Tipo</Label>
             <select value={type.id} onChange={e => setTypeSel(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-2 text-sm">
-              {types.map(t => <option key={t.id} value={t.id} className="bg-neutral-900">{available(t, era, t.sizes.includes(size) ? size : t.sizes[0]) ? vtypeName(t, era, t.sizes.includes(size) ? size : t.sizes[0]) : `${vtypeName(t, firstEra(t), t.sizes[0])} (a partir da era ${eraMeta(ERAS[firstEra(t)]).name})`}</option>)}
+              {types.map(t => <option key={t.id} value={t.id} className="bg-neutral-900">{available(t, era) ? t.name : `${t.name} (a partir da era ${eraMeta(ERAS[firstEra(t)]).name})`}</option>)}
             </select>
             <button onClick={() => { setVariant(v => v + 1); }} className="mt-2 w-full flex items-center justify-center gap-2 text-xs font-bold py-2 rounded-lg border border-sky-300/25 text-sky-200 hover:bg-sky-500/10">
               <Sparkles className="w-3.5 h-3.5" /> Outro projeto (mesma engenharia)
@@ -358,6 +371,14 @@ export function VehicleGenerator({ onBack }: Props) {
             </div>
             {busy && <div className="absolute bottom-3 left-3 flex items-center gap-1.5 bg-black/60 border border-white/10 rounded-lg px-2.5 py-1 text-[11px] text-neutral-300"><Loader2 className="w-3.5 h-3.5 animate-spin" /> renderizando…</div>}
             {!busy && exists && <div className="absolute bottom-3 left-3 bg-black/60 border border-white/10 rounded-lg px-2.5 py-1 text-[11px] text-neutral-400 max-w-[60%]">ao lado: um(a) cidadão(ã) {citizen.g.name.people} da era, para escala{beast ? ' · o animal de tração é só ilustrativo (no jogo, criaturas são atreladas)' : ''}</div>}
+            {hasTurrets && <div className="absolute bottom-3 right-[124px] bg-black/60 border border-white/10 rounded-xl p-1.5" title="Torretas: giram sozinhas ou miram numa direção, independente do casco">
+              <div className="text-[9px] font-mono text-center text-amber-300 mb-1">TORRETA</div>
+              <div className="grid grid-cols-3 gap-1">
+                {(['NW', 'N', 'NE', 'W', '', 'E', 'SW', 'S', 'SE'] as (Dir8 | '')[]).map((d, i) => d ? (
+                  <button key={d} onClick={() => setAim(d)} title={`Mirar: ${DIR_PT[d]}`} className={`w-6 h-6 rounded-md text-[11px] font-bold ${aim === d ? 'bg-amber-300 text-black' : 'bg-white/5 text-neutral-300 hover:bg-white/15'}`}>{ARROWS[d]}</button>
+                ) : <button key={i} onClick={() => setAim(null)} title="Automática: varre sozinha" className={`w-6 h-6 rounded-md text-[8px] font-bold ${aim === null ? 'bg-amber-300 text-black' : 'bg-white/5 text-neutral-400 hover:bg-white/15'}`}>AUTO</button>)}
+              </div>
+            </div>}
             <div className="absolute bottom-3 right-3 grid grid-cols-3 gap-1 bg-black/60 border border-white/10 rounded-xl p-1.5" title="Direção (para o mapa de gameplay)">
               {(['NW', 'N', 'NE', 'W', '', 'E', 'SW', 'S', 'SE'] as (Dir8 | '')[]).map((d, i) => d ? (
                 <button key={d} onClick={() => setDir(d)} title={DIR_PT[d]} className={`w-7 h-7 rounded-md text-xs font-bold ${dir === d ? 'bg-sky-300 text-black' : 'bg-white/5 text-neutral-300 hover:bg-white/15'}`}>{ARROWS[d]}</button>
@@ -373,9 +394,9 @@ export function VehicleGenerator({ onBack }: Props) {
             </div>
             <div className="grid mt-2 gap-1" style={{ gridTemplateColumns: `repeat(${ERAS.length}, minmax(0, 1fr))` }}>
               {ERAS.map((s, i) => {
-                const ok = available(type, i, size);
+                const ok = available(type, i);
                 return (
-                  <button key={s} onClick={() => setEra(i)} title={ok ? vtypeName(type, i, size) : 'não existe nesta era'} className={`group flex flex-col items-center rounded-lg p-1 border transition-colors ${era === i ? 'border-sky-300/70 bg-sky-300/10' : 'border-transparent hover:border-white/10'} ${ok ? '' : 'opacity-40'}`}>
+                  <button key={s} onClick={() => setEra(i)} title={ok ? type.name : 'não existe nesta era'} className={`group flex flex-col items-center rounded-lg p-1 border transition-colors ${era === i ? 'border-sky-300/70 bg-sky-300/10' : 'border-transparent hover:border-white/10'} ${ok ? '' : 'opacity-40'}`}>
                     {ok ? <Thumb canvas={eraThumbs[i] ?? null} /> : <div className="w-full max-w-[64px] aspect-[4/3] flex items-center justify-center text-[16px] text-neutral-600">—</div>}
                     <span className={`hidden md:block text-[9px] leading-tight text-center mt-1 ${era === i ? 'text-sky-200' : 'text-neutral-500 group-hover:text-neutral-300'}`}>{eraMeta(s).name}</span>
                   </button>

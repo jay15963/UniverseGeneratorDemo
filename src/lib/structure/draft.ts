@@ -18,7 +18,12 @@ const PITCH = 0.3;
 const LN = (() => { const x = -0.45, y = -0.7, z = 0.56, n = Math.hypot(x, y, z); return [x / n, y / n, z / n]; })();
 
 export class Draft {
-  private items: { part: Part; key: number; n: number }[] = [];
+  private items: { part: Part; key: number; n: number; tag: string }[] = [];
+  /** stacking level: every piece drawn at level n sorts after all pieces of lower levels (things mounted on a body
+   * are always painted over it, whatever their depth) - vehicles use it; structures stay on level 0 */
+  level = 0;
+  /** tag of the pieces being drawn (vehicles: 't0', 't1'... for turrets that are exported as separate sprites) */
+  tag = '';
   private cy: number; private sy: number;
   readonly cp = Math.cos(PITCH); readonly sp = Math.sin(PITCH);
   private gid = 1000;
@@ -45,7 +50,7 @@ export class Draft {
 
   private push(part: Part, key: number, o: DO) {
     part.g = o.g; part.dark = o.dark; part.noLine = o.noLine; part.flat = o.flat;
-    this.items.push({ part, key: key + (o.bias ?? 0), n: this.items.length });
+    this.items.push({ part, key: key + (o.bias ?? 0) + this.level * 1000, n: this.items.length, tag: this.tag });
   }
 
   /** polygon through anchor points (walls, roof slopes, windows, sails, flags) */
@@ -92,6 +97,8 @@ export class Draft {
 
   /** Painter's order: far to near (stable for equal keys). */
   parts(): Part[] { return this.items.sort((a, b) => a.key - b.key || a.n - b.n).map(i => i.part); }
+  /** painter's order with each piece's tag */
+  tagged(): { part: Part; tag: string }[] { return this.items.sort((a, b) => a.key - b.key || a.n - b.n).map(i => ({ part: i.part, tag: i.tag })); }
 }
 
 export function convexHull(p: [number, number][]): [number, number][] {
