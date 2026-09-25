@@ -28,6 +28,20 @@ export function cropFields(src: Omit<PlanetFields, 'ox' | 'oy' | 'fw' | 'fh'>, c
 import { Ground, Feat, Feature, ChunkData, TerrainRow, TILE, CHUNK, CHUNK_PX, WORLD_TILES_X, LIFT, MAX_LEVEL, LIQUID_FRAMES } from './types';
 import { fbm2, vnoise, rand2, ridge, hash3, mulberry, seedToInt, smoothstep } from './noise';
 import { RockType, ROCK_RAMPS, GROUND_RAMPS, LEAF, RGB, shiftRamp, vegetationHueShift, waterHueShift, hex, mixRGB } from './palettes';
+import { CZ, CityChunkData, isGraded, isRoad, isWallish, keepFeature } from '../city/codes';
+import { cityPixel } from '../city/paint';
+
+// ---------------------------------------------------------------------------
+// Cities painted into the terrain (per worker). A city plan is a set of per-chunk tile codes with the
+// evolution stage at which each tile appears; `p` is the city's current evolution (0..254).
+// ---------------------------------------------------------------------------
+interface CityLayer { era: number; p: number; chunks: Map<string, CityChunkData> }
+const CITIES = new Map<number, CityLayer>();
+export function cityAdd(id: number, era: number, p: number, chunks: Record<string, CityChunkData>) {
+  CITIES.set(id, { era, p, chunks: new Map(Object.entries(chunks)) });
+}
+export function cityLevel(id: number, p: number) { const c = CITIES.get(id); if (c) c.p = p; }
+export function cityRemove(id: number) { CITIES.delete(id); }
 
 type Mode = 'living' | 'arid' | 'airless' | 'glacial' | 'frozen' | 'volcanic' | 'toxic' | 'carbon';
 
@@ -46,6 +60,9 @@ interface TileInfo {
   beach: boolean;
   lv: number;        // terrain level (0 = sea level plain)
   ramp: boolean;     // walkable slope down to a neighbour one level lower
+  cz: number;        // city tile code (CZ), 0 = none
+  ce: number;        // era of that city
+  rd: number;        // city road ramp direction 1=S 2=N 3=E 4=W
 }
 
 const B = 2; // tile border computed around each chunk
@@ -190,7 +207,7 @@ export class TerrainGenerator {
     temp = Math.max(0, Math.min(1, temp));
     moist = Math.max(0, Math.min(1, moist));
 
-    const info: TileInfo = { g: Ground.GRASS, biome: 255, h, depth: 0, temp, moist, fert, ore, forest: 0, rock, wet: 0, beach: false, lv: 0, ramp: false };
+    const info: TileInfo = { g: Ground.GRASS, biome: 255, h, depth: 0, temp, moist, fert, ore, forest: 0, rock, wet: 0, beach: false, lv: 0, ramp: false, cz: 0, ce: 0, rd: 0 };
     if (this.mode !== 'living') { this.barrenGround(info, tx, ty); return info; }
 
     const sea = this.sea;
@@ -415,9 +432,19 @@ export class TerrainGenerator {
       t.lv = this.levelOf(t, tx0 + i, ty0 + j);
       tiles[j * N + i] = t;
     }
+    const city = this.applyCities(tiles, tx0, ty0);
     // Walkable slopes: clustered stretches of a terrace edge become ramps
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
       const t = tiles[j * N + i];
+      if (t.cz && (isGraded(t.cz) || isWallish(t.cz))) {
+        // graded streets carry their own ramps (kept only where the neighbour really is one level down)
+        if (t.rd && !isWallish(t.cz)) {
+          const [dx, dy] = t.rd === 1 ? [0, 1] : t.rd === 2 ? [0, -1] : t.rd === 3 ? [1, 0] : [-1, 0];
+          const ii = i + dx, jj = j + dy;
+          if (ii >= 0 && jj >= 0 && ii < N && jj < N && tiles[jj * N + ii].lv === t.lv - 1) t.ramp = true; else t.rd = 0;
+        } else t.rd = 0;
+        continue;
+      }
       if (t.lv === 0 || isWater(t.g)) continue;
       let cliff = false, dS = false, dN = false, dE = false, dW = false;
       for (const [dx, dy] of NB4) {
@@ -464,10 +491,18 @@ export class TerrainGenerator {
       nearWater[j * N + i] = d;
     }
 
-    const pixels = this.raster(cx, cy, tiles, nearWater);
+    const pixels = this.raster(cx, cy, tiles, nearWater, city);
     const falls: ChunkData['falls'] = [];
     const rows = this.compose(cx, cy, tiles, pixels, falls, this.lastLiquid!);
-    const features = this.place(cx, cy, tiles, nearWater);
+    let features = this.place(cx, cy, tiles, nearWater);
+    if (city) {
+      // the city clears trees, rocks and logs in its way (lumber camps keep their woods)
+      features = features.filter(f => {
+        const i = Math.floor(f.x / TILE) - cx * CHUNK + B, j = Math.floor(f.y / TILE) - cy * CHUNK + B;
+        const t = tiles[Math.max(0, Math.min(N - 1, j)) * N + Math.max(0, Math.min(N - 1, i))];
+        return !t.cz || keepFeature(t.cz, f.t, rand2(f.x, f.y, this.seed + 720));
+      });
+    }
 
     const ground = new Uint8Array(CHUNK * CHUNK), biome = new Uint8Array(CHUNK * CHUNK), rock = new Uint8Array(CHUNK * CHUNK);
     const temp = new Float32Array(CHUNK * CHUNK);
@@ -479,7 +514,7 @@ export class TerrainGenerator {
       level[k] = t.lv; lava[k] = t.g === Ground.LAVA ? 1 : 0;
       if (t.ramp) {
         const n = tiles[(j + B - 1) * N + i + B].lv, so = tiles[(j + B + 1) * N + i + B].lv, e = tiles[(j + B) * N + i + B + 1].lv, w = tiles[(j + B) * N + i + B - 1].lv;
-        ramp[k] = so === t.lv - 1 ? 1 : e === t.lv - 1 ? 3 : w === t.lv - 1 ? 4 : n === t.lv - 1 ? 2 : 0; // 1=S 2=N 3=E 4=W
+        ramp[k] = t.rd || (so === t.lv - 1 ? 1 : e === t.lv - 1 ? 3 : w === t.lv - 1 ? 4 : n === t.lv - 1 ? 2 : 0); // 1=S 2=N 3=E 4=W
       }
     }
     const mini = new Uint8ClampedArray(CHUNK * CHUNK * 4);
@@ -492,11 +527,37 @@ export class TerrainGenerator {
     return { cx, cy, rows, ground, biome, rock, temp, level, ramp, lava, falls, features, mini };
   }
 
+  /** Stamps the visible city tiles onto a chunk window (codes, graded levels, road ramps). */
+  private applyCities(tiles: TileInfo[], tx0: number, ty0: number): boolean {
+    if (!CITIES.size) return false;
+    let any = false;
+    const c0x = Math.floor(tx0 / CHUNK), c0y = Math.floor(ty0 / CHUNK);
+    const c1x = Math.floor((tx0 + N - 1) / CHUNK), c1y = Math.floor((ty0 + N - 1) / CHUNK);
+    for (const L of CITIES.values()) {
+      for (let ccy = c0y; ccy <= c1y; ccy++) for (let ccx = c0x; ccx <= c1x; ccx++) {
+        const d = L.chunks.get(`${ccx},${ccy}`);
+        if (!d) continue;
+        const ax = Math.max(tx0, ccx * CHUNK), bx = Math.min(tx0 + N, (ccx + 1) * CHUNK);
+        const ay = Math.max(ty0, ccy * CHUNK), by = Math.min(ty0 + N, (ccy + 1) * CHUNK);
+        for (let ty = ay; ty < by; ty++) for (let tx = ax; tx < bx; tx++) {
+          const q = (ty - ccy * CHUNK) * CHUNK + tx - ccx * CHUNK;
+          const c = d.code[q];
+          if (!c || d.stage[q] > L.p) continue;
+          const t = tiles[(ty - ty0) * N + tx - tx0];
+          t.cz = c; t.ce = L.era; t.rd = d.rd[q];
+          if (d.lvl[q] !== 255) t.lv = d.lvl[q];
+          any = true;
+        }
+      }
+    }
+    return any;
+  }
+
   // ---------------------------------------------------------------------------
   // Ground rasterizer: organic edges (jittered tile lookup), palette-quantised shading,
   // hillshade, shore foam & wet banks, and baked micro-detail (blades, leaves, pebbles...)
   // ---------------------------------------------------------------------------
-  private raster(cx: number, cy: number, tiles: TileInfo[], nearWater: Uint8Array): Uint8ClampedArray {
+  private raster(cx: number, cy: number, tiles: TileInfo[], nearWater: Uint8Array, city = false): Uint8ClampedArray {
     const out = new Uint8ClampedArray(CHUNK_PX * CHUNK_PX * 4);
     const liq = new Uint8Array(CHUNK_PX * CHUNK_PX); // 1 river, 2 still water, 3 swamp, 4 lava, 5 foam
     this.lastLiquid = liq;
@@ -734,6 +795,23 @@ export class TerrainGenerator {
           const ri = Math.max(0, Math.min(ramp.length - 1, Math.round(idx)));
           col = ramp[ri];
         }
+        if (city) {
+          const tt = tiles[own];
+          let cz = tt.cz;
+          // round the tile corners of streets and walls so diagonal runs read as smooth 45-degree bands
+          const lx = px & 15, ly = py & 15;
+          const qx = lx < 8 ? -1 : 1, qy = ly < 8 ? -1 : 1;
+          if ((qx < 0 ? lx : 15 - lx) + (qy < 0 ? ly : 15 - ly) < 7) {
+            const a = tiles[own + qx].cz, b = tiles[own + qy * N].cz, dg = tiles[own + qx + qy * N].cz;
+            const k0 = strokeOf(cz);
+            if (k0) { if (strokeOf(a) !== k0 && strokeOf(b) !== k0 && strokeOf(dg) !== k0) cz = !strokeOf(a) ? a : !strokeOf(b) ? b : 0; }
+            else if (strokeOf(a) && strokeOf(a) === strokeOf(b) && !isWallish(cz) && cz !== CZ.PLAZA && (!isWater(tt.g) || a === CZ.BRIDGE)) cz = a;
+          }
+          if (cz && (!isWater(tt.g) || cz === CZ.BRIDGE || !(cz < CZ.ROAD))) {
+            col = cityPixel(cz, tt.ce, wx, wy, lx, ly, col, tiles[own - N].cz, tiles[own + 1].cz, tiles[own + N].cz, tiles[own - 1].cz, s);
+            if (cz >= CZ.ROAD) { out[k] = col[0]; out[k + 1] = col[1]; out[k + 2] = col[2]; out[k + 3] = 255; continue; }
+          }
+        }
         out[k] = col[0]; out[k + 1] = col[1]; out[k + 2] = col[2]; out[k + 3] = 255;
         if (g === Ground.LAVA) liq[k >> 2] = 4;
         else if (isWater(g)) liq[k >> 2] = col[0] > 200 && col[2] > 200 ? 5 : g === Ground.RIVER_WATER ? 1 : g === Ground.SWAMP_WATER ? 3 : 2;
@@ -770,10 +848,10 @@ export class TerrainGenerator {
         const top = (maxL - L) * LIFT;
         const wx0 = (cx * CHUNK + i) * TILE;
         if (t.ramp && !isWater(t.g) && t.g !== Ground.LAVA) {
-          const dir = south === L - 1 ? 0 : east === L - 1 ? 2 : west === L - 1 ? 3 : 1;
+          const dir = t.rd ? t.rd - 1 : south === L - 1 ? 0 : east === L - 1 ? 2 : west === L - 1 ? 3 : 1;
           const rampAt = (di: number, dj: number) => { const n = tiles[(jj + dj) * N + i + B + di]; return n.ramp && n.lv === L; };
           const [sa, sb] = dir <= 1 ? [rampAt(-1, 0), rampAt(1, 0)] : [rampAt(0, -1), rampAt(0, 1)];
-          this.paintRamp(buf, H, i, top, t, L, dir, G, j, wx0, rowGroundY, south, sa, sb);
+          this.paintRamp(buf, H, i, top, t, L, dir, G, j, wx0, rowGroundY, south, sa, sb, t.rd > 0);
           continue;
         }
         // --- surface ---
@@ -865,7 +943,7 @@ export class TerrainGenerator {
    * sideA / sideB: whether the neighbours across the stairway (W/E for N-S stairs, N/S for E-W) are stairs too.
    */
   private paintRamp(buf: Uint8ClampedArray, H: number, i: number, top: number, t: TileInfo, L: number, dir: number,
-    G: Uint8ClampedArray, j: number, wx0: number, rowGroundY: number, south: number, sideA: boolean, sideB: boolean) {
+    G: Uint8ClampedArray, j: number, wx0: number, rowGroundY: number, south: number, sideA: boolean, sideB: boolean, smooth = false) {
     const s = this.seed;
     const rk = ROCK_RAMPS[t.rock];
     const gpx = (x: number, y: number): RGB => {
@@ -902,8 +980,11 @@ export class TerrainGenerator {
       const steps = dir === 0 ? 5 : 3;
       const lightAt = (y: number) => { const a = dir === 0 ? y / (Hc - 1) : 1 - y / (TILE - 1); return kTop + (kBot - kTop) * a; };
       // bed: the tile's own ground (earth where the stairs cut through the cliff) with smooth lighting
-      for (let x = 0; x < TILE; x++) for (let y = 0; y < Hc; y++) put(x, top + y, y < TILE ? gpx(x, y) : earth(x, y), y < TILE ? lightAt(y) : lightAt(y) * (0.62 + h(wx0 + x, y, 8) * 0.1));
-      for (let k = 0; k < steps; k++) {
+      if (smooth) {
+        // a graded street: the paving simply runs down the slope
+        for (let x = 0; x < TILE; x++) for (let y = 0; y < Hc; y++) put(x, top + y, gpx(x, Math.floor((y * TILE) / Hc)), lightAt(y) * (dir === 0 ? 1 - (y / Hc) * 0.12 : 1));
+      } else for (let x = 0; x < TILE; x++) for (let y = 0; y < Hc; y++) put(x, top + y, y < TILE ? gpx(x, y) : earth(x, y), y < TILE ? lightAt(y) : lightAt(y) * (0.62 + h(wx0 + x, y, 8) * 0.1));
+      for (let k = 0; k < (smooth ? 0 : steps); k++) {
         const y0 = Math.round((k * Hc) / steps), y1 = Math.round(((k + 1) * Hc) / steps);
         const J = joints(k);
         const lo = inset(k, 0, sideA), hi = TILE - 1 - inset(k, 1, sideB);
@@ -945,7 +1026,7 @@ export class TerrainGenerator {
     }
 
     // --- sideways stairs: the ground really steps down, a rock wall rises behind the lower treads ---
-    const steps = 4, sw = TILE / steps;
+    const steps = smooth ? TILE : 4, sw = TILE / steps;
     const east = dir === 2;
     const stepOf = (x: number) => Math.min(steps - 1, Math.floor(x / sw));
     const drop = (k: number) => Math.round(((east ? k : steps - 1 - k) * LIFT) / (steps - 1));
@@ -966,7 +1047,7 @@ export class TerrainGenerator {
       // front face down to the terrain south of the stairs
       for (let y = TILE + o; y < TILE + fh; y++) put(x, top + y, rk[Math.max(0, Math.round(3 - ((y - TILE - o) / Math.max(1, fh - o)) * 2.4))], y === TILE + fh - 1 ? 0.6 : 0.95);
     }
-    for (let k = 0; k < steps; k++) {
+    for (let k = 0; k < (smooth ? 0 : steps); k++) {
       const o = drop(k), lk = kTop + (kBot - kTop) * (o / LIFT);
       const xa = k * sw, xb = xa + sw - 1;
       const J = joints(k);
@@ -1238,6 +1319,8 @@ export class TerrainGenerator {
 }
 
 const NB4: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+/** Stroke class for corner rounding: 1 streets, 2 walls, 0 anything else. */
+const strokeOf = (z: number) => (isRoad(z) ? 1 : z === CZ.WALL ? 2 : 0);
 
 // flat [dx, dy, weight] triples, strongest first
 const SHORE_PROBES = [

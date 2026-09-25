@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 // Helper worker: generates terrain chunks from a window of planet fields.
 // Several of these run in parallel so chunk streaming uses every CPU core.
-import { TerrainGenerator, PlanetFields } from './terrainGen';
+import { TerrainGenerator, PlanetFields, cityAdd, cityLevel, cityRemove } from './terrainGen';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 let gen: TerrainGenerator | null = null;
@@ -9,6 +9,9 @@ let gen: TerrainGenerator | null = null;
 ctx.onmessage = (ev: MessageEvent) => {
   const m = ev.data;
   try {
+    if (m.kind === 'cityAdd') { cityAdd(m.cityId, m.era, m.p, m.chunks); return; }
+    if (m.kind === 'cityLevel') { cityLevel(m.cityId, m.p); return; }
+    if (m.kind === 'cityRemove') { cityRemove(m.cityId); return; }
     if (m.kind === 'init') { gen = new TerrainGenerator(m.fields as PlanetFields); ctx.postMessage({ kind: 'ready', id: m.id }); return; }
     if (m.kind === 'region' && gen) {
       const px = gen.region(m.tx, m.ty, m.step, m.n);

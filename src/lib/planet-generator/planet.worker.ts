@@ -11,13 +11,16 @@ import { createNoise3D } from 'simplex-noise';
 import { PlanetGenerator, LayerType, PlanetConfig } from './generator';
 import type { WorkerRequest, WorkerResponse, PlanetProbe } from './workerProtocol';
 import { cloudProfileFor } from './visualProfile';
-import { TerrainGenerator, cropFields } from '../terrain/terrainGen';
+import { TerrainGenerator, cropFields, cityAdd, cityLevel, cityRemove } from '../terrain/terrainGen';
+import { planCity } from '../city/plan';
+import type { CityPlan } from '../city/codes';
 
 const fieldsOf = (g: PlanetGenerator) => ({ config: g.config, elevation: g.elevation, temperature: g.temperature, moisture: g.moisture, fertility: g.fertility, ores: g.ores, waterAccumulation: g.waterAccumulation });
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const sessions = new Map<string, PlanetGenerator>();
 const terrains = new Map<string, TerrainGenerator>();
+const cityPlans = new Map<string, Map<number, CityPlan>>();
 function terrainFor(sessionId: string): TerrainGenerator {
   let t = terrains.get(sessionId);
   if (!t) {
@@ -137,9 +140,24 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         post({ kind: 'fields', id: msg.id, fields: f }, [f.elevation.buffer, f.temperature.buffer, f.moisture.buffer, f.fertility.buffer, f.ores.buffer, f.waterAccumulation.buffer]);
         break;
       }
+      case 'city': {
+        const tg = terrainFor(msg.sessionId);
+        let m = cityPlans.get(msg.sessionId);
+        if (!m) { m = new Map(); cityPlans.set(msg.sessionId, m); }
+        const others = [...m.values()].filter(c => c.meta.id !== msg.cityId);
+        const plan = planCity(tg, { id: msg.cityId, tx: msg.tx, ty: msg.ty, era: msg.era, seed: msg.seed, name: msg.name, others });
+        cityRemove(msg.cityId);
+        cityAdd(msg.cityId, plan.meta.era, msg.p, plan.chunks);
+        m.set(msg.cityId, plan);
+        post({ kind: 'city', id: msg.id, plan });
+        break;
+      }
+      case 'cityLevel': cityLevel(msg.cityId, msg.p); break;
+      case 'cityRemove': cityRemove(msg.cityId); cityPlans.get(msg.sessionId)?.delete(msg.cityId); break;
       case 'close': {
         sessions.delete(msg.sessionId);
         terrains.delete(msg.sessionId);
+        cityPlans.delete(msg.sessionId);
         break;
       }
     }

@@ -169,6 +169,31 @@ Owner's rules - keep them:
   catalogue entry. Audit with several seeds, exotic levels and climates, all facings (turret aim too).
 - Menu → "Gerador de Veículos" (`#veiculos`).
 
+## City generator (`src/lib/city/`, spectator mode in `SurvivalView.tsx`)
+Owner's rules - keep them:
+- Spectator mode -> "Gerar cidade": click the terrain (or the world map) to pick the centre; the whole city is planned
+  from there. For now it **only paints the ground** (Cities: Skylines style) - no structures.
+- Streets by era: tribal / medieval / classical dirt, industrial / modern cobbles ("ladrilho"), contemporary / futurist
+  asphalt, space era dark composite panels with glowing seams. Zones: residential green, commercial blue, industrial
+  yellow, administrative light blue (the centre), military red; specialised fields (farm, lumber, mine, quarry,
+  fishing, pasture) purple, military outposts red.
+- **Intelligent expansion**: everything comes from one least-cost field (`plan.ts`, Dijkstra over 3-tile cells):
+  plains are cheap, clearing forest is expensive, one-level slopes need ramps (costly but cheaper than forest), steeper
+  ones are impassable, rivers need bridges, the sea stops it. The city takes the cheapest cells in reach order, so the
+  **evolution slider (0% = only the centre, 100% = metropolis)** only reveals more of the same plan (per-tile stage).
+  Roads are least-cost paths (they bend round woods and climb where it is cheapest) and are graded so neighbouring road
+  tiles differ by at most one level, with ramps; they clear trees/rocks in their way (lumber camps keep theirs).
+- **Walls** ring the old core (administrative + military quarters), not the whole city. They follow river banks and
+  coasts and only turn inland to close the ring; **8 directions only** (octilinear runs - the wall assets have 8
+  facings). Towers at corners and along runs, gates where arteries cross. Ring polylines/towers/gates are kept in
+  `CityMeta` for the future wall assets.
+- World map: city name pills and territories (same cost field). **A city never takes another city's territory**
+  (planning is blocked by existing territories, nothing is painted on a neighbour's land). Clicking a name opens the
+  panel with the evolution slider and the era selector.
+- Cities live only for the session (testing). The plan runs in the planet session worker; chunk overlays
+  (`cityAdd/cityLevel/cityRemove` in `terrainGen.ts`) are broadcast to every terrain worker and painted natively in
+  `chunk()` (`city/paint.ts` colours); the view redraws the chunks a change touches in place.
+
 ## Death animations (`src/lib/creature/death.ts`)
 - Civilised bodies are drawn in named **sections** (`back`, `torso`, `head`, `arm0..`, `leg0..`, `tail`, `misc`;
   held items `item<arm>`, gear `aux:back|belt`) through `Sketch.section`; a death gives each section a rigid placement

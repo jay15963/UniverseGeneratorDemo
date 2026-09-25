@@ -8,6 +8,7 @@ import type { PlanetProbe, WorkerRequest, WorkerResponse } from './workerProtoco
 import type { ChunkData } from '../terrain/types';
 import { CHUNK, WORLD_TILES_X } from '../terrain/types';
 import type { PlanetFields } from '../terrain/terrainGen';
+import type { CityPlan } from '../city/codes';
 
 export type { PlanetProbe };
 
@@ -160,6 +161,12 @@ export interface PlanetSession {
   spawn(x: number, y: number): Promise<{ tx: number; ty: number }>;
   /** Parallel chunk generator (one worker per spare core) around a map point. */
   terrainPool(x: number, y: number): Promise<TerrainPool>;
+  /** Cities planned this session (kept only for the session), with their current evolution p (0..254). */
+  cities: Map<number, { plan: CityPlan; p: number }>;
+  /** Plans a city around a tile (replacing city `cityId` when given) and paints it into every terrain worker. */
+  planCity(tx: number, ty: number, era: number, p: number, cityId?: number, name?: string): Promise<CityPlan>;
+  setCityLevel(cityId: number, p: number): void;
+  removeCity(cityId: number): void;
   config: PlanetConfig;
   dispose(): void;
 }
@@ -195,6 +202,9 @@ export function openPlanetSession(
     waiters.clear();
   };
 
+  const cities = new Map<number, { plan: CityPlan; p: number }>();
+  const pools = new Set<TerrainPool>();
+  let nextCity = 1;
   const ready = call({ kind: 'open', id: nextId++, sessionId, config }).then((msg) => {
     if (msg.kind !== 'opened') throw new Error('unexpected response');
     // eslint-disable-next-line prefer-const
@@ -227,7 +237,36 @@ export function openPlanetSession(
         if (res.kind !== 'fields') throw new Error('unexpected response');
         const pool = new TerrainPool(res.fields, (cx, cy) => session.chunk(cx, cy));
         await pool.ready;
+        for (const [id, c] of cities) pool.broadcast({ kind: 'cityAdd', cityId: id, era: c.plan.meta.era, p: c.p, chunks: c.plan.chunks });
+        pools.add(pool);
+        pool.onDispose = () => pools.delete(pool);
         return pool;
+      },
+      cities,
+      planCity: async (tx, ty, era, p, cityId, name) => {
+        const id = cityId ?? nextCity++;
+        const prev = cities.get(id);
+        const seed = prev?.plan.meta.seed ?? ((Math.random() * 2 ** 31) | 0);
+        const res = await call({ kind: 'city', id: nextId++, sessionId, cityId: id, tx, ty, era, seed, p, name: name ?? prev?.plan.meta.name });
+        if (res.kind !== 'city') throw new Error('unexpected response');
+        cities.set(id, { plan: res.plan, p });
+        for (const pool of pools) {
+          pool.broadcast({ kind: 'cityRemove', cityId: id });
+          pool.broadcast({ kind: 'cityAdd', cityId: id, era: res.plan.meta.era, p, chunks: res.plan.chunks });
+        }
+        return res.plan;
+      },
+      setCityLevel: (id, p) => {
+        const c = cities.get(id);
+        if (!c) return;
+        c.p = p;
+        worker.postMessage({ kind: 'cityLevel', sessionId, cityId: id, p } satisfies WorkerRequest);
+        for (const pool of pools) pool.broadcast({ kind: 'cityLevel', cityId: id, p });
+      },
+      removeCity: (id) => {
+        cities.delete(id);
+        worker.postMessage({ kind: 'cityRemove', sessionId, cityId: id } satisfies WorkerRequest);
+        for (const pool of pools) pool.broadcast({ kind: 'cityRemove', cityId: id });
       },
       config,
       dispose,
@@ -255,6 +294,7 @@ export class TerrainPool {
   private fallback: (cx: number, cy: number) => Promise<ChunkData>;
   /** Rolling average generation time per chunk (ms), for the perf overlay. */
   avgMs = 0;
+  onDispose: (() => void) | null = null;
 
   constructor(fields: PlanetFields, fallback: (cx: number, cy: number) => Promise<ChunkData>) {
     this.fields = fields;
@@ -337,7 +377,12 @@ export class TerrainPool {
     return new Promise((resolve, reject) => { this.queue.push({ cx, cy, resolve, reject }); this.pump(); });
   }
 
+  /** Fire-and-forget message to every worker (city overlays). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  broadcast(msg: any) { for (const s of this.workers) s.w.postMessage(msg); }
+
   dispose() {
+    this.onDispose?.();
     this.workers.forEach(s => s.w.terminate());
     this.workers = [];
     // settle everything in flight so callers can clean up their bookkeeping
