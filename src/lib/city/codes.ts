@@ -44,6 +44,8 @@ export interface CityMeta {
   gates: [number, number][];
   /** the city's building culture: every structure uses the same architectural language */
   culture: Culture;
+  /** seed of the species that lives there (a planet's intelligent species is shared by all its cities) */
+  species?: string;
 }
 
 /** One structure placed by the planner (drawn by the view from the structure generator). */

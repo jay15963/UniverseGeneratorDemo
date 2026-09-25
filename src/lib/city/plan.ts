@@ -77,6 +77,7 @@ export interface PlanInput {
   era: number;
   seed: number;
   name?: string;
+  species?: string;
   /** Existing cities: their territory can never be taken. */
   others: { meta: CityMeta; territory: Uint8Array }[];
 }
@@ -788,7 +789,7 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
     id: inp.id, name: inp.name ?? cityName(seed, water, lv[c0]), era, seed,
     tx: cx, ty: cy, gs: GS, c: C, ox, oy,
     bbox: { tx0: bx0, ty0: by0, tx1: bx1, ty1: by1 },
-    walls, towers, gates, culture,
+    walls, towers, gates, culture, species: inp.species,
   };
   return { meta, territory, chunks, buildings };
 

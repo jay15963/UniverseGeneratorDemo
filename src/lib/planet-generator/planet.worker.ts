@@ -153,7 +153,7 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         let m = cityPlans.get(msg.sessionId);
         if (!m) { m = new Map(); cityPlans.set(msg.sessionId, m); }
         const others = [...m.values()].filter(c => c.meta.id !== msg.cityId);
-        const plan = planCity(tg, { id: msg.cityId, tx: msg.tx, ty: msg.ty, era: msg.era, seed: msg.seed, name: msg.name, others });
+        const plan = planCity(tg, { id: msg.cityId, tx: msg.tx, ty: msg.ty, era: msg.era, seed: msg.seed, name: msg.name, species: msg.species, others });
         cityRemove(msg.cityId);
         cityAdd(msg.cityId, plan.meta.era, msg.p, plan.chunks);
         m.set(msg.cityId, plan);

@@ -1,3 +1,5 @@
+import { LIFE_NAMES } from './life';
+import { ERA_NAMES } from '../city/codes';
 // Deterministic "scanner" data for celestial bodies, plus display names/descriptions.
 // Derived only from the body's seed/config so it is identical for every player.
 import seedrandom from 'seedrandom';
@@ -154,8 +156,11 @@ export function bodyStats(body: CelestialBody): BodyStat[] {
   const hours = period > 1e8 ? null : (period / 1200) * 24;
   stats.push({ label: 'Duração do dia', value: hours === null ? 'Travado (síncrono)' : `${hours.toFixed(1)} h` });
 
-  const bio = body.isHabitable ? 'Complexa' : t === PlanetType.SWAMP_WORLD || t === PlanetType.OCEAN_WORLD ? (rng() < 0.6 ? 'Microbiana' : 'Nenhuma detectada') : t === PlanetType.FROZEN_OCEAN ? (rng() < 0.3 ? 'Possível (subsuperfície)' : 'Nenhuma detectada') : 'Ausente';
-  stats.push({ label: 'Biosfera', value: bio, color: bio === 'Complexa' ? '#4ade80' : bio === 'Ausente' ? undefined : '#a3e635' });
+  const life = pc.life;
+  const bio = life
+    ? life.level === 'intelligent' ? `Inteligente · era ${ERA_NAMES[life.era ?? 0]}` : life.level === 'none' ? 'Ausente' : LIFE_NAMES[life.level]
+    : body.isHabitable ? 'Complexa' : 'Ausente';
+  stats.push({ label: 'Biosfera', value: bio, color: life?.level === 'intelligent' ? '#fbbf24' : life?.level === 'animal' || bio === 'Complexa' ? '#4ade80' : bio === 'Ausente' ? undefined : '#a3e635' });
 
   // Earth Similarity Index (simplified): gravity, temperature, pressure distance from Earth
   const pMid = pr ? lerp(pr[0], pr[1], 0.5) : 0;

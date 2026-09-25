@@ -256,3 +256,16 @@ Four levels (owner's request; `lodOf`):
 - **Clouds are procedural** (`Survival/clouds.ts`): a world-space field of cells, each cloud with its own baked shape
   (blobs + noise, lit pixel-art tones, darker in rain/storms) and a matching ground shadow; coverage follows the
   weather, it drifts with the wind; a coarser layer of bigger clouds takes over when zoomed out.
+
+## Life & intelligent worlds (play mode)
+- Every body of a generated system carries `planetConfig.life` (`solar-system/life.ts`, its own hash so the system RNG
+  is untouched): none / microbial / plants / animal / intelligent (+ `era` 0-7, any era, older systems lean advanced).
+  Habitable / Earth-like / alien-life worlds roll the full range; ocean, swamp and frozen-ocean worlds can hold microbes.
+  Fauna only spawns on animal / intelligent worlds.
+- **Intelligent worlds are civilised on landing** (`SurvivalView`, not in cinematic/demo): cities are generated over
+  the planet (`citySites` clusters, `4 + era*2` cities, the world's era). **One species per planet** (genome seed
+  `<planet seed>:natives`, stored as `CityMeta.species`), while every city keeps its own culture/architecture.
+- **Life scanner** (play-mode HUD "Scanner", `Game/LifeScanner.tsx` + `solar-system/scan.worker.ts`): a worker pool
+  expands galaxies nearest first from the current one and lists worlds with life; filter Inteligente / Animal + /
+  Vegetal + / Qualquer vida. Clicking a world jumps to its system (`jumpToSystem`) and focuses the planet.
+  No real/known bodies (Earth, Milky Way) - the owner asked for procedural worlds only.

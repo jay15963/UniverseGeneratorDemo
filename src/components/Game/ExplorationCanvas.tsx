@@ -3,10 +3,11 @@ import { useGameEngine } from '../../stores/useGameEngine';
 import { UniverseViewer } from '../Universe/UniverseViewer';
 import { GalaxyViewer } from '../Galaxy/GalaxyViewer';
 import { SolarSystemViewer } from '../SolarSystem/SolarSystemViewer';
-import { GalaxyGenerator } from '../../lib/galaxy/generator';
+import { GalaxyGenerator, galaxyConfigFor } from '../../lib/galaxy/generator';
 import { SolarSystemGenerator } from '../../lib/solar-system/generator';
 import { GalaxyConfig, GalaxyLayer } from '../../lib/galaxy/types';
-import { ChevronLeft, Home, Map } from 'lucide-react';
+import { ChevronLeft, Home, Map, Radar } from 'lucide-react';
+import { LifeScanner } from './LifeScanner';
 
 interface ExplorationCanvasProps {
   onBackToMenu: () => void;
@@ -30,6 +31,7 @@ export function ExplorationCanvas({ onBackToMenu }: ExplorationCanvasProps) {
   const systemBodies = useGameEngine(s => s.systemBodies);
   const systemConfig = useGameEngine(s => s.systemConfig);
   const setSystemScene = useGameEngine(s => s.setSystemScene);
+  const focusBodyId = useGameEngine(s => s.focusBodyId);
 
   const enterGalaxy = useGameEngine(s => s.enterGalaxy);
   const enterSystem = useGameEngine(s => s.enterSystem);
@@ -37,6 +39,7 @@ export function ExplorationCanvas({ onBackToMenu }: ExplorationCanvasProps) {
   const resetGame = useGameEngine(s => s.resetGame);
 
   const [galaxyLayer, setGalaxyLayer] = useState<GalaxyLayer>(GalaxyLayer.SYSTEM);
+  const [scanOpen, setScanOpen] = useState(false);
 
   // =============================================
   // Auto-generate Galaxy data when entering a galaxy
@@ -47,14 +50,7 @@ export function ExplorationCanvas({ onBackToMenu }: ExplorationCanvasProps) {
     // If we already have stars for this galaxy, skip
     if (galaxyStars.length > 0 && galaxyConfig?.seed === activeGalaxyMeta.galaxySeed) return;
 
-    const config: GalaxyConfig = {
-      seed: activeGalaxyMeta.galaxySeed,
-      shape: activeGalaxyMeta.shape,
-      age: activeGalaxyMeta.age,
-      numStars: Math.min(activeGalaxyMeta.starCount, 5000), // Performance cap
-      anomalyFactor: 0.5,
-      radius: 400,
-    };
+    const config: GalaxyConfig = galaxyConfigFor(activeGalaxyMeta);
 
     const generator = new GalaxyGenerator(config);
     const stars = generator.generate();
@@ -171,6 +167,16 @@ export function ExplorationCanvas({ onBackToMenu }: ExplorationCanvasProps) {
           </div>
         </div>
 
+        {/* Life scanner */}
+        <button
+          onClick={() => setScanOpen(o => !o)}
+          className={`pointer-events-auto ml-2 flex items-center justify-center sm:gap-1.5 transition-colors backdrop-blur-sm p-2 sm:px-3 sm:py-1.5 rounded-lg border text-xs sm:text-sm shrink-0 ${scanOpen ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300' : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:border-white/20'}`}
+          title="Scanner de vida"
+        >
+          <Radar className="w-4 h-4" />
+          <span className="hidden sm:inline">Scanner</span>
+        </button>
+
         {/* Level indicator */}
         <div className="pointer-events-none ml-2 shrink-0">
           <span className="text-[8px] sm:text-[10px] font-bold tracking-[0.15em] sm:tracking-[0.25em] text-fuchsia-400/90 bg-fuchsia-500/15 px-2 sm:px-3 py-1 rounded-full border border-fuchsia-500/30 backdrop-blur-sm uppercase">
@@ -178,6 +184,8 @@ export function ExplorationCanvas({ onBackToMenu }: ExplorationCanvasProps) {
           </span>
         </div>
       </div>
+
+      {scanOpen && <LifeScanner onClose={() => setScanOpen(false)} />}
 
       {/* ===== SCENE CONTENT ===== */}
       <div className={`flex-1 transition-opacity duration-300 ${isTransitioning ? 'opacity-0' : 'opacity-100'}`}>
@@ -220,6 +228,7 @@ export function ExplorationCanvas({ onBackToMenu }: ExplorationCanvasProps) {
               bodies={systemBodies}
               showZones={false}
               systemAge={systemConfig.systemAge}
+              focus={focusBodyId}
             />
           </div>
         )}

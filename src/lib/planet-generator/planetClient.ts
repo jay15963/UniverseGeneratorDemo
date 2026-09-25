@@ -168,7 +168,7 @@ export interface PlanetSession {
   /** Cities planned this session (kept only for the session), with their current evolution p (0..254). */
   cities: Map<number, { plan: CityPlan; p: number }>;
   /** Plans a city around a tile (replacing city `cityId` when given) and paints it into every terrain worker. */
-  planCity(tx: number, ty: number, era: number, p: number, cityId?: number, name?: string): Promise<CityPlan>;
+  planCity(tx: number, ty: number, era: number, p: number, cityId?: number, name?: string, species?: string): Promise<CityPlan>;
   setCityLevel(cityId: number, p: number): void;
   /** where the cities of the whole planet should go (clusters, habitability) */
   citySites(count: number, seed: number): Promise<CitySite[]>;
@@ -266,11 +266,11 @@ export function openPlanetSession(
       },
       cities,
       links,
-      planCity: async (tx, ty, era, p, cityId, name) => {
+      planCity: async (tx, ty, era, p, cityId, name, species) => {
         const id = cityId ?? nextCity++;
         const prev = cities.get(id);
         const seed = prev?.plan.meta.seed ?? ((Math.random() * 2 ** 31) | 0);
-        const res = await call({ kind: 'city', id: nextId++, sessionId, cityId: id, tx, ty, era, seed, p, name: name ?? prev?.plan.meta.name });
+        const res = await call({ kind: 'city', id: nextId++, sessionId, cityId: id, tx, ty, era, seed, p, name: name ?? prev?.plan.meta.name, species: species ?? prev?.plan.meta.species });
         if (res.kind !== 'city') throw new Error('unexpected response');
         cities.set(id, { plan: res.plan, p });
         dropLinks(id);

@@ -93,7 +93,14 @@ export interface PlanetConfig {
   // Ash World
   ashDepth: number;
   emberActivity: number;
+  /** what lives there (set by the system generator; absent = decided by the planet type alone) */
+  life?: LifeInfo;
 }
+
+/** none < microbial < plants (vegetation only, no animals) < animal < intelligent (a civilisation in `era` 0..7) */
+export type LifeLevel = 'none' | 'microbial' | 'plants' | 'animal' | 'intelligent';
+export interface LifeInfo { level: LifeLevel; era?: number }
+export const LIFE_ORDER: LifeLevel[] = ['none', 'microbial', 'plants', 'animal', 'intelligent'];
 
 export enum LayerType {
   ELEVATION = 'elevation',

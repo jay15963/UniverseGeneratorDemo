@@ -35,6 +35,8 @@ export const hasFauna = (t: PlanetType) => t === PlanetType.EARTH_LIKE || t === 
 
 export function planetFauna(cfg: PlanetConfig, count = 220): Species[] {
   if (!hasFauna(cfg.planetType)) return [];
+  // only plants (or microbes): no animals at all
+  if (cfg.life && cfg.life.level !== 'animal' && cfg.life.level !== 'intelligent') return [];
   const rnd = mulberry(seedToInt(cfg.seed + ':fauna'));
   const alien = cfg.planetType === PlanetType.ALIEN_LIFE;
   const ocean = cfg.planetType === PlanetType.OCEAN_WORLD, swamp = cfg.planetType === PlanetType.SWAMP_WORLD;
