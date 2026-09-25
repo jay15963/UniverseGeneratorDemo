@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Backpack, Map as MapIcon, Hand, ZoomIn, ZoomOut, Building2, Crosshair, Trash2, LocateFixed, Sun, Footprints } from 'lucide-react';
+import { X, Backpack, Map as MapIcon, Hand, ZoomIn, ZoomOut, Building2, Crosshair, Trash2, LocateFixed, Sun, Footprints, Globe } from 'lucide-react';
 import type { PlanetSession, TerrainPool } from '../../lib/planet-generator/planetClient';
 import { PlanetType, BiomeType } from '../../lib/planet-generator/generator';
 import { ChunkData, Feature, Feat, CHUNK, CHUNK_PX, TILE, GROUND_INFO, Ground, solidRadius, WORLD_TILES_X, LIFT, MAX_LEVEL, TREES, LIQUID_FRAMES } from '../../lib/terrain/types';
@@ -207,6 +207,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const zonesHiddenRef = useRef(false);
   zonesHiddenRef.current = hideZones;
   const [cityPick, setCityPick] = useState(false);
+  // whole-planet generation
+  const [worldOpen, setWorldOpen] = useState(false);
+  const [worldCount, setWorldCount] = useState(12);
+  const [worldProg, setWorldProg] = useState<{ done: number; total: number; name: string } | null>(null);
+  const worldCancel = useRef(false);
   const cityPickRef = useRef(false);
   cityPickRef.current = cityPick;
   const [cityBusy, setCityBusy] = useState<string | null>(null);
@@ -342,7 +347,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     const pool = poolRef.current;
     // stream what the view covers (zoomed out, that is many more chunks), at least the usual 7 x 7 around the player
     const view = Math.max(window.innerWidth, window.innerHeight) / 2 / Math.max(MIN_LOCAL_ZOOM, g.zoomView);
-    const R = Math.min(9, Math.max(pool ? 3 : 2, Math.ceil(view / CHUNK_PX) + 1));
+    // zoomed out past the gameplay levels only the ground around the player is kept (the workers draw regional blocks)
+    const R = !chunked(lodOf(g.zoomView)) ? 2 : Math.min(9, Math.max(pool ? 3 : 2, Math.ceil(view / CHUNK_PX) + 1));
     for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) want.push([pcx + dx, pcy + dy, dx * dx + dy * dy]);
     // a scripted camera also streams in the place of its next cut
     const pre = preloadRef.current;
@@ -383,7 +389,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           const far = [...g.chunks.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, g.chunks.size - cap);
           for (const [k, c] of far) { g.chunks.delete(k); g.staleGen.delete(k); fauna.removeChunk(k); if (c.tex) glRef.current?.deleteTexture(c.tex); }
         }
-        requestChunks();
+        // keep streaming only while the view is drawn from chunks (zoomed out, the regional blocks need the workers)
+        if (!freeRef.current || chunked(lodOf(G.current.zoomView))) requestChunks();
       }).catch(() => g.pending.delete(key));
     }
   };
@@ -620,6 +627,36 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       flash(e instanceof Error ? e.message : String(e));
     } finally {
       setCityBusy(null);
+    }
+  };
+  /** cities for the whole planet: clusters picked in the worker, then planned one by one (capitals first) */
+  const generateWorld = async () => {
+    worldCancel.current = false;
+    setWorldProg({ done: 0, total: worldCount, name: 'Escolhendo os locais…' });
+    try {
+      const sites = await session.citySites(worldCount, (Math.random() * 2 ** 31) | 0);
+      let made = 0;
+      for (let i = 0; i < sites.length && !worldCancel.current; i++) {
+        const s = sites[i];
+        setWorldProg({ done: i, total: sites.length, name: s.capital ? 'Capital…' : 'Cidade…' });
+        try {
+          const plan = await session.planCity(s.tx, s.ty, cityEra, toP(s.evo));
+          if (!aliveRef.current) return;
+          made++;
+          markStale(plan.meta.bbox);
+          setWorldProg({ done: i + 1, total: sites.length, name: plan.meta.name });
+          refreshCities();
+        } catch { /* the spot was taken by a neighbour's territory: skip it */ }
+      }
+      // roads between them cross chunks outside the cities
+      const g = G.current;
+      for (const l of session.links.values()) if (l.chunks) for (const key of Object.keys(l.chunks)) if (g.chunks.has(key)) g.staleGen.set(key, g.cityGen);
+      flash(`${made} cidades geradas`);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : String(e));
+    } finally {
+      setWorldProg(null);
+      setWorldOpen(false);
     }
   };
   const selectCity = (id: number) => {
@@ -1164,7 +1201,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     };
     const drawCityLabels = (toScreen: (x: number, y: number) => [number, number], dpr: number, S: number, world: boolean, DW: number, outline = false) => {
       const hits: { id: number; x: number; y: number; w: number; h: number }[] = [];
-      for (const [id, c] of session.cities) {
+      // bigger cities first; a name pill that would cover another one is left out (zoom in to see it)
+      const order = [...session.cities].sort((a, b) => b[1].p - a[1].p);
+      const pills: [number, number, number, number][] = [];
+      for (const [id, c] of order) {
         const m = c.plan.meta;
         for (let k = world ? -1 : 0; k <= (world ? 1 : 0); k++) {
           if (world) {
@@ -1187,6 +1227,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           const w2 = octx.measureText(sub).width;
           const w = Math.max(w1, w2) + 16 * dpr, h = 32 * dpr;
           const x = cx - w / 2, y = cy - h - 10 * dpr;
+          if (pills.some(([px, py, pw, ph]) => x < px + pw && x + w > px && y < py + ph && y + h > py)) continue;
+          pills.push([x, y, w, h]);
           octx.fillStyle = 'rgba(8,10,16,0.78)';
           octx.strokeStyle = `rgb(${r},${g},${b})`; octx.lineWidth = 1.5 * dpr;
           octx.beginPath(); octx.roundRect(x, y, w, h, 7 * dpr); octx.fill(); octx.stroke();
@@ -1820,10 +1862,43 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         return (
           <div className="absolute left-3 top-[122px] flex flex-col gap-2 w-[270px] max-w-[calc(100vw-24px)]">
             {!cityPick && !sel && (
-              <button onClick={() => { setCityPick(true); setSelCity(null); }} disabled={!!cityBusy}
-                className="self-start flex items-center gap-2 bg-black/65 backdrop-blur-md border border-sky-300/30 rounded-xl px-3 py-2 text-sky-100 text-sm font-semibold hover:bg-sky-900/40 disabled:opacity-50">
-                <Building2 className="w-4 h-4" /> Gerar cidade
-              </button>
+              <div className="flex gap-2">
+                <button onClick={() => { setCityPick(true); setSelCity(null); setWorldOpen(false); }} disabled={!!cityBusy || !!worldProg}
+                  className="flex items-center gap-2 bg-black/65 backdrop-blur-md border border-sky-300/30 rounded-xl px-3 py-2 text-sky-100 text-sm font-semibold hover:bg-sky-900/40 disabled:opacity-50">
+                  <Building2 className="w-4 h-4" /> Gerar cidade
+                </button>
+                <button onClick={() => setWorldOpen(o => !o)} disabled={!!cityBusy || !!worldProg} title="Gerar cidades no planeta inteiro"
+                  className="flex items-center gap-2 bg-black/65 backdrop-blur-md border border-emerald-300/30 rounded-xl px-3 py-2 text-emerald-100 text-sm font-semibold hover:bg-emerald-900/40 disabled:opacity-50">
+                  <Globe className="w-4 h-4" /> Planeta
+                </button>
+              </div>
+            )}
+            {!cityPick && !sel && (worldOpen || worldProg) && (
+              <div className="bg-black/75 backdrop-blur-md border border-white/15 rounded-xl p-3 text-white text-sm space-y-2.5">
+                <div className="text-[10px] font-mono tracking-[0.2em] text-emerald-300/80 uppercase">Cidades no planeta</div>
+                {!worldProg ? (
+                  <>
+                    <label className="block text-xs text-neutral-300">
+                      <div className="flex justify-between"><span>Número de cidades</span><span className="font-mono text-white">{worldCount}</span></div>
+                      <input type="range" min={3} max={40} value={worldCount} onChange={e => setWorldCount(+e.target.value)} className="w-full accent-emerald-400" />
+                    </label>
+                    <label className="block text-xs text-neutral-300">
+                      Era
+                      <select value={cityEra} onChange={e => setCityEra(+e.target.value)} className="mt-1 w-full bg-neutral-900 border border-white/15 rounded-lg px-2 py-1 text-white text-sm">
+                        {ERA_NAMES.map((n, i) => <option key={i} value={i}>{n}</option>)}
+                      </select>
+                    </label>
+                    <div className="text-[11px] text-neutral-400">Aglomerados em volta de capitais, em terras férteis perto de água; climas extremos quase sem cidades.</div>
+                    <button onClick={generateWorld} className="w-full bg-emerald-500/20 border border-emerald-300/30 text-emerald-100 rounded-lg py-1.5 text-xs font-semibold hover:bg-emerald-500/30">Gerar</button>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between text-xs text-neutral-300"><span className="truncate">{worldProg.name}</span><span className="font-mono">{worldProg.done}/{worldProg.total}</span></div>
+                    <div className="h-2 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-emerald-400 transition-all" style={{ width: `${(worldProg.done / Math.max(1, worldProg.total)) * 100}%` }} /></div>
+                    <button onClick={() => { worldCancel.current = true; }} className="w-full bg-red-500/10 border border-red-300/20 text-red-200 rounded-lg py-1 text-xs hover:bg-red-500/20">Parar</button>
+                  </>
+                )}
+              </div>
             )}
             {(cityPick || sel) && (
               <div className="bg-black/75 backdrop-blur-md border border-white/15 rounded-xl p-3 text-white text-sm space-y-2.5">

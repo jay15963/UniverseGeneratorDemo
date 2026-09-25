@@ -14,6 +14,7 @@ import { cloudProfileFor } from './visualProfile';
 import { TerrainGenerator, cropFields, cityAdd, cityLevel, cityRemove, cityZones } from '../terrain/terrainGen';
 import { planCity } from '../city/plan';
 import { planLinks, CityLink } from '../city/links';
+import { pickSites } from '../city/sites';
 import type { CityPlan } from '../city/codes';
 
 const fieldsOf = (g: PlanetGenerator) => ({ config: g.config, elevation: g.elevation, temperature: g.temperature, moisture: g.moisture, fertility: g.fertility, ores: g.ores, waterAccumulation: g.waterAccumulation });
@@ -163,6 +164,14 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         const links = planLinks(tg, plan, others);
         for (const l of links) { L.set(l.id, l); if (l.chunks) cityAdd(l.id, plan.meta.era, 254, l.chunks); }
         post({ kind: 'city', id: msg.id, plan, links });
+        break;
+      }
+      case 'citySites': {
+        const gen = sessions.get(msg.sessionId);
+        if (!gen) throw new Error('Unknown session ' + msg.sessionId);
+        const c = gen.config;
+        const sites = pickSites({ width: c.width, height: c.height, seaLevel: c.seaLevel, elevation: gen.elevation, temperature: gen.temperature, moisture: gen.moisture, fertility: gen.fertility, waterAccumulation: gen.waterAccumulation }, terrainFor(msg.sessionId), msg.count, msg.seed);
+        post({ kind: 'citySites', id: msg.id, sites });
         break;
       }
       case 'region': {

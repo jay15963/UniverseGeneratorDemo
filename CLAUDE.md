@@ -220,6 +220,12 @@ Owner's rules - keep them:
 - **Wall rings** are drawn with `structure/wallseg.ts`: the simplest wall asset, one straight segment from a tile to
   the next in any of the 8 directions (terrain projection, so segments join end to end; palisade / stone / brick /
   concrete / steel / energy by era); watchtowers stand on the ring's towers; gates stay open.
+- **Bridges are short** (`MAX_BRIDGE`, ~5-6 tiles of water in a row): city growth, streets and the roads between
+  cities cross rivers, never a sea (owner's request after a road bridged a whole sea).
+- **Whole planet** (spectator "Planeta" button): a number-of-cities slider, the era, a progress bar and "Parar".
+  `city/sites.ts` scores every land pixel (mild temperature, moisture, fertility, fresh water or coast, low ground;
+  extreme climates are rare homes), draws a few cluster centres far apart, puts a capital on each and towns around it
+  (smaller evolution further out); the view plans them one by one, capitals first.
 - Cities live only for the session (testing). The plan runs in the planet session worker; chunk overlays
   (`cityAdd/cityLevel/cityRemove` in `terrainGen.ts`) are broadcast to every terrain worker and painted natively in
   `chunk()` (`city/paint.ts` colours); the view redraws the chunks a change touches in place.
@@ -244,7 +250,8 @@ Four levels (owner's request; `lodOf`):
 - **regional** (1/8 .. 1/128): sampled terrain blocks (`TerrainGenerator.region` - terrain pool inside its window,
   the session worker elsewhere; cities painted in: streets, walls,
   zone tints unless hidden) - no terrain detail, creatures, bushes or rocks; more clouds; city territories outlined
-  with their name pills. Loaded chunks fill in (bare ground) while blocks stream.
+  with their name pills. Loaded chunks fill in (bare ground) while blocks stream. Zoomed out past the gameplay levels
+  chunk streaming stops (only 2 chunks around the player), otherwise the chunk queue starves the regional blocks.
 - **world**: the planet map.
 - **Clouds are procedural** (`Survival/clouds.ts`): a world-space field of cells, each cloud with its own baked shape
   (blobs + noise, lit pixel-art tones, darker in rain/storms) and a matching ground shadow; coverage follows the
