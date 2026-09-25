@@ -2,6 +2,7 @@ import type { LayerType, PlanetConfig } from './generator';
 import type { ChunkData } from '../terrain/types';
 import type { PlanetFields } from '../terrain/terrainGen';
 import type { CityPlan } from '../city/codes';
+import type { CityLink } from '../city/links';
 
 export interface PlanetProbe {
   elevation: number;
@@ -42,5 +43,5 @@ export type WorkerResponse =
   | { kind: 'chunk'; id: number; chunk: ChunkData }
   | { kind: 'spawn'; id: number; tx: number; ty: number }
   | { kind: 'fields'; id: number; fields: PlanetFields }
-  | { kind: 'city'; id: number; plan: CityPlan }
+  | { kind: 'city'; id: number; plan: CityPlan; links: CityLink[] }
   | { kind: 'error'; id: number; message: string };

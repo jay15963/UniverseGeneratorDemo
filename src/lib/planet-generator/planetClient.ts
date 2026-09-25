@@ -9,6 +9,7 @@ import type { ChunkData } from '../terrain/types';
 import { CHUNK, WORLD_TILES_X } from '../terrain/types';
 import type { PlanetFields } from '../terrain/terrainGen';
 import type { CityPlan } from '../city/codes';
+import type { CityLink } from '../city/links';
 
 export type { PlanetProbe };
 
@@ -166,6 +167,8 @@ export interface PlanetSession {
   /** Plans a city around a tile (replacing city `cityId` when given) and paints it into every terrain worker. */
   planCity(tx: number, ty: number, era: number, p: number, cityId?: number, name?: string): Promise<CityPlan>;
   setCityLevel(cityId: number, p: number): void;
+  /** main roads and sea lanes between nearby cities */
+  links: Map<number, CityLink>;
   removeCity(cityId: number): void;
   /** show / hide the district colours of every city */
   setCityZones(on: boolean): void;
@@ -206,6 +209,10 @@ export function openPlanetSession(
 
   const cities = new Map<number, { plan: CityPlan; p: number }>();
   const pools = new Set<TerrainPool>();
+  const links = new Map<number, CityLink>();
+  const dropLinks = (id: number) => {
+    for (const [lid, l] of links) if (l.a === id || l.b === id) { links.delete(lid); for (const pool of pools) pool.broadcast({ kind: 'cityRemove', cityId: lid }); }
+  };
   let nextCity = 1;
   let zonesOn = true;
   const ready = call({ kind: 'open', id: nextId++, sessionId, config }).then((msg) => {
@@ -242,11 +249,13 @@ export function openPlanetSession(
         await pool.ready;
         pool.broadcast({ kind: 'cityZones', on: zonesOn });
         for (const [id, c] of cities) pool.broadcast({ kind: 'cityAdd', cityId: id, era: c.plan.meta.era, p: c.p, chunks: c.plan.chunks });
+        for (const l of links.values()) if (l.chunks) pool.broadcast({ kind: 'cityAdd', cityId: l.id, era: cities.get(l.a)?.plan.meta.era ?? 0, p: 254, chunks: l.chunks });
         pools.add(pool);
         pool.onDispose = () => pools.delete(pool);
         return pool;
       },
       cities,
+      links,
       planCity: async (tx, ty, era, p, cityId, name) => {
         const id = cityId ?? nextCity++;
         const prev = cities.get(id);
@@ -254,6 +263,11 @@ export function openPlanetSession(
         const res = await call({ kind: 'city', id: nextId++, sessionId, cityId: id, tx, ty, era, seed, p, name: name ?? prev?.plan.meta.name });
         if (res.kind !== 'city') throw new Error('unexpected response');
         cities.set(id, { plan: res.plan, p });
+        dropLinks(id);
+        for (const l of res.links) {
+          links.set(l.id, l);
+          if (l.chunks) for (const pool of pools) pool.broadcast({ kind: 'cityAdd', cityId: l.id, era: res.plan.meta.era, p: 254, chunks: l.chunks });
+        }
         for (const pool of pools) {
           pool.broadcast({ kind: 'cityRemove', cityId: id });
           pool.broadcast({ kind: 'cityAdd', cityId: id, era: res.plan.meta.era, p, chunks: res.plan.chunks });
@@ -274,6 +288,7 @@ export function openPlanetSession(
       },
       removeCity: (id) => {
         cities.delete(id);
+        dropLinks(id);
         worker.postMessage({ kind: 'cityRemove', sessionId, cityId: id } satisfies WorkerRequest);
         for (const pool of pools) pool.broadcast({ kind: 'cityRemove', cityId: id });
       },
