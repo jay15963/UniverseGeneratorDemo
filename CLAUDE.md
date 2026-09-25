@@ -200,6 +200,11 @@ Owner's rules - keep them:
 - World map: city name pills and territories (same cost field). **A city never takes another city's territory**
   (planning is blocked by existing territories, nothing is painted on a neighbour's land). Clicking a name opens the
   panel with the evolution slider and the era selector.
+- **Population (visual only)**: citizens of the species that built the city (genome from the culture seed/params, like
+  the structure generator's builders; clothes of the city's era, several citizen indices) stroll along the visible
+  street tiles (`Survival/citizens.ts`, `CITIZEN_K` 0.32) - no AI, just walking, turning at crossings and pausing.
+- The city panel has "Ocultar cores dos distritos e zonas" (streets and walls stay painted; `cityZones` in the terrain
+  workers). Spectator mode has a sun button that holds the clock at day.
 - Cities live only for the session (testing). The plan runs in the planet session worker; chunk overlays
   (`cityAdd/cityLevel/cityRemove` in `terrainGen.ts`) are broadcast to every terrain worker and painted natively in
   `chunk()` (`city/paint.ts` colours); the view redraws the chunks a change touches in place.

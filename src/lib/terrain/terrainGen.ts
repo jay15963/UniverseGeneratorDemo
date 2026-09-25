@@ -28,7 +28,7 @@ export function cropFields(src: Omit<PlanetFields, 'ox' | 'oy' | 'fw' | 'fh'>, c
 import { Ground, Feat, Feature, ChunkData, TerrainRow, TILE, CHUNK, CHUNK_PX, WORLD_TILES_X, LIFT, MAX_LEVEL, LIQUID_FRAMES } from './types';
 import { fbm2, vnoise, rand2, ridge, hash3, mulberry, seedToInt, smoothstep } from './noise';
 import { RockType, ROCK_RAMPS, GROUND_RAMPS, LEAF, RGB, shiftRamp, vegetationHueShift, waterHueShift, hex, mixRGB } from './palettes';
-import { CZ, CityChunkData, isGraded, isRoad, isWallish, keepFeature } from '../city/codes';
+import { CZ, CityChunkData, isGraded, isRoad, isWallish, isZone, keepFeature } from '../city/codes';
 import { cityPixel } from '../city/paint';
 
 // ---------------------------------------------------------------------------
@@ -42,6 +42,9 @@ export function cityAdd(id: number, era: number, p: number, chunks: Record<strin
 }
 export function cityLevel(id: number, p: number) { const c = CITIES.get(id); if (c) c.p = p; }
 export function cityRemove(id: number) { CITIES.delete(id); }
+/** show the district / field colours (off: only streets and walls are painted) */
+let CITY_ZONES = true;
+export function cityZones(on: boolean) { CITY_ZONES = on; }
 
 type Mode = 'living' | 'arid' | 'airless' | 'glacial' | 'frozen' | 'volcanic' | 'toxic' | 'carbon';
 
@@ -807,7 +810,7 @@ export class TerrainGenerator {
             if (k0) { if (strokeOf(a) !== k0 && strokeOf(b) !== k0 && strokeOf(dg) !== k0) cz = !strokeOf(a) ? a : !strokeOf(b) ? b : 0; }
             else if (strokeOf(a) && strokeOf(a) === strokeOf(b) && !isWallish(cz) && cz !== CZ.PLAZA && (!isWater(tt.g) || a === CZ.BRIDGE)) cz = a;
           }
-          if (cz && (!isWater(tt.g) || cz === CZ.BRIDGE || !(cz < CZ.ROAD))) {
+          if (cz && (!isWater(tt.g) || cz === CZ.BRIDGE || !(cz < CZ.ROAD)) && (CITY_ZONES || !isZone(cz))) {
             col = cityPixel(cz, tt.ce, wx, wy, lx, ly, col, tiles[own - N].cz, tiles[own + 1].cz, tiles[own + N].cz, tiles[own - 1].cz, s);
             if (cz >= CZ.ROAD) { out[k] = col[0]; out[k + 1] = col[1]; out[k + 2] = col[2]; out[k + 3] = 255; continue; }
           }

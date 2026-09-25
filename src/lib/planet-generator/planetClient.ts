@@ -167,6 +167,8 @@ export interface PlanetSession {
   planCity(tx: number, ty: number, era: number, p: number, cityId?: number, name?: string): Promise<CityPlan>;
   setCityLevel(cityId: number, p: number): void;
   removeCity(cityId: number): void;
+  /** show / hide the district colours of every city */
+  setCityZones(on: boolean): void;
   config: PlanetConfig;
   dispose(): void;
 }
@@ -205,6 +207,7 @@ export function openPlanetSession(
   const cities = new Map<number, { plan: CityPlan; p: number }>();
   const pools = new Set<TerrainPool>();
   let nextCity = 1;
+  let zonesOn = true;
   const ready = call({ kind: 'open', id: nextId++, sessionId, config }).then((msg) => {
     if (msg.kind !== 'opened') throw new Error('unexpected response');
     // eslint-disable-next-line prefer-const
@@ -237,6 +240,7 @@ export function openPlanetSession(
         if (res.kind !== 'fields') throw new Error('unexpected response');
         const pool = new TerrainPool(res.fields, (cx, cy) => session.chunk(cx, cy));
         await pool.ready;
+        pool.broadcast({ kind: 'cityZones', on: zonesOn });
         for (const [id, c] of cities) pool.broadcast({ kind: 'cityAdd', cityId: id, era: c.plan.meta.era, p: c.p, chunks: c.plan.chunks });
         pools.add(pool);
         pool.onDispose = () => pools.delete(pool);
@@ -262,6 +266,11 @@ export function openPlanetSession(
         c.p = p;
         worker.postMessage({ kind: 'cityLevel', sessionId, cityId: id, p } satisfies WorkerRequest);
         for (const pool of pools) pool.broadcast({ kind: 'cityLevel', cityId: id, p });
+      },
+      setCityZones: (on) => {
+        zonesOn = on;
+        worker.postMessage({ kind: 'cityZones', sessionId, on } satisfies WorkerRequest);
+        for (const pool of pools) pool.broadcast({ kind: 'cityZones', on });
       },
       removeCity: (id) => {
         cities.delete(id);

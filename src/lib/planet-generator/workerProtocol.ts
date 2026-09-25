@@ -30,6 +30,7 @@ export type WorkerRequest =
   | { kind: 'city'; id: number; sessionId: string; cityId: number; tx: number; ty: number; era: number; seed: number; p: number; name?: string }
   | { kind: 'cityLevel'; sessionId: string; cityId: number; p: number }
   | { kind: 'cityRemove'; sessionId: string; cityId: number }
+  | { kind: 'cityZones'; sessionId: string; on: boolean }
   | { kind: 'close'; sessionId: string };
 
 export type WorkerResponse =

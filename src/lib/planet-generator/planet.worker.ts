@@ -11,7 +11,7 @@ import { createNoise3D } from 'simplex-noise';
 import { PlanetGenerator, LayerType, PlanetConfig } from './generator';
 import type { WorkerRequest, WorkerResponse, PlanetProbe } from './workerProtocol';
 import { cloudProfileFor } from './visualProfile';
-import { TerrainGenerator, cropFields, cityAdd, cityLevel, cityRemove } from '../terrain/terrainGen';
+import { TerrainGenerator, cropFields, cityAdd, cityLevel, cityRemove, cityZones } from '../terrain/terrainGen';
 import { planCity } from '../city/plan';
 import type { CityPlan } from '../city/codes';
 
@@ -153,6 +153,7 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         break;
       }
       case 'cityLevel': cityLevel(msg.cityId, msg.p); break;
+      case 'cityZones': cityZones(msg.on); break;
       case 'cityRemove': cityRemove(msg.cityId); cityPlans.get(msg.sessionId)?.delete(msg.cityId); break;
       case 'close': {
         sessions.delete(msg.sessionId);
