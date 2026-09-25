@@ -11,7 +11,7 @@ import { CZ, CityChunkData, CityPlan } from './codes';
 const C = 3;
 /** cities closer than this (tiles) get a road, and a sea lane when both touch water */
 export const ROAD_MAX = 2600;
-export const SEA_MAX = 4200;
+export const SEA_MAX = 5000;
 
 export interface CityLink {
   id: number; a: number; b: number; kind: 'road' | 'sea';
@@ -44,9 +44,10 @@ class Heap {
 }
 
 /** A* over cells inside a box; returns tile-coord polyline or null */
-export function search(tg: TerrainGenerator, from: [number, number], to: [number, number], sea: boolean, limit: number): [number, number][] | null {
+/** goalR (cells): the search may end anywhere within this distance of `to` (sea lanes: any water near the city) */
+export function search(tg: TerrainGenerator, from: [number, number], to: [number, number], sea: boolean, limit: number, goalR = 0): [number, number][] | null {
   const ax = Math.round(from[0] / C), ay = Math.round(from[1] / C), bx = Math.round(to[0] / C), by = Math.round(to[1] / C);
-  const M = 120;
+  const M = sea ? 260 : 120;
   const x0 = Math.min(ax, bx) - M, y0 = Math.min(ay, by) - M, W = Math.abs(ax - bx) + 2 * M + 1, H = Math.abs(ay - by) + 2 * M + 1;
   const N = W * H;
   const g = new Uint8Array(N).fill(255), lv = new Uint8Array(N), fo = new Uint8Array(N);
@@ -62,12 +63,12 @@ export function search(tg: TerrainGenerator, from: [number, number], to: [number
   const heap = new Heap();
   sample(s); sample(e);
   dist[s] = 0; heap.push(s, hx(s));
-  let expanded = 0;
+  let expanded = 0, end = -1;
   while (heap.n) {
     const c = heap.pop();
     if (done[c]) continue;
     done[c] = 1;
-    if (c === e) break;
+    if (c === e || (goalR > 0 && hx(c) <= goalR)) { end = c; break; }
     if (++expanded > limit) return null;
     const cx = c % W, cy = (c / W) | 0;
     for (let d = 0; d < 8; d++) {
@@ -80,8 +81,8 @@ export function search(tg: TerrainGenerator, from: [number, number], to: [number
       let step: number;
       if (sea) {
         // water only (the two ends may sit on the bank)
-        if (!isWaterG(g[n]) && n !== e) continue;
-        step = g[n] === Ground.DEEP_WATER ? 1 : 1.3;
+        if ((!isWaterG(g[n]) || g[n] === Ground.SWAMP_WATER) && n !== e) continue;
+        step = g[n] === Ground.DEEP_WATER ? 1 : g[n] === Ground.RIVER_WATER ? 1.6 : 1.3;
       } else {
         if (g[n] === Ground.DEEP_WATER || g[n] === Ground.LAVA) continue;
         const dl = Math.abs(lv[n] - lv[c]);
@@ -92,9 +93,9 @@ export function search(tg: TerrainGenerator, from: [number, number], to: [number
       if (nd < dist[n]) { dist[n] = nd; par[n] = c; heap.push(n, nd + hx(n) * (sea ? 1 : 1.05)); }
     }
   }
-  if (!done[e]) return null;
+  if (end < 0) return null;
   const out: [number, number][] = [];
-  for (let c = e; c >= 0; c = par[c]) out.push([(x0 + (c % W)) * C, (y0 + ((c / W) | 0)) * C]);
+  for (let c = end; c >= 0; c = par[c]) out.push([(x0 + (c % W)) * C, (y0 + ((c / W) | 0)) * C]);
   return out.reverse();
 }
 
@@ -105,7 +106,7 @@ export function nearestWater(tg: TerrainGenerator, tx: number, ty: number, R: nu
     for (let k = 0; k < n; k++) {
       const a = (k / n) * Math.PI * 2, x = Math.round(tx + Math.cos(a) * r), y = Math.round(ty + Math.sin(a) * r);
       const t = tg.tile(x, y);
-      if (t.g === Ground.DEEP_WATER || t.g === Ground.SHALLOW_WATER) return [x, y];
+      if (t.g === Ground.DEEP_WATER || t.g === Ground.SHALLOW_WATER || t.g === Ground.RIVER_WATER) return [x, y];
     }
   }
   return null;
@@ -126,7 +127,8 @@ export function planLinks(tg: TerrainGenerator, city: CityPlan, others: CityPlan
     if (d < SEA_MAX) {
       const wa = nearestWater(tg, a.tx, a.ty, 240), wb = nearestWater(tg, b.tx, b.ty, 240);
       if (wa && wb) {
-        const path = search(tg, wa, wb, true, 500000);
+        // from the water by one city to any water within ~250 tiles of the other
+        const path = search(tg, wa, [b.tx, b.ty], true, 2500000, 85);
         if (path && path.length > 8) out.push({ id: 2_000_000 + lo * 1000 + hi, a: a.id, b: b.id, kind: 'sea', path });
       }
     }

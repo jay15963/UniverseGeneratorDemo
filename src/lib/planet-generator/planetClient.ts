@@ -158,6 +158,8 @@ export interface PlanetSession {
   probe(x: number, y: number): Promise<PlanetProbe | null>;
   /** Playable terrain chunk (32x32 tiles) */
   chunk(cx: number, cy: number): Promise<ChunkData>;
+  /** Regional LOD block from the full-resolution session worker (anywhere on the planet) */
+  region(tx: number, ty: number, step: number, n: number): Promise<Uint8ClampedArray>;
   /** Nearest walkable tile to a map pixel */
   spawn(x: number, y: number): Promise<{ tx: number; ty: number }>;
   /** Parallel chunk generator (one worker per spare core) around a map point. */
@@ -236,6 +238,11 @@ export function openPlanetSession(
         const res = await call({ kind: 'chunk', id: nextId++, sessionId, cx, cy });
         if (res.kind !== 'chunk') throw new Error('unexpected response');
         return res.chunk;
+      },
+      region: async (tx, ty, step, n) => {
+        const res = await call({ kind: 'region', id: nextId++, sessionId, tx, ty, step, n });
+        if (res.kind !== 'region') throw new Error('unexpected response');
+        return res.px;
       },
       spawn: async (x, y) => {
         const res = await call({ kind: 'spawn', id: nextId++, sessionId, x, y });

@@ -210,11 +210,13 @@ Owner's rules - keep them:
 - The city panel has "Ocultar cores dos distritos e zonas" (streets and walls stay painted; `cityZones` in the terrain
   workers). Spectator mode has a sun button that holds the clock at day.
 - **Traffic (visual placeholders, `Survival/traffic.ts`)**: vehicles designed by the city's culture and era (vehicle
-  generator, `VEH_K` = 0.45 x gameplay LOD, rendered by a `StructPool` of vehicle workers) drive the city's streets;
+  generator; land `VEH_K` = 0.55 x gameplay LOD, ships `SHIP_K` = 1.05 x - owner: ships much bigger, carts a bit;
+  rendered by a `StructPool` of vehicle workers) drive the city's streets. Carts of the beast eras are pulled by a land
+  animal of the planet (never a giant) at the vehicle's hitch, **at the animal's own size**. Ships keep to open water;
   cargo vehicles travel the **main roads between nearby cities**; ships sail the water around cities (no harbours yet)
   and the **sea lanes** between cities on the same water. `city/links.ts` plans the links when a city is planned
   (A* over 3-tile cells: roads with the planner's terrain scoring, painted as 3-tile arteries outside what the cities
-  planned; sea lanes over water only, from the water nearest each centre); the zoomed-out maps draw them as lines.
+  planned; sea lanes over water only, from the water nearest one centre to any water near the other); the zoomed-out maps draw them as lines.
 - **Wall rings** are drawn with `structure/wallseg.ts`: the simplest wall asset, one straight segment from a tile to
   the next in any of the 8 directions (terrain projection, so segments join end to end; palisade / stone / brick /
   concrete / steel / energy by era); watchtowers stand on the ring's towers; gates stay open.
@@ -239,7 +241,8 @@ Four levels (owner's request; `lodOf`):
 - **local** (down to 1/2): the gameplay world in full detail.
 - **far** (1/4, the heaviest gameplay stop): same chunks, but small things are skipped (`SMALL_FEATS`: grass, flowers,
   sticks, pebbles, nuggets, reeds, ferns...); the first real clouds float over the land (few).
-- **regional** (1/8 .. 1/128): sampled terrain blocks (`TerrainGenerator.region`, cities painted in: streets, walls,
+- **regional** (1/8 .. 1/128): sampled terrain blocks (`TerrainGenerator.region` - terrain pool inside its window,
+  the session worker elsewhere; cities painted in: streets, walls,
   zone tints unless hidden) - no terrain detail, creatures, bushes or rocks; more clouds; city territories outlined
   with their name pills. Loaded chunks fill in (bare ground) while blocks stream.
 - **world**: the planet map.

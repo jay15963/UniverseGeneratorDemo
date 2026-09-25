@@ -40,7 +40,7 @@ export class StructPool {
       this.queue.delete(job.key);
       slot.busy = true;
       const id = this.nextId++;
-      this.waiting.set(id, m => job.resolve(m.ok ? { frames: m.frames, w: m.w, h: m.h, ax: m.ax, ay: m.ay } : null));
+      this.waiting.set(id, m => job.resolve(m.ok ? { frames: m.frames, w: m.w, h: m.h, ax: m.ax, ay: m.ay, hitch: m.hitch ?? null } as SData : null));
       slot.w.postMessage({ id, spec: job.spec, dir: job.dir, frames: job.frames, k: job.k });
     }
   }

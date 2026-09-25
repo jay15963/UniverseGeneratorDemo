@@ -32,6 +32,7 @@ export type WorkerRequest =
   | { kind: 'cityLevel'; sessionId: string; cityId: number; p: number }
   | { kind: 'cityRemove'; sessionId: string; cityId: number }
   | { kind: 'cityZones'; sessionId: string; on: boolean }
+  | { kind: 'region'; id: number; sessionId: string; tx: number; ty: number; step: number; n: number }
   | { kind: 'close'; sessionId: string };
 
 export type WorkerResponse =
@@ -44,4 +45,5 @@ export type WorkerResponse =
   | { kind: 'spawn'; id: number; tx: number; ty: number }
   | { kind: 'fields'; id: number; fields: PlanetFields }
   | { kind: 'city'; id: number; plan: CityPlan; links: CityLink[] }
+  | { kind: 'region'; id: number; px: Uint8ClampedArray }
   | { kind: 'error'; id: number; message: string };
