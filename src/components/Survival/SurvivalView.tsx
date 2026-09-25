@@ -17,6 +17,9 @@ import { Fauna, World, AnimalDraw } from './fauna';
 import { Genome, Stage as CStage } from '../../lib/creature/genome';
 import { LayerType } from '../../lib/planet-generator/generator';
 import { frameMeter } from '../../lib/render/frameMeter';
+import { StructPool } from '../../lib/structure/structPool';
+import { LOD_K } from '../../lib/structure/render';
+import type { CityBuilding, CityPlan } from '../../lib/city/codes';
 import type { Cinematic, CineApi } from '../Demo/cinema';
 import { ERA_NAMES, type CityMeta } from '../../lib/city/codes';
 
@@ -661,7 +664,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
 
     const drawScene = (p: Painter, x0: number, x1: number, y0: number, y1: number, t: number, stop: { row: number; y: number } | null) => {
       const g = G.current;
-      const rowFrom = Math.floor(y0 / TILE) - 1, rowTo = Math.floor((y1 + MAX_LEVEL * LIFT) / TILE) + 1;
+      const rowFrom = Math.floor(y0 / TILE) - 1, rowTo = Math.max(Math.floor((y1 + MAX_LEVEL * LIFT) / TILE) + 1, cityRowMax);
       const cx0 = Math.floor(x0 / CHUNK_PX), cx1 = Math.floor(x1 / CHUNK_PX);
       const pf = playerFrame();
       const prow = g.ready && !spectator ? Math.floor(g.y / TILE) : -1e9;
@@ -752,9 +755,104 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }
         if (rowAnimals) while (ai < rowAnimals.length) drawAnimal(rowAnimals[ai++]);
         if (!playerDone) drawPlayer();
+        // 4. city structures whose lot ends on this row (they stand over the rows behind them)
+        const rb = cityRows.get(r);
+        if (rb) {
+          const fr = Math.floor(t * 4) % CITY_FRAMES;
+          for (const { b, d } of rb) {
+            const col = fr % d.cols, rowi = Math.floor(fr / d.cols);
+            p.blit(d.img!, col * d.fw, rowi * d.fh, d.fw, d.fh, Math.round(b.x - d.ax), Math.round(b.y - b.l * LIFT - d.ay), d.fw, d.fh);
+          }
+        }
       }
     };
     let animalDraws: AnimalDraw[] = [];
+
+    // --- city structures: one culture per city, designs rendered by a pool of structure workers ---
+    const CITY_FRAMES = 4;
+    interface Design { img: Img | null; tex: WebGLTexture | null; fw: number; fh: number; ax: number; ay: number; cols: number; used: number }
+    let spool: StructPool | null = null;
+    const designs = new Map<string, Design>();
+    let indexed: CityPlan[] = [];
+    let bIndex = new Map<string, { b: CityBuilding; id: number; plan: CityPlan }[]>();
+    let cityRows = new Map<number, { b: CityBuilding; d: Design }[]>();
+    let cityRowMax = -1e9, evictT = 0;
+    const reindex = () => {
+      const plans = [...session.cities.values()].map(c => c.plan);
+      if (plans.length === indexed.length && plans.every((q, i) => q === indexed[i])) return;
+      indexed = plans;
+      bIndex = new Map();
+      for (const [id, c] of session.cities) for (const b of c.plan.buildings) {
+        const key = `${Math.floor(b.x / CHUNK_PX)},${Math.floor(b.y / CHUNK_PX)}`;
+        let l = bIndex.get(key);
+        if (!l) bIndex.set(key, l = []);
+        l.push({ b, id, plan: c.plan });
+      }
+    };
+    const loadDesign = (key: string, plan: CityPlan, b: CityBuilding, prio: number) => {
+      spool ??= new StructPool();
+      const job = spool.request(key, { culture: plan.meta.culture, type: b.type, size: b.size, era: plan.meta.era, variant: b.variant, night: false }, b.dir, LOD_K.gameplay, CITY_FRAMES, prio);
+      if (!job) return;
+      const d: Design = { img: null, tex: null, fw: 0, fh: 0, ax: 0, ay: 0, cols: 1, used: performance.now() };
+      designs.set(key, d);
+      job.then(sd => {
+        if (!sd || !aliveRef.current || designs.get(key) !== d) return;
+        const maxW = gl ? gl.maxTex : 8192;
+        const cols = Math.max(1, Math.min(sd.frames.length, Math.floor(maxW / sd.w))), rows = Math.ceil(sd.frames.length / cols);
+        const W = sd.w * cols, H = sd.h * rows;
+        if (gl) {
+          const tex = gl.newTexture(W, H);
+          sd.frames.forEach((f, i) => gl!.upload(tex, (i % cols) * sd.w, Math.floor(i / cols) * sd.h, sd.w, sd.h, f));
+          d.tex = tex;
+          d.img = { reg: { tex, x: 0, y: 0, w: W, h: H, tw: W, th: H }, w: W, h: H };
+        } else {
+          const c = document.createElement('canvas');
+          c.width = W; c.height = H;
+          const cx2 = c.getContext('2d')!;
+          sd.frames.forEach((f, i) => cx2.putImageData(new ImageData(new Uint8ClampedArray(f), sd.w, sd.h), (i % cols) * sd.w, Math.floor(i / cols) * sd.h));
+          d.img = { c, w: W, h: H };
+        }
+        d.fw = sd.w; d.fh = sd.h; d.ax = sd.ax; d.ay = sd.ay; d.cols = cols;
+      });
+    };
+    /** Buildings in view, bucketed by the row that paints them; missing designs are queued nearest first. */
+    const collectBuildings = (x0: number, x1: number, y0: number, y1: number, cx: number, cy: number) => {
+      cityRows = new Map(); cityRowMax = -1e9;
+      if (!session.cities.size) return;
+      reindex();
+      const now = performance.now(), g = G.current;
+      for (let qy = Math.floor((y0 - 64) / CHUNK_PX); qy <= Math.floor((y1 + 1100) / CHUNK_PX); qy++)
+        for (let qx = Math.floor((x0 - 450) / CHUNK_PX); qx <= Math.floor((x1 + 450) / CHUNK_PX); qx++) {
+          const list = bIndex.get(`${qx},${qy}`);
+          if (!list || !g.chunks.has(`${qx},${qy}`)) continue;
+          for (const { b, id, plan } of list) {
+            const p = session.cities.get(id)?.p;
+            if (p === undefined || b.stage > p) continue;
+            const key = `${plan.meta.culture.seed}|${plan.meta.era}|${b.type}|${b.size}|${b.variant}|${b.dir}`;
+            const d = designs.get(key);
+            const prio = Math.hypot(b.x - cx, b.y - cy);
+            if (!d) { loadDesign(key, plan, b, prio); continue; }
+            d.used = now;
+            if (!d.img) { spool?.prioritize(key, prio); continue; }
+            const sx = b.x - d.ax, sy = b.y - b.l * LIFT - d.ay;
+            if (sx > x1 || sx + d.fw < x0 || sy > y1 || sy + d.fh < y0) continue;
+            let l = cityRows.get(b.row);
+            if (!l) cityRows.set(b.row, l = []);
+            l.push({ b, d });
+            if (b.row > cityRowMax) cityRowMax = b.row;
+          }
+        }
+      for (const l of cityRows.values()) l.sort((a, c) => a.b.x - c.b.x);
+      // forget designs nobody looked at for a while (their textures are big)
+      if (now - evictT > 2000 && designs.size > 140) {
+        evictT = now;
+        for (const [k, d] of [...designs.entries()].sort((a, c) => a[1].used - c[1].used).slice(0, designs.size - 120)) {
+          if (now - d.used < 3000) continue;
+          if (d.tex) gl?.deleteTexture(d.tex);
+          designs.delete(k);
+        }
+      }
+    };
 
     const maskCache = new Map<number, HTMLCanvasElement>();
     const lensMask = (k: number) => {
@@ -1110,6 +1208,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const lensStop = { row: Math.floor(g.y / TILE), y: g.y };
 
       animalDraws = local && g.ready ? fauna.collect(x0, y0, x1, y1) : [];
+      if (local && g.ready) collectBuildings(x0, x1, y0, y1, g.x, g.y); else { cityRows = new Map(); cityRowMax = -1e9; }
       // --- render the world ---
       if (gl) {
         gl.begin(camX, camY, S, [0.02, 0.027, 0.047]);
@@ -1284,6 +1383,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     raf = requestAnimationFrame(frame);
     return () => {
       cancelAnimationFrame(raf);
+      spool?.dispose();
+      for (const d of designs.values()) if (d.tex) gl?.deleteTexture(d.tex);
+      designs.clear();
       aliveRef.current = false;
       // GPU resources die with this renderer: drop chunks so a remount re-uploads them
       G.current.chunks.clear();
@@ -1452,6 +1554,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
                   <div className="min-w-0">
                     <div className="text-[10px] font-mono tracking-[0.2em] text-sky-300/80 uppercase">{sel ? 'Cidade' : 'Nova cidade'}</div>
                     <div className="font-bold truncate">{sel ? sel.meta.name : 'Escolha o centro'}</div>
+                    {sel && <div className="text-[11px] text-neutral-400 truncate">cultura {sel.meta.culture.name} · {sel.meta.culture.mode === 'alien' ? 'alienígena' : 'terrestre'}</div>}
                   </div>
                   <button onClick={() => { setCityPick(false); setSelCity(null); }} title="Fechar" className="text-neutral-400 hover:text-white shrink-0"><X className="w-4 h-4" /></button>
                 </div>

@@ -13,6 +13,9 @@ import type { TerrainGenerator } from '../terrain/terrainGen';
 import { Ground, CHUNK } from '../terrain/types';
 import { fbm2, hash3, mulberry } from '../terrain/noise';
 import { CZ, CityPlan, CityMeta, CityChunkData, isGraded, isRoad } from './codes';
+import { makeCulture } from '../structure/genome';
+import { PlanetType } from '../planet-generator/generator';
+import { placeBuildings } from './build';
 
 const C = 3;                                        // tiles per planning cell
 const ERA_F = [0.35, 0.5, 0.65, 0.8, 0.9, 1, 1, 1]; // metropolis size per era
@@ -187,7 +190,8 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
   for (let q = 0; q < nOrder; q++) if (isLand(order[q])) landRank[order[q]] = landCount++;
   const NUe = Math.max(8, Math.min(NU, Math.round(landCount * 0.55)));
   const NTe = Math.max(NUe + 1, landCount);
-  const NA = Math.max(12, Math.round(0.004 * NUe));
+  const NA = Math.max(20, Math.round(0.01 * NUe));            // administrative quarter (palace / seat of government)
+  const NM = NA + Math.round(0.012 * NUe * (era >= 3 ? 2 : 1)); // market ring around it
   const N0 = NA;
   const NP = Math.max(3, Math.round(NA * 0.12));
   const Ncore = Math.round(N0 + (NUe - N0) * Math.pow(0.22, 1.6));
@@ -259,7 +263,7 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
     const c = order[q];
     if (!urban(c)) continue;
     const r = landRank[c];
-    zone[c] = r < NP ? CZ.PLAZA : r < NA ? CZ.ADMIN : r < NA * (era >= 3 ? 6 : 4) && era >= 1 ? CZ.COM : CZ.RES;
+    zone[c] = r < NP ? CZ.PLAZA : r < NA ? CZ.ADMIN : r < NM && era >= 1 ? CZ.COM : CZ.RES;
     zStage[c] = uStage(c);
   }
   const rCore = Math.sqrt(Ncore / Math.PI);
@@ -285,7 +289,7 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
     for (let q = 0; q < nOrder; q++) {
       const c = order[q];
       if (wet[c]) continue;
-      if (!urban(c) || landRank[c] >= Ncore || landRank[c] < NA * 4 || zone[c] !== CZ.RES && zone[c] !== CZ.COM) continue;
+      if (!urban(c) || landRank[c] >= Ncore || landRank[c] < NM || zone[c] !== CZ.RES && zone[c] !== CZ.COM) continue;
       if (angDiff(angOf(c), dir) < 0.6) cand.push(c);
     }
     cand.sort((a, b) => landRank[b] - landRank[a]);
@@ -358,8 +362,28 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
       cand.push([c, score]);
     }
     cand.sort((a, b) => b[1] - a[1]);
+    // compact districts grown from the best spots (factories need whole blocks, not strips)
     const want = Math.round(NUe * IND_FRAC[era]);
-    for (let q = 0; q < Math.min(want, cand.length); q++) zone[cand[q][0]] = CZ.IND;
+    const per = Math.max(40, Math.min(600, Math.round(want / 3)));
+    const seeds: number[] = [];
+    let got = 0;
+    for (const [c] of cand) {
+      if (got >= want) break;
+      if (zone[c] !== CZ.RES) continue;
+      const i = c % GS, j = (c / GS) | 0;
+      if (seeds.some(s0 => Math.hypot((s0 % GS) - i, ((s0 / GS) | 0) - j) < 25)) continue;
+      seeds.push(c);
+      const q = [c];
+      zone[c] = CZ.IND; got++;
+      for (let h = 0, n = 1; h < q.length && n < per && got < want; h++) {
+        const u = q[h], ui = u % GS, uj = (u / GS) | 0;
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const v = (uj + dj) * GS + ui + di;
+          if (zone[v] !== CZ.RES || landRank[v] < Ncore) continue;
+          zone[v] = CZ.IND; q.push(v); n++; got++;
+        }
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -538,9 +562,11 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
       for (let dy = 0; dy < C; dy++) for (let dx = 0; dx < C; dx++) {
         const lx = i * C + dx, ly = j * C + dy;
         const gx = T0x + lx - cx, gy = T0y + ly - cy;
+        // industrial and military yards get blocks twice as big (factories, depots and drill grounds need room)
+        const m2 = zone[c] === CZ.IND || zone[c] === CZ.MIL ? 2 : 1;
         const on = f.diag
-          ? mod(gx + gy + f.u0, Bd) < Wd || mod(gy - gx + f.v0, Bd) < Wd
-          : mod(gx + f.u0, B) < W || mod(gy + f.v0, B) < W;
+          ? mod(gx + gy + f.u0, Bd * m2) < Wd || mod(gy - gx + f.v0, Bd * m2) < Wd
+          : mod(gx + f.u0, B * m2) < W || mod(gy + f.v0, B * m2) < W;
         if (!on) continue;
         const k = ly * TG + lx;
         if (waterT(k)) continue;
@@ -590,7 +616,8 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
       const i = c % GS, j = (c / GS) | 0;
       const jit = (n: number) => (hash3(c, n, seed) % 3) - 1;
       pts.push({ c, x: i * C + 1 + (q ? jit(8) : 0), y: j * C + 1 + (q ? jit(9) : 0), s: uStage(c), ang: [] });
-      for (let dj = -sp + 1; dj < sp; dj++) for (let di = -sp + 1; di < sp; di++) {
+      const spr = zone[c] === CZ.IND || zone[c] === CZ.MIL ? sp * 2 : sp;   // bigger yards
+      for (let dj = -spr + 1; dj < spr; dj++) for (let di = -spr + 1; di < spr; di++) {
         const ii = i + di, jj = j + dj;
         if (ii >= 0 && jj >= 0 && ii < GS && jj < GS) occ[jj * GS + ii] = 1;
       }
@@ -698,6 +725,35 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
     }
   }
 
+  // E2: the city's culture and its buildings
+  // water around the site (fixed disc, so the culture does not depend on the era)
+  let wetCells = 0, siteCells = 0;
+  for (let dj = -30; dj <= 30; dj += 2) for (let di = -30; di <= 30; di += 2) {
+    if (di * di + dj * dj > 900) continue;
+    const c = (RC + dj) * GS + RC + di;
+    sample(c); siteCells++;
+    if (isWaterG(gnd[c])) wetCells++;
+  }
+  const cfg = tg.gen.config;
+  const alien = cfg.planetType === PlanetType.ALIEN_LIFE;
+  // its own random stream: the same city keeps the same architecture in every era
+  const cr = mulberry(seed ^ 0x2c1b3c6d);
+  const culture = makeCulture(`city:${seed}`, {
+    gravity: Math.max(0, Math.min(1, (cfg.planetSize ?? 1) / 3)),
+    temperature: Math.max(0, Math.min(1, t0.temp)),
+    water: Math.max(0, Math.min(1, 0.3 + (wetCells / siteCells) * 1.5)),
+    exotic: alien ? 0.55 + cr() * 0.3 : 0.1 + cr() * 0.3,
+    wealth: 0.35 + cr() * 0.35,
+    star: 0.55,
+  }, alien ? 'alien' : 'earth');
+  const buildings = placeBuildings({
+    era, seed, culture, TG, T0x, T0y, code, stage, lvl,
+    level: k => { if (lvl[k] !== 255) return lvl[k]; info(k); return tLv[k]; },
+    water: k => waterT(k),
+    towers, wallStage: WALL_STAGE,
+    blocked: (tx, ty) => inp.others.length > 0 && territoryAt(inp.others, tx, ty) >= 0,
+  });
+
   // F: cut into chunks
   const chunks: Record<string, CityChunkData> = {};
   let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
@@ -714,7 +770,7 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
       ch = chunks[key] = { code: new Uint8Array(n), stage: new Uint8Array(n).fill(255), lvl: new Uint8Array(n).fill(255), rd: new Uint8Array(n) };
     }
     const q = (ty - ccy * CHUNK) * CHUNK + tx - ccx * CHUNK;
-    ch.code[q] = code[k]; ch.stage[q] = stage[k]; ch.lvl[q] = lvl[k]; ch.rd[q] = rd[k];
+    ch.code[q] = code[k]; ch.stage[q] = stage[k]; ch.lvl[q] = lvl[k]; ch.rd[q] = isGraded(code[k]) ? rd[k] : 0;
     if (tx < bx0) bx0 = tx; if (tx > bx1) bx1 = tx; if (ty < by0) by0 = ty; if (ty > by1) by1 = ty;
   }
 
@@ -726,9 +782,9 @@ export function planCity(tg: TerrainGenerator, inp: PlanInput): CityPlan {
     id: inp.id, name: inp.name ?? cityName(seed, water, lv[c0]), era, seed,
     tx: cx, ty: cy, gs: GS, c: C, ox, oy,
     bbox: { tx0: bx0, ty0: by0, tx1: bx1, ty1: by1 },
-    walls, towers, gates,
+    walls, towers, gates, culture,
   };
-  return { meta, territory, chunks };
+  return { meta, territory, chunks, buildings };
 
   // -----------------------------------------------------------------------------------------------
   function buildWalls() {
