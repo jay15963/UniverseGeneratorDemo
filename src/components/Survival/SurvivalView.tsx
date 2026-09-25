@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Backpack, Map as MapIcon, Hand, ZoomIn, ZoomOut, Building2, Crosshair, Trash2, LocateFixed, Sun } from 'lucide-react';
+import { X, Backpack, Map as MapIcon, Hand, ZoomIn, ZoomOut, Building2, Crosshair, Trash2, LocateFixed, Sun, Footprints } from 'lucide-react';
 import type { PlanetSession, TerrainPool } from '../../lib/planet-generator/planetClient';
 import { PlanetType, BiomeType } from '../../lib/planet-generator/generator';
 import { ChunkData, Feature, Feat, CHUNK, CHUNK_PX, TILE, GROUND_INFO, Ground, solidRadius, WORLD_TILES_X, LIFT, MAX_LEVEL, TREES, LIQUID_FRAMES } from '../../lib/terrain/types';
@@ -19,10 +19,11 @@ import { LayerType } from '../../lib/planet-generator/generator';
 import { frameMeter } from '../../lib/render/frameMeter';
 import { StructPool } from '../../lib/structure/structPool';
 import { CITY_K } from '../../lib/structure/render';
-import { Citizens, CitizenDraw } from './citizens';
+import { Citizens, CitizenDraw, CITIZEN_K, cityGenome, streetCity } from './citizens';
 import type { CityBuilding, CityPlan } from '../../lib/city/codes';
 import type { Cinematic, CineApi } from '../Demo/cinema';
 import { ERA_NAMES, type CityMeta } from '../../lib/city/codes';
+import { ERAS } from '../../lib/structure/genome';
 
 interface Props {
   session: PlanetSession;
@@ -148,14 +149,22 @@ const BIOME_PT: Record<number, string> = {
 };
 const SWAY = new Set<Feat>([Feat.TALL_GRASS, Feat.REEDS, Feat.CATTAIL, Feat.FLAX, Feat.FLOWER, Feat.FERN, Feat.WILD_CROP]);
 const DAY_SECONDS = 360;
-/** player species sprite scale: the tribal figure ends up ~34 px tall, like the painted hunter */
-const PLAYER_K = 0.4;
+/** player species sprite scale: the same as every civilised creature in the world (citizens) */
+const PLAYER_K = CITIZEN_K;
 const REACH = 26;
 const SPEED = 74;
 
 export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null, standby = false }: Props) {
   const cine = cinematic;
   const spectator = spectatorProp || !!cine;
+  /** spectator mode can drop in as a citizen of one of its cities (and leave again) */
+  const [avatar, setAvatar] = useState<{ genome: Genome; stage: CStage; citizen: number; city: string } | null>(null);
+  const avatarRef = useRef(avatar);
+  avatarRef.current = avatar;
+  /** free camera (spectator and not walking as a citizen) */
+  const free = spectator && !avatar;
+  const freeRef = useRef(free);
+  freeRef.current = free;
   const standbyRef = useRef(standby);
   standbyRef.current = standby;
   const preloadRef = useRef<{ x: number; y: number } | null>(null);
@@ -401,6 +410,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     const la = a.c.data.level[a.k], lb = b.c.data.level[b.k];
     if (la === lb) return true;
     if (Math.abs(la - lb) !== 1) return false;
+    // graded city streets (and plazas) are walkable up and down one level in any direction
+    if (session.cities.size && streetCity(session.cities, Math.floor(fx / TILE), Math.floor(fy / TILE)) >= 0 && streetCity(session.cities, Math.floor(tx / TILE), Math.floor(ty / TILE)) >= 0) return true;
     // the upper tile must be a stairway that descends exactly towards the lower tile
     const up = lb > la ? { q: b, x: tx, y: ty } : { q: a, x: fx, y: fy };
     const lo = lb > la ? { x: fx, y: fy } : { x: tx, y: ty };
@@ -452,7 +463,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
 
   const interact = (f: Feature | null) => {
     const g = G.current;
-    if (!f || spectator) return;
+    if (!f || freeRef.current) return;
     if (f.l !== g.level) { flash(f.l > g.level ? 'Está no alto — encontre uma rampa para subir' : 'Está lá embaixo — desça por uma rampa'); return; }
     if (Math.hypot(f.x - g.x, f.y - g.y) > REACH + 14) { flash('Muito longe — aproxime-se'); return; }
     const h = harvestFor(f);
@@ -471,7 +482,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); if (bagOpen) setBagOpen(false); else if (cityPickRef.current) setCityPick(false); else onExit(); return; }
+      if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); if (bagOpen) setBagOpen(false); else if (cityPickRef.current) setCityPick(false); else if (avatarRef.current) setAvatar(null); else onExit(); return; }
       if (cine) return;
       const k = e.key.toLowerCase();
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k)) { e.preventDefault(); G.current.keys.add(k); }
@@ -604,6 +615,17 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     refreshCities();
     setSelCity(null);
   };
+  /** walk the city as one of its own citizens (the species that built it, in the clothes of its era) */
+  const enterCity = (id: number) => {
+    const c = session.cities.get(id);
+    if (!c) return;
+    const m = c.plan.meta, g = G.current;
+    setAvatar({ genome: cityGenome(c.plan), stage: ERAS[m.era], citizen: Math.floor(Math.random() * 6), city: m.name });
+    setCityPick(false); setSelCity(null);
+    g.x = m.tx * TILE + TILE / 2; g.y = m.ty * TILE + TILE / 2;
+    g.zoomIdx = ZOOMS.indexOf(3);
+    g.keys.clear();
+  };
   const goToCity = (m: CityMeta) => {
     const g = G.current;
     g.x = m.tx * TILE + TILE / 2; g.y = m.ty * TILE + TILE / 2;
@@ -673,11 +695,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const rowFrom = Math.floor(y0 / TILE) - 1, rowTo = Math.max(Math.floor((y1 + MAX_LEVEL * LIFT) / TILE) + 1, cityRowMax);
       const cx0 = Math.floor(x0 / CHUNK_PX), cx1 = Math.floor(x1 / CHUNK_PX);
       const pf = playerFrame();
-      const prow = g.ready && !spectator ? Math.floor(g.y / TILE) : -1e9;
+      const prow = g.ready && !freeRef.current ? Math.floor(g.y / TILE) : -1e9;
       const liquidFrame = Math.floor(t * 7) % LIQUID_FRAMES;
       const nowMs = performance.now();
       const fx0 = x0 - 40, fx1 = x1 + 40;
-      const own = playerCreature ? store.get(`player:${g.moving ? 'walk' : 'idle'}`, playerCreature.genome, CStage.TRIBAL, g.moving ? 'walk' : 'idle', PLAYER_K, playerCreature.citizen, true) : null;
+      const av = avatarRef.current, an = g.moving ? 'walk' : 'idle';
+      const own = av ? store.get(`avatar:${av.city}:${av.stage}:${av.citizen}:${an}`, av.genome, av.stage, an, PLAYER_K, av.citizen, true)
+        : playerCreature ? store.get(`player:${an}`, playerCreature.genome, CStage.TRIBAL, an, PLAYER_K, playerCreature.citizen, true) : null;
       const drawPlayer = () => {
         if (own) {
           const fr = Math.floor(g.moving ? g.anim * 1.35 : performance.now() / 160) % own.frames;
@@ -1026,7 +1050,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const DW = Math.round(W * dpr), DH = Math.round(H * dpr);
       if (canvas.width !== DW || canvas.height !== DH) { canvas.width = DW; canvas.height = DH; }
       if (overlay.width !== DW || overlay.height !== DH) { overlay.width = DW; overlay.height = DH; }
-      if (!spectator || lodOf(g.zoomView) === 'local') requestChunks();
+      if (!freeRef.current || lodOf(g.zoomView) === 'local') requestChunks();
       // keep the worker field window under the camera / player
       if (g.ready && Math.floor(now / 1000) !== Math.floor(last0 / 1000)) {
         const mpx = g.x / TILE / (WORLD_TILES_X / session.width), mpy = g.y / TILE / (WORLD_TILES_X / session.width);
@@ -1052,7 +1076,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       }
 
       // --- spectator camera: free flight, faster the further the zoom is pulled out ---
-      if (spectator && g.ready) {
+      if (freeRef.current && g.ready) {
         let mx = 0, my = 0;
         const K = g.keys;
         if (K.has('a') || K.has('arrowleft')) mx -= 1;
@@ -1075,7 +1099,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       }
 
       // --- movement ---
-      if (g.ready && !spectator) {
+      if (g.ready && !freeRef.current) {
         let mx = 0, my = 0;
         const K = g.keys;
         if (K.has('a') || K.has('arrowleft')) mx -= 1;
@@ -1123,7 +1147,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
 
       // --- interaction target (same terrace only; hand-gatherables win over tool-only things) ---
       let target: Feature | null = null, td = REACH, toolT: Feature | null = null, toolD = REACH - 6;
-      if (g.ready && local && !spectator) nearbyFeatures(g.x, g.y, f => {
+      if (g.ready && local && !freeRef.current) nearbyFeatures(g.x, g.y, f => {
         if (f.l !== g.level) return;
         const h = harvestFor(f);
         if (h.kind === 'none' || (h.kind === 'pick' && g.picked.has(f.id))) return;
@@ -1213,7 +1237,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           if (Math.abs(f.x - g.x) < s.c.width / 2 - 3 && fy - s.ay < feet - 8 && fy > head + 6) occ = true;
         });
         g.lensK += ((occ ? 1 : 0) - g.lensK) * Math.min(1, dt * 7);
-        lensOn = g.lensK > 0.04 && !spectator;
+        lensOn = g.lensK > 0.04 && !freeRef.current;
       } else g.lensK = 0;
       const lensX = g.x, lensY = g.y - g.lift - 10;
       const lensStop = { row: Math.floor(g.y / TILE), y: g.y };
@@ -1317,13 +1341,14 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }
         if (sun > -0.2 && sun < 0.25) { octx.fillStyle = `rgba(255,120,40,${(1 - Math.abs(sun - 0.02) / 0.23) * 0.12})`; octx.fillRect(0, 0, DW, DH); }
         fx.drawScreen(octx, DW, DH, S, fxc, toScreen);
-        if (spectator && !cine) drawCityLabels(toScreen, dpr, S, false, DW);
+        if (spectator && !cine && !avatarRef.current) drawCityLabels(toScreen, dpr, S, false, DW);
+        else cityHits.current = [];
       } else if (g.ready && !cine) {
         // zoomed-out views: a clear "you are here" marker (drawn at every horizontal wrap of the planet)
         const [px, py] = toScreen(g.x, g.y - g.lift);
         for (let k = -1; k <= 1; k++) {
           const sx = px + k * WORLD_PX * S;
-          if (sx > -40 && sx < DW + 40) drawPlayerMarker(sx, py, t, dpr, lod === 'world', spectator);
+          if (sx > -40 && sx < DW + 40) drawPlayerMarker(sx, py, t, dpr, lod === 'world', freeRef.current);
         }
         if (lod === 'world') {
           // latitude / longitude graticule
@@ -1436,7 +1461,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       <canvas
         ref={canvasRef}
         className="absolute inset-0 w-full h-full touch-none"
-        style={{ imageRendering: 'pixelated', cursor: spectator && !cityPick ? (dragRef.current ? 'grabbing' : 'grab') : 'crosshair' }}
+        style={{ imageRendering: 'pixelated', cursor: free && !cityPick ? (dragRef.current ? 'grabbing' : 'grab') : 'crosshair' }}
         onPointerMove={e => {
           if (e.pointerType === 'mouse') G.current.mouse = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY };
           const d = dragRef.current;
@@ -1449,7 +1474,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }}
         onPointerLeave={() => { G.current.mouse = { x: -1, y: -1 }; }}
         onPointerDown={e => {
-          if (spectator) {
+          if (free) {
             const ox = e.nativeEvent.offsetX, oy = e.nativeEvent.offsetY;
             const hit = cityHits.current.find(h => ox >= h.x && ox <= h.x + h.w && oy >= h.y && oy <= h.y + h.h);
             if (hit) { selectCity(hit.id); return; }
@@ -1553,14 +1578,20 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       )}
       {toast && <div className="absolute left-1/2 -translate-x-1/2 top-20 bg-black/80 border border-amber-300/30 text-amber-200 text-sm rounded-lg px-3 py-1.5 pointer-events-none">{toast}</div>}
 
-      {spectator && !loading && (
+      {avatar && !loading && (
+        <div className="absolute left-1/2 -translate-x-1/2 top-12 flex items-center gap-3 bg-black/70 backdrop-blur-md border border-emerald-300/30 rounded-xl px-3 py-1.5 text-sm text-white">
+          <span>Cidadão de <b>{avatar.city}</b></span>
+          <button onClick={() => setAvatar(null)} className="bg-sky-500/20 border border-sky-300/30 text-sky-100 rounded-lg px-2 py-1 text-xs hover:bg-sky-500/30">Voltar ao espectador (Esc)</button>
+        </div>
+      )}
+      {free && !loading && (
         <div className="absolute left-1/2 -translate-x-1/2 bottom-3 pointer-events-none bg-black/65 backdrop-blur-md border border-sky-300/25 rounded-xl px-3 py-2 text-center">
           <div className="text-sky-200 font-bold text-xs tracking-[0.25em]">MODO ESPECTADOR</div>
           <div className="text-[11px] font-mono text-neutral-300">WASD / setas ou arrastar · Shift acelera · roda: zoom (mais afastado = mais rápido)</div>
         </div>
       )}
 
-      {spectator && !loading && (() => {
+      {free && !loading && (() => {
         const sel = cityList.find(c => c.id === selCity) ?? null;
         const LEGEND: [string, string][] = [['#50c85a', 'Residencial'], ['#4682eb', 'Comercial'], ['#ebcd3c', 'Industrial'], ['#82d2f5', 'Administrativo'],
           ['#dc3c37', 'Militar'], ['#a05ad2', 'Campos (fazenda, mina…)'], ['#8a857c', 'Muralhas e torres'], ['#9a7048', 'Ruas (material da era)']];
@@ -1604,6 +1635,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
                     <button onClick={() => deleteCity(sel.id)} disabled={!!cityBusy} className="flex-1 flex items-center justify-center gap-1.5 bg-red-500/10 border border-red-300/20 text-red-200 rounded-lg py-1.5 text-xs hover:bg-red-500/20"><Trash2 className="w-3.5 h-3.5" /> Remover</button>
                   </div>
                 )}
+                {sel && <button onClick={() => enterCity(sel.id)} className="w-full flex items-center justify-center gap-1.5 bg-emerald-500/10 border border-emerald-300/25 text-emerald-100 rounded-lg py-1.5 text-xs hover:bg-emerald-500/20"><Footprints className="w-3.5 h-3.5" /> Entrar como cidadão</button>}
                 {sel && <button onClick={() => { setSelCity(null); setCityPick(true); }} className="w-full flex items-center justify-center gap-1.5 bg-sky-500/10 border border-sky-300/20 text-sky-100 rounded-lg py-1.5 text-xs hover:bg-sky-500/20"><Building2 className="w-3.5 h-3.5" /> Gerar outra cidade</button>}
                 <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer select-none">
                   <input type="checkbox" checked={hideZones} className="accent-sky-400"
@@ -1621,7 +1653,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       })()}
 
       {/* Hotbar */}
-      {!spectator && <div className="absolute left-1/2 -translate-x-1/2 bottom-3 flex items-center gap-1 bg-black/60 backdrop-blur-md border border-white/10 rounded-xl p-1.5 max-w-[calc(100%-16px)] overflow-x-auto no-scrollbar">
+      {!free && <div className="absolute left-1/2 -translate-x-1/2 bottom-3 flex items-center gap-1 bg-black/60 backdrop-blur-md border border-white/10 rounded-xl p-1.5 max-w-[calc(100%-16px)] overflow-x-auto no-scrollbar">
         {Array.from({ length: 9 }).map((_, i) => {
           const id = order[i];
           const it = id ? ITEMS[id] : undefined;
@@ -1636,7 +1668,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       </div>}
 
       {/* Mobile action button */}
-      {!spectator && <button
+      {!free && <button
         className="sm:hidden absolute right-4 bottom-24 w-16 h-16 rounded-full bg-emerald-500/80 border-2 border-white/40 text-black flex items-center justify-center shadow-2xl active:scale-95"
         onPointerDown={e => { e.stopPropagation(); interact(G.current.target); }}
       ><Hand className="w-7 h-7" /></button>}

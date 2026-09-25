@@ -10,7 +10,8 @@ import { CZ, CityPlan } from '../../lib/city/codes';
 import { CHUNK, TILE } from '../../lib/terrain/types';
 import type { SpriteStore, Sheet } from '../../lib/fauna/spriteStore';
 
-/** citizens are drawn a little smaller than the player, in proportion with the city's buildings */
+/** every civilised creature in the world (citizens and the player's own species) is drawn at this scale,
+ * in proportion with the city's buildings, trees and animals */
 export const CITIZEN_K = 0.32;
 const VARIANTS = 6;
 const WALK = new Set<number>([CZ.ROAD, CZ.ARTERY, CZ.PLAZA, CZ.GATE, CZ.TRACK, CZ.BRIDGE]);
@@ -26,32 +27,35 @@ interface Walker {
 }
 export interface CitizenDraw { x: number; y: number; gy: number; sheet: Sheet; frame: number; row: number }
 
+const GENOMES = new Map<string, Genome>();
+/** the species that built a city (same recipe as the structure generator's builders) */
+export function cityGenome(plan: CityPlan): Genome {
+  const c = plan.meta.culture, key = c.seed + c.mode;
+  let g = GENOMES.get(key);
+  if (!g) {
+    const p = c.params;
+    g = makeGenome(c.seed, { gravity: p.gravity, temperature: p.temperature, water: p.water, atmosphere: 0.5, star: p.star, diet: 0.5, exotic: p.exotic, size: 0.5 }, c.mode);
+    GENOMES.set(key, g);
+  }
+  return g;
+}
+
+/** id of the city whose visible street is on this tile, or -1 */
+export function streetCity(cities: Map<number, { plan: CityPlan; p: number }>, tx: number, ty: number): number {
+  const key = `${Math.floor(tx / CHUNK)},${Math.floor(ty / CHUNK)}`, q = (ty - Math.floor(ty / CHUNK) * CHUNK) * CHUNK + tx - Math.floor(tx / CHUNK) * CHUNK;
+  for (const [id, c] of cities) {
+    const ch = c.plan.chunks[key];
+    if (ch && WALK.has(ch.code[q]) && ch.stage[q] <= c.p) return id;
+  }
+  return -1;
+}
+
 export class Citizens {
   private list: Walker[] = [];
-  private genomes = new Map<string, Genome>();
   private hit = 0.05;
   constructor(private store: SpriteStore) {}
 
-  private genomeOf(plan: CityPlan) {
-    const c = plan.meta.culture, key = c.seed + c.mode;
-    let g = this.genomes.get(key);
-    if (!g) {
-      const p = c.params;
-      g = makeGenome(c.seed, { gravity: p.gravity, temperature: p.temperature, water: p.water, atmosphere: 0.5, star: p.star, diet: 0.5, exotic: p.exotic, size: 0.5 }, c.mode);
-      this.genomes.set(key, g);
-    }
-    return g;
-  }
-
-  /** id of the city whose visible street is on this tile, or -1 */
-  private street(cities: Map<number, { plan: CityPlan; p: number }>, tx: number, ty: number): number {
-    const key = `${Math.floor(tx / CHUNK)},${Math.floor(ty / CHUNK)}`, q = (ty - Math.floor(ty / CHUNK) * CHUNK) * CHUNK + tx - Math.floor(tx / CHUNK) * CHUNK;
-    for (const [id, c] of cities) {
-      const ch = c.plan.chunks[key];
-      if (ch && WALK.has(ch.code[q]) && ch.stage[q] <= c.p) return id;
-    }
-    return -1;
-  }
+  private street(cities: Map<number, { plan: CityPlan; p: number }>, tx: number, ty: number) { return streetCity(cities, tx, ty); }
 
   update(dt: number, cities: Map<number, { plan: CityPlan; p: number }>, view: { x0: number; y0: number; x1: number; y1: number }, loaded: (x: number, y: number) => boolean, R: () => number) {
     if (!cities.size) { this.list = []; return; }
@@ -114,7 +118,7 @@ export class Citizens {
       if (!c) continue;
       const plan = c.plan, era = plan.meta.era, anim = w.pause > 0 ? 'idle' : 'walk';
       const key = `cit:${plan.meta.culture.seed}:${era}:${w.v}:${anim}`;
-      const sheet = this.store.get(key, this.genomeOf(plan), ERAS[era], anim, CITIZEN_K, w.v);
+      const sheet = this.store.get(key, cityGenome(plan), ERAS[era], anim, CITIZEN_K, w.v);
       if (!sheet) continue;
       const frame = anim === 'walk' ? Math.floor(w.anim) % sheet.frames : Math.floor(performance.now() / 200 + w.v) % sheet.frames;
       out.push({ x: w.x, y: w.y - lift(w.x, w.y), gy: w.y, sheet, frame, row: w.dir8 });
