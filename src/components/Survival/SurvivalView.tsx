@@ -19,6 +19,7 @@ import { LayerType } from '../../lib/planet-generator/generator';
 import { frameMeter } from '../../lib/render/frameMeter';
 import { StructPool } from '../../lib/structure/structPool';
 import { CITY_K } from '../../lib/structure/render';
+import { CloudField } from './clouds';
 import { Citizens, CitizenDraw, CITIZEN_K, cityGenome, streetCity } from './citizens';
 import type { CityBuilding, CityPlan } from '../../lib/city/codes';
 import type { Cinematic, CineApi } from '../Demo/cinema';
@@ -50,14 +51,29 @@ interface LoadedChunk {
   tex: WebGLTexture | null;
 }
 /**
- * Zoom stops (CSS px per world px). Only two levels of detail: the gameplay world itself (fully detailed, from close-up
- * down to 1/4, where ~15 x 9 chunks fill a 1080p screen) and the world map. There is no simplified regional level.
+ * Zoom stops (CSS px per world px) and levels of detail:
+ *  - local (down to 1/2): the gameplay world in full detail;
+ *  - far (1/4, the last gameplay stop, the heaviest): same chunks without small things (grass, sticks, pebbles...),
+ *    the first real clouds float over it;
+ *  - regional (1/8 .. 1/128): sampled terrain blocks (no terrain detail, no creatures, bushes or rocks), more clouds,
+ *    city territories outlined;
+ *  - world: the planet map.
  */
-const ZOOMS = [6, 5, 4, 3, 2, 1, 1 / 2, 1 / 4, 1 / 256, 1 / 512, 1 / 1024, 0];
+const ZOOMS = [6, 5, 4, 3, 2, 1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64, 1 / 128, 1 / 256, 1 / 512, 1 / 1024, 0];
 const MIN_LOCAL_ZOOM = 1 / 4;
-type Lod = 'local' | 'world';
-const lodOf = (z: number): Lod => (z >= MIN_LOCAL_ZOOM - 1e-9 ? 'local' : 'world');
-const LOD_NAME: Record<Lod, string> = { local: 'Gameplay', world: 'Mapa-múndi' };
+type Lod = 'local' | 'far' | 'regional' | 'world';
+const lodOf = (z: number): Lod => (z >= 1 / 2 - 1e-9 ? 'local' : z >= 1 / 4 - 1e-9 ? 'far' : z >= 1 / 128 - 1e-9 ? 'regional' : 'world');
+/** levels drawn from the gameplay chunks */
+const chunked = (l: Lod) => l === 'local' || l === 'far';
+const LOD_NAME: Record<Lod, string> = { local: 'Gameplay', far: 'Gameplay distante', regional: 'Regional', world: 'Mapa-múndi' };
+/** Regional LOD block: REGION_N x REGION_N colours sampled every `step` tiles. */
+interface RegionBlock { img: Img; slot: number; step: number; tx: number; ty: number; lastUsed: number }
+const REGION_N = 64;
+const REGION_SLOTS = (2048 / REGION_N) ** 2;
+/** small things left out at the far gameplay zoom */
+const SMALL_FEATS = new Set<Feat>([Feat.TALL_GRASS, Feat.FLOWER, Feat.MUSHROOM, Feat.STICK, Feat.LOOSE_STONE, Feat.FLINT, Feat.NUGGET_COPPER,
+  Feat.NUGGET_TIN, Feat.NUGGET_GOLD, Feat.LIMONITE, Feat.SEASHELL, Feat.FERN, Feat.FLAX, Feat.WILD_CROP, Feat.LILY_PAD, Feat.REEDS, Feat.CATTAIL,
+  Feat.ICE_CRYSTAL, Feat.SALT_CRYSTAL, Feat.SULFUR, Feat.OBSIDIAN, Feat.DIAMOND]);
 const WORLD_PX = WORLD_TILES_X * TILE;
 
 /** Everything the scene needs to draw, independent of the backend. */
@@ -186,6 +202,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const dayLockRef = useRef(false);
   dayLockRef.current = dayLock;
   const [hideZones, setHideZones] = useState(false);
+  const zonesHiddenRef = useRef(false);
+  zonesHiddenRef.current = hideZones;
   const [cityPick, setCityPick] = useState(false);
   const cityPickRef = useRef(false);
   cityPickRef.current = cityPick;
@@ -216,6 +234,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const [perf, setPerf] = useState({ fps: 0, cpu: 0, chunkMs: 0, workers: 1, chunks: 0, draws: 0, gpu: false });
   const [perfOn, setPerfOn] = useState(true);
   const fx = useMemo(() => new NatureFx(seedToInt(cfg.seed + '_fx')), [cfg]);
+  const clouds = useMemo(() => new CloudField(seedToInt(cfg.seed + '_clouds')), [cfg]);
   // Dev-only handle for automated visual checks (time of day, weather...)
   useEffect(() => { if (import.meta.env.DEV) (window as any).__survival = { G, fx, fauna, store }; }, [fx]);
 
@@ -567,7 +586,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const tileAtScreen = (sx: number, sy: number) => {
     const w = screenToWorld(sx, sy);
     const tx = Math.floor(w.x / TILE), r0 = Math.floor(w.y / TILE);
-    if (lodOf(G.current.zoomView) !== 'local') return { tx, ty: r0 };
+    if (!chunked(lodOf(G.current.zoomView))) return { tx, ty: r0 };
     for (let r = r0 + MAX_LEVEL; r >= r0; r--) {
       const L = levelAt(w.x, r * TILE + TILE / 2);
       if (L === null) continue;
@@ -629,7 +648,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const goToCity = (m: CityMeta) => {
     const g = G.current;
     g.x = m.tx * TILE + TILE / 2; g.y = m.ty * TILE + TILE / 2;
-    if (lodOf(g.zoomView) !== 'local') g.zoomIdx = ZOOMS.indexOf(1 / 4);
+    if (!chunked(lodOf(g.zoomView))) g.zoomIdx = ZOOMS.indexOf(1 / 4);
   };
 
   // ---------------------------------------------------------------------------
@@ -683,6 +702,93 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const H = WORLD_PX * (session.height / session.width);
       for (let k = Math.floor(x0 / WORLD_PX); k <= Math.floor(x1 / WORLD_PX); k++) p.blit(mapImg, 0, 0, mapImg.w, mapImg.h, k * WORLD_PX, 0, WORLD_PX, H);
     };
+    // --- regional LOD blocks (sampled terrain, painted cities, no features) ---
+    let farNow = false;
+    const regions = new Map<string, RegionBlock>();
+    const regionPending = new Set<string>();
+    const freeSlots: number[] = [];
+    const regionTex = gl ? gl.newTexture(2048, 2048) : null;
+    for (let i = REGION_SLOTS - 1; i >= 0; i--) freeSlots.push(i);
+    let regionStep = 0, regionGen = 0, regionGenSeen = -1;
+    const requestRegions = (step: number, x0: number, y0: number, x1: number, y1: number, cx: number, cy: number) => {
+      const pool = poolRef.current;
+      if (!pool) return;
+      if (step !== regionStep) { pool.clearRegions(); regionStep = step; }
+      const span = REGION_N * step, spanPx = span * TILE;
+      const want: [number, number, number][] = [];
+      for (let by = Math.floor(y0 / spanPx); by <= Math.floor(y1 / spanPx); by++) {
+        if (by * span >= worldTilesY || (by + 1) * span <= 0) continue;
+        for (let bx = Math.floor(x0 / spanPx); bx <= Math.floor(x1 / spanPx); bx++) {
+          const k = `${step}:${bx}:${by}`;
+          const hit = regions.get(k);
+          if (hit) { hit.lastUsed = performance.now(); continue; }
+          if (regionPending.has(k)) continue;
+          want.push([bx, by, ((bx + 0.5) * spanPx - cx) ** 2 + ((by + 0.5) * spanPx - cy) ** 2]);
+        }
+      }
+      want.sort((a, b) => a[2] - b[2]);
+      for (const [bx, by] of want) {
+        if (regionPending.size >= pool.size * 2) break;
+        if (!pool.coversTile(bx * span + span / 2, by * span + span / 2)) continue;
+        const k = `${step}:${bx}:${by}`;
+        regionPending.add(k);
+        const gen0 = regionGen;
+        pool.region(bx * span, by * span, step, REGION_N).then(px => {
+          regionPending.delete(k);
+          if (!aliveRef.current || gen0 !== regionGen) return;
+          let img: Img, slot = -1;
+          const evict = () => {
+            let oldK = '', oldT = Infinity;
+            for (const [kk, b] of regions) if (b.lastUsed < oldT) { oldT = b.lastUsed; oldK = kk; }
+            const b = regions.get(oldK);
+            if (b) { regions.delete(oldK); if (b.slot >= 0) freeSlots.push(b.slot); }
+          };
+          if (gl && regionTex) {
+            if (!freeSlots.length) evict();
+            slot = freeSlots.pop()!;
+            const per = 2048 / REGION_N;
+            const sx = (slot % per) * REGION_N, sy = Math.floor(slot / per) * REGION_N;
+            gl.upload(regionTex, sx, sy, REGION_N, REGION_N, px);
+            img = { reg: { tex: regionTex, x: sx, y: sy, w: REGION_N, h: REGION_N, tw: 2048, th: 2048 }, w: REGION_N, h: REGION_N };
+          } else {
+            if (regions.size >= 600) evict();
+            img = canvasImg(px, REGION_N, REGION_N);
+          }
+          regions.set(k, { img, slot, step, tx: bx * span, ty: by * span, lastUsed: performance.now() });
+        }).catch(() => regionPending.delete(k));
+      }
+    };
+    /** cities changed (plan, evolution, zone colours): sampled blocks are redrawn */
+    const refreshRegions = () => {
+      const sig = [...session.cities.values()].reduce((a, c) => a + c.p + c.plan.meta.id * 1000 + c.plan.meta.era * 7, session.cities.size * 13) + (zonesHiddenRef.current ? 0.5 : 0);
+      if (sig === regionGenSeen) return;
+      regionGenSeen = sig; regionGen++;
+      for (const b of regions.values()) if (b.slot >= 0) freeSlots.push(b.slot);
+      regions.clear();
+      poolRef.current?.clearRegions();
+    };
+    /** bare terrain of the chunks still loaded (fills in while the regional blocks stream) */
+    const drawChunkGround = (p: Painter, x0: number, y0: number, x1: number, y1: number) => {
+      for (const c of G.current.chunks.values()) {
+        const bx = c.data.cx * CHUNK_PX, by = c.data.cy * CHUNK_PX;
+        if (bx > x1 || bx + CHUNK_PX < x0 || by > y1 + MAX_LEVEL * LIFT || by + CHUNK_PX < y0) continue;
+        for (const row of c.rows) p.blit(row.img, 0, 0, row.img.w, row.img.h, bx, row.y, row.img.w, row.img.h);
+      }
+    };
+    const drawRegions = (p: Painter, step: number, x0: number, y0: number, x1: number, y1: number) => {
+      // coarser blocks first (they fill the gaps while finer ones stream in), then the current resolution
+      const list: RegionBlock[] = [];
+      for (const b of regions.values()) {
+        if (b.step < step || b.step > step * 16) continue;
+        const s2 = REGION_N * b.step * TILE;
+        const dx = b.tx * TILE, dy = b.ty * TILE;
+        if (dx > x1 || dx + s2 < x0 || dy > y1 || dy + s2 < y0) continue;
+        list.push(b);
+      }
+      list.sort((a, b) => b.step - a.step);
+      for (const b of list) { const s2 = REGION_N * b.step * TILE; p.blit(b.img, 0, 0, REGION_N, REGION_N, b.tx * TILE, b.ty * TILE, s2, s2); }
+    };
+
     const playerFrame = () => {
       const g = G.current;
       if (g.gatherT > 0) return player.gather[g.dir][Math.min(3, Math.floor((1 - g.gatherT / 0.5) * 4))];
@@ -745,7 +851,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           const c = rowChunks[k];
           if (!c) continue;
           for (const f of c.byRow[j]) {
-            if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id)) continue;
+            if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id) || (farNow && SMALL_FEATS.has(f.t))) continue;
             const sh = bank.get(f.t, f.v, false).shadow;
             if (sh) p.shadow(f.x, f.y - f.l * LIFT, sh);
           }
@@ -761,7 +867,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           const c = rowChunks[k];
           if (!c) continue;
           for (const f of c.byRow[j]) {
-            if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id)) continue;
+            if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id) || (farNow && SMALL_FEATS.has(f.t))) continue;
             while (rowAnimals && ai < rowAnimals.length && rowAnimals[ai].a.y < f.y && f.t !== Feat.LILY_PAD) drawAnimal(rowAnimals[ai++]);
             if (!playerDone && f.y > g.y && f.t !== Feat.LILY_PAD) { drawPlayer(); playerDone = true; }
             if (stop && r === stop.row && f.y > stop.y) continue;
@@ -956,9 +1062,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const [r, g, b] = h < 1 ? [1, x, 0] : h < 2 ? [x, 1, 0] : h < 3 ? [0, 1, x] : h < 4 ? [0, x, 1] : h < 5 ? [x, 0, 1] : [1, 0, x];
       return [Math.round(70 + r * 185), Math.round(70 + g * 185), Math.round(70 + b * 185)];
     };
-    const territoryCanvas = (id: number) => {
+    const territoryCanvas = (id: number, outline = false) => {
       const c0 = session.cities.get(id)!;
-      const e = terrCache.get(id);
+      const ck = outline ? -id - 1 : id;
+      const e = terrCache.get(ck);
       if (e && e.plan === c0.plan && e.p === c0.p) return e.c;
       const m = c0.plan.meta, GS = m.gs, T = c0.plan.territory, p = c0.p;
       const c = e?.c ?? document.createElement('canvas');
@@ -971,20 +1078,20 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         if (!inside(i, j)) continue;
         const edge = !inside(i + 1, j) || !inside(i - 1, j) || !inside(i, j + 1) || !inside(i, j - 1);
         const o = (j * GS + i) * 4;
-        im.data[o] = r; im.data[o + 1] = g; im.data[o + 2] = b; im.data[o + 3] = edge ? 235 : 80;
+        im.data[o] = r; im.data[o + 1] = g; im.data[o + 2] = b; im.data[o + 3] = edge ? 235 : outline ? 22 : 80;
       }
       x.putImageData(im, 0, 0);
-      terrCache.set(id, { plan: c0.plan, p, c });
+      terrCache.set(ck, { plan: c0.plan, p, c });
       return c;
     };
-    const drawCityLabels = (toScreen: (x: number, y: number) => [number, number], dpr: number, S: number, world: boolean, DW: number) => {
+    const drawCityLabels = (toScreen: (x: number, y: number) => [number, number], dpr: number, S: number, world: boolean, DW: number, outline = false) => {
       const hits: { id: number; x: number; y: number; w: number; h: number }[] = [];
       for (const [id, c] of session.cities) {
         const m = c.plan.meta;
         for (let k = world ? -1 : 0; k <= (world ? 1 : 0); k++) {
           if (world) {
             // territory (dilated edge so it reads even when the map shows the whole planet)
-            const cv = territoryCanvas(id);
+            const cv = territoryCanvas(id, outline);
             const [sx0, sy0] = toScreen((m.ox - 1) * TILE + k * WORLD_PX, (m.oy - 1) * TILE);
             const size = m.gs * m.c * TILE * S;
             if (sx0 + size < 0 || sx0 > DW) continue;
@@ -1020,7 +1127,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     let cineFade = cine ? 1 : 0, cineZoom = 3, cineWeather = '';
     const cineApi: CineApi = {
       loaded: (x, y, zoom) => {
-        if (lodOf(zoom) !== 'local') return !!mapImg;
+        if (!chunked(lodOf(zoom))) return !!mapImg;
         const hw = canvas.clientWidth / zoom / 2 + 8, hh = canvas.clientHeight / zoom / 2 + 8;
         const g = G.current;
         for (let cy = Math.floor((y - hh) / CHUNK_PX); cy <= Math.floor((y + hh + MAX_LEVEL * LIFT) / CHUNK_PX); cy++)
@@ -1050,7 +1157,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const DW = Math.round(W * dpr), DH = Math.round(H * dpr);
       if (canvas.width !== DW || canvas.height !== DH) { canvas.width = DW; canvas.height = DH; }
       if (overlay.width !== DW || overlay.height !== DH) { overlay.width = DW; overlay.height = DH; }
-      if (!freeRef.current || lodOf(g.zoomView) === 'local') requestChunks();
+      if (!freeRef.current || chunked(lodOf(g.zoomView))) requestChunks();
       // keep the worker field window under the camera / player
       if (g.ready && Math.floor(now / 1000) !== Math.floor(last0 / 1000)) {
         const mpx = g.x / TILE / (WORLD_TILES_X / session.width), mpy = g.y / TILE / (WORLD_TILES_X / session.width);
@@ -1142,7 +1249,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const Z = g.zoomView;
       const lod = lodOf(Z);
       if (lod !== lodShown || (!cine && zt !== zoomShown)) { lodShown = lod; zoomShown = zt; setLodLabel({ lod, zoom: zt }); }
-      const local = lod === 'local';
+      const local = chunked(lod), far = lod === 'far', regional = lod === 'regional';
+      farNow = far;
       if (standbyRef.current) { raf = requestAnimationFrame(frame); return; }
 
       // --- interaction target (same terrace only; hand-gatherables win over tool-only things) ---
@@ -1217,6 +1325,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         if (g.ready) { fx.update(fxc); fauna.update(dt, g.x, g.y, world, fx, Math.random); }
       } else {
         if (!mapImg) loadMap();
+        if (regional && g.ready) {
+          refreshRegions();
+          requestRegions(2 ** Math.max(0, Math.ceil(Math.log2(0.75 / (TILE * zt)))), x0, y0, x1, y1, camX, camY);
+        }
       }
 
       // --- vision lens: when terrain or a tree hides the player, cut a dithered window through it ---
@@ -1268,6 +1380,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
         } else {
           drawMap(painter, x0, x1);
+          if (regional) { if (Z >= 1 / 32) drawChunkGround(painter, x0, y0, x1, y1); drawRegions(painter, regionStep || 1, x0, y0, x1, y1); }
         }
         gl.flush();
       } else if (ctx) {
@@ -1296,6 +1409,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
         } else {
           drawMap(painter, x0, x1);
+          if (regional) { if (Z >= 1 / 32) drawChunkGround(painter, x0, y0, x1, y1); drawRegions(painter, regionStep || 1, x0, y0, x1, y1); }
         }
       }
 
@@ -1307,6 +1421,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         octx.imageSmoothingEnabled = false;
         fx.drawWorldBelow(octx, fxc);
         fx.drawWorldAbove(octx, fxc);
+        // procedural cloud shadows; at the far gameplay zoom a few real clouds float over the land
+        const cov = 0.22 + fx.intensity * 0.55, stormy = fx.weather === 'storm' || fx.weather === 'rain';
+        if ((sun > 0 && fxc.climate.living) || fx.intensity > 0.2) clouds.draw(octx, fxc.view, t, fx.wind, cov, Z, 'shadow', 0.13 + fx.intensity * 0.12);
+        if (far) clouds.draw(octx, fxc.view, t, fx.wind, Math.min(0.45, cov * 0.8), Z, 'cloud', 0.7, stormy);
 
         const mark = g.target;
         if (mark) {
@@ -1344,6 +1462,15 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         if (spectator && !cine && !avatarRef.current) drawCityLabels(toScreen, dpr, S, false, DW);
         else cityHits.current = [];
       } else if (g.ready && !cine) {
+        if (regional) {
+          // regional: shadows and plenty of clouds over the sampled land
+          octx.setTransform(S, 0, 0, S, tx0, ty0);
+          const view = { x0, y0, x1, y1 };
+          const cov = 0.22 + fx.intensity * 0.55, stormy = fx.weather === 'storm' || fx.weather === 'rain';
+          clouds.draw(octx, view, t, fx.wind, cov, Z, 'shadow', 0.1 + fx.intensity * 0.1);
+          clouds.draw(octx, view, t, fx.wind, cov, Z, 'cloud', 0.9, stormy);
+          octx.setTransform(1, 0, 0, 1, 0, 0);
+        }
         // zoomed-out views: a clear "you are here" marker (drawn at every horizontal wrap of the planet)
         const [px, py] = toScreen(g.x, g.y - g.lift);
         for (let k = -1; k <= 1; k++) {
@@ -1362,7 +1489,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
           octx.stroke();
         }
-        if (spectator) drawCityLabels(toScreen, dpr, S, lod === 'world', DW);
+        if (spectator || regional) drawCityLabels(toScreen, dpr, S, true, DW, regional);
       }
 
       if (cineFade > 0.002) {
@@ -1481,7 +1608,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
             if (cityPick && !cityBusy) {
               const t = tileAtScreen(ox, oy);
               setCityPick(false);
-              if (lodOf(G.current.zoomView) !== 'local') { G.current.x = t.tx * TILE + TILE / 2; G.current.y = t.ty * TILE + TILE / 2; }
+              if (!chunked(lodOf(G.current.zoomView))) { G.current.x = t.tx * TILE + TILE / 2; G.current.y = t.ty * TILE + TILE / 2; }
               generateCity(t.tx, t.ty, cityEra, cityEvo);
               return;
             }
@@ -1516,18 +1643,18 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5">
           <button onClick={() => zoomStep(-1)} title="Aproximar (roda / +)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><ZoomIn className="w-4 h-4" /></button>
           <div className="flex flex-col gap-1 py-1">
-            {(['local', 'world'] as Lod[]).map(l => (
+            {(['local', 'far', 'regional', 'world'] as Lod[]).map(l => (
               <div key={l} title={LOD_NAME[l]} className={`w-2 h-2 rounded-full mx-auto ${lodLabel.lod === l ? 'bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]' : 'bg-white/25'}`} />
             ))}
           </div>
           <button onClick={() => zoomStep(1)} title="Afastar (roda / -)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><ZoomOut className="w-4 h-4" /></button>
         </div>
       )}
-      {!loading && lodLabel.lod !== 'local' && (
+      {!loading && (lodLabel.lod === 'regional' || lodLabel.lod === 'world') && (
         <div className={`absolute left-1/2 -translate-x-1/2 ${spectator ? 'bottom-[70px]' : 'bottom-[76px]'} pointer-events-none bg-black/70 border border-white/15 rounded-lg px-3 py-1.5 text-center`}>
           <div className="text-white font-bold text-sm tracking-wide">{LOD_NAME[lodLabel.lod]}</div>
           <div className="text-[11px] font-mono text-neutral-400">
-            superfície do planeta inteiro · roda para voltar
+            {lodLabel.lod === 'regional' ? `1 px ≈ ${(1 / (TILE * lodLabel.zoom)).toFixed(lodLabel.zoom > 1 / 32 ? 1 : 0)} tiles · a região ao redor` : 'superfície do planeta inteiro'} · roda para voltar
           </div>
         </div>
       )}

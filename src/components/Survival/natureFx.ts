@@ -56,7 +56,6 @@ export class NatureFx {
   private nextWeather = 60;
   private nextFlock = 8;
   private rng = mulberry(1234);
-  private cloud: HTMLCanvasElement;
   private darkCanvas: HTMLCanvasElement;
   private lightningFlash = 0;
   private bolts: Bolt[] = [];
@@ -66,7 +65,6 @@ export class NatureFx {
 
   constructor(seed: number) {
     this.rng = mulberry(seed);
-    this.cloud = bakeCloudShadow(seed);
     this.darkCanvas = document.createElement('canvas');
     this.nextWeather = 40 + this.rng() * 60;
   }
@@ -374,17 +372,7 @@ export class NatureFx {
       ctx.fillRect(Math.round(m.x), Math.round(m.y), m.size, m.size);
     }
     ctx.globalAlpha = 1;
-    // cloud shadows drifting over the land
-    if (c.sun > 0 && c.climate.living || this.intensity > 0.2) {
-      const S = 3, tile = this.cloud.width * S;
-      const ox = ((c.t * 7 * (0.5 + this.wind)) % tile + tile) % tile, oy = ((c.t * 2) % tile + tile) % tile;
-      ctx.globalAlpha = 0.13 + this.intensity * 0.12;
-      ctx.imageSmoothingEnabled = true;
-      const sx = Math.floor((c.view.x0 - ox) / tile) * tile + ox, sy = Math.floor((c.view.y0 - oy) / tile) * tile + oy;
-      for (let y = sy; y < c.view.y1; y += tile) for (let x = sx; x < c.view.x1; x += tile) ctx.drawImage(this.cloud, x, y, tile, tile);
-      ctx.imageSmoothingEnabled = false;
-      ctx.globalAlpha = 1;
-    }
+    // (cloud shadows: drawn by the view from its procedural cloud field, see clouds.ts)
     // birds high above, with their shadows far below
     for (const b of this.birds) {
       const flap = Math.sin(b.ph) > 0;
@@ -513,23 +501,3 @@ function bakeGlow(): HTMLCanvasElement {
   return c;
 }
 
-function bakeCloudShadow(seed: number): HTMLCanvasElement {
-  const N = 192;
-  const c = document.createElement('canvas');
-  c.width = N; c.height = N;
-  const ctx = c.getContext('2d')!;
-  const img = ctx.createImageData(N, N);
-  const rng = mulberry(seed ^ 0x5bd1e995);
-  // tileable blobby noise from summed periodic sines (cheap, seamless)
-  const waves = Array.from({ length: 9 }, () => ({ fx: 1 + Math.floor(rng() * 3), fy: 1 + Math.floor(rng() * 3), ph: rng() * 6.28, a: 0.5 + rng() }));
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-    let v = 0;
-    for (const w of waves) v += Math.sin((x / N) * Math.PI * 2 * w.fx + Math.cos((y / N) * Math.PI * 2 * w.fy + w.ph) * 1.5 + w.ph) * w.a;
-    v = v / 5;
-    const a = Math.max(0, Math.min(1, (v - 0.15) * 2.2));
-    const k = (y * N + x) * 4;
-    img.data[k] = 10; img.data[k + 1] = 16; img.data[k + 2] = 30; img.data[k + 3] = a * 255;
-  }
-  ctx.putImageData(img, 0, 0);
-  return c;
-}

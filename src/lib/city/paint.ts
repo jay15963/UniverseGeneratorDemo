@@ -186,3 +186,16 @@ function wall(code: number, era: number, wx: number, wy: number, lx: number, ly:
   }
   return c;
 }
+
+/** One colour per tile for the regional map (no texture): streets by era, walls, and the zone tint (when shown). */
+export function cityRegionColor(code: number, era: number, base: RGB, zones: boolean): RGB | null {
+  if (isRoad(code) || code === CZ.PLAZA || code === CZ.GATE) {
+    if (code === CZ.BRIDGE) return era <= 1 ? [120, 88, 56] : era >= 7 ? [60, 150, 190] : [150, 146, 140];
+    const k = code === CZ.TRACK ? 0 : roadKind(era);
+    const c: RGB = k === 0 ? [140, 106, 72] : k === 1 ? [140, 134, 124] : k === 2 ? [66, 68, 72] : [44, 60, 96];
+    return code === CZ.PLAZA ? mul(c, 1.2) : c;
+  }
+  if (code === CZ.WALL || code === CZ.TOWER) return era === 0 ? [104, 74, 44] : era >= 7 ? [80, 200, 240] : era === 3 ? [150, 76, 56] : [150, 146, 138];
+  if (!zones) return null;
+  return tint(base, ZONE[code] ?? FIELD, 0.5);
+}

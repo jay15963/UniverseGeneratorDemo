@@ -29,7 +29,7 @@ import { Ground, Feat, Feature, ChunkData, TerrainRow, TILE, CHUNK, CHUNK_PX, WO
 import { fbm2, vnoise, rand2, ridge, hash3, mulberry, seedToInt, smoothstep } from './noise';
 import { RockType, ROCK_RAMPS, GROUND_RAMPS, LEAF, RGB, shiftRamp, vegetationHueShift, waterHueShift, hex, mixRGB } from './palettes';
 import { CZ, CityChunkData, isGraded, isRoad, isWallish, isZone, keepFeature } from '../city/codes';
-import { cityPixel } from '../city/paint';
+import { cityPixel, cityRegionColor } from '../city/paint';
 
 // ---------------------------------------------------------------------------
 // Cities painted into the terrain (per worker). A city plan is a set of per-chunk tile codes with the
@@ -45,6 +45,16 @@ export function cityRemove(id: number) { CITIES.delete(id); }
 /** show the district / field colours (off: only streets and walls are painted) */
 let CITY_ZONES = true;
 export function cityZones(on: boolean) { CITY_ZONES = on; }
+/** visible city code and era on a tile ([0, 0] outside every city) */
+function cityTile(tx: number, ty: number): [number, number] {
+  if (!CITIES.size) return [0, 0];
+  const cx = Math.floor(tx / CHUNK), cy = Math.floor(ty / CHUNK), q = (ty - cy * CHUNK) * CHUNK + tx - cx * CHUNK, key = `${cx},${cy}`;
+  for (const L of CITIES.values()) {
+    const d = L.chunks.get(key);
+    if (d && d.code[q] && d.stage[q] <= L.p) return [d.code[q], L.era];
+  }
+  return [0, 0];
+}
 
 type Mode = 'living' | 'arid' | 'airless' | 'glacial' | 'frozen' | 'volcanic' | 'toxic' | 'carbon';
 
@@ -408,6 +418,10 @@ export class TerrainGenerator {
         const leaf = cr[n > 0.7 ? 3 : n > 0.3 ? 2 : 1];
         const k2 = Math.min(1, t.forest * 1.25) * (0.55 + n * 0.45);
         c = [c[0] + (leaf[0] - c[0]) * k2, c[1] + (leaf[1] - c[1]) * k2, c[2] + (leaf[2] - c[2]) * k2];
+      }
+      if (CITIES.size) {
+        const [cz, ce] = cityTile(tx, ty);
+        if (cz && (!isWater(t.g) || cz === CZ.BRIDGE)) c = cityRegionColor(cz, ce, c, CITY_ZONES) ?? c;
       }
       cols[k * 3] = c[0]; cols[k * 3 + 1] = c[1]; cols[k * 3 + 2] = c[2];
     }
