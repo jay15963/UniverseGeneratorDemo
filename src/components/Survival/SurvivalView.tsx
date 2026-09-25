@@ -226,7 +226,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const citizens = useMemo(() => new Citizens(store), [store]);
   // vehicles and ships (rendered by a small pool of vehicle workers, created on first use)
   const vpoolRef = useRef<StructPool | null>(null);
-  const traffic = useMemo(() => new Traffic(() => (vpoolRef.current ??= new StructPool(2, () => new Worker(new URL('../../lib/vehicle/vehicle.worker.ts', import.meta.url), { type: 'module' })))), []);
+  const traffic = useMemo(() => new Traffic(() => (vpoolRef.current ??= new StructPool(2, () => new Worker(new URL('../../lib/vehicle/vehicle.worker.ts', import.meta.url), { type: 'module' }))), store, () => fauna.species), [store, fauna]);
   useEffect(() => () => { vpoolRef.current?.dispose(); vpoolRef.current = null; }, []);
   const player = useMemo(() => paintTribalPlayer(), []);
   const poolRef = useRef<TerrainPool | null>(null);
@@ -608,6 +608,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const plan = await session.planCity(tx, ty, era, toP(evo), id);
       if (!aliveRef.current) return;
       markStale(prev, plan.meta.bbox);
+      // the main roads to the neighbours cross chunks outside the city: redraw them too
+      const g = G.current;
+      for (const l of session.links.values()) if (l.chunks) for (const key of Object.keys(l.chunks)) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const [cx, cy] = key.split(',').map(Number), k2 = `${cx + dx},${cy + dy}`;
+        if (g.chunks.has(k2)) g.staleGen.set(k2, g.cityGen);
+      }
       refreshCities();
       setSelCity(plan.meta.id);
     } catch (e) {
@@ -718,8 +724,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     let regionStep = 0, regionGen = 0, regionGenSeen = -1;
     const requestRegions = (step: number, x0: number, y0: number, x1: number, y1: number, cx: number, cy: number) => {
       const pool = poolRef.current;
-      if (!pool) return;
-      if (step !== regionStep) { pool.clearRegions(); regionStep = step; }
+      if (step !== regionStep) { pool?.clearRegions(); regionStep = step; }
       const span = REGION_N * step, spanPx = span * TILE;
       const want: [number, number, number][] = [];
       for (let by = Math.floor(y0 / spanPx); by <= Math.floor(y1 / spanPx); by++) {
@@ -734,12 +739,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       }
       want.sort((a, b) => a[2] - b[2]);
       for (const [bx, by] of want) {
-        if (regionPending.size >= pool.size * 2) break;
-        if (!pool.coversTile(bx * span + span / 2, by * span + span / 2)) continue;
+        if (regionPending.size >= (pool ? pool.size * 2 : 2)) break;
         const k = `${step}:${bx}:${by}`;
         regionPending.add(k);
         const gen0 = regionGen;
-        pool.region(bx * span, by * span, step, REGION_N).then(px => {
+        // the parallel workers only hold a window of the planet: outside it, the session worker samples the block
+        const job = pool && pool.coversTile(bx * span + span / 2, by * span + span / 2) ? pool.region(bx * span, by * span, step, REGION_N) : session.region(bx * span, by * span, step, REGION_N);
+        job.then(px => {
           regionPending.delete(k);
           if (!aliveRef.current || gen0 !== regionGen) return;
           let img: Img, slot = -1;
@@ -900,7 +906,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         const rowCit = citRows.get(r);
         if (rowCit) for (const c of rowCit) p.sprite(c.sheet.canvas, c.frame * c.sheet.cw, c.row * c.sheet.ch, c.sheet.cw, c.sheet.ch, Math.round(c.x - c.sheet.ax), Math.round(c.y - c.sheet.ay));
         const rowVeh = vehRows.get(r);
-        if (rowVeh) for (const v of rowVeh) p.sprite(v.sheet.c, v.frame * v.sheet.w, 0, v.sheet.w, v.sheet.h, Math.round(v.x - v.sheet.ax), Math.round(v.y - v.sheet.ay));
+        if (rowVeh) for (const v of rowVeh) p.sprite(v.c, v.sx, v.sy, v.w, v.h, Math.round(v.x - v.ax), Math.round(v.y - v.ay));
         // wall segments ending on this row (the towers, drawn with the buildings, stand over them)
         const rw = wallRows.get(r);
         if (rw) for (const w of rw) p.sprite(w.c, 0, 0, w.c.width, w.c.height, w.x, w.y);

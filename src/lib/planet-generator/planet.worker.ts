@@ -165,6 +165,11 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         post({ kind: 'city', id: msg.id, plan, links });
         break;
       }
+      case 'region': {
+        const px = terrainFor(msg.sessionId).region(msg.tx, msg.ty, msg.step, msg.n);
+        post({ kind: 'region', id: msg.id, px }, [px.buffer]);
+        break;
+      }
       case 'cityLevel': cityLevel(msg.cityId, msg.p); break;
       case 'cityZones': cityZones(msg.on); break;
       case 'cityRemove': cityRemove(msg.cityId); cityPlans.get(msg.sessionId)?.delete(msg.cityId); dropLinks(msg.sessionId, msg.cityId); break;
