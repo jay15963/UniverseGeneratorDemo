@@ -1,68 +1,84 @@
 // Cellular-era RTS simulation (runs in a worker, see sim.worker.ts). Fixed 20 Hz ticks over flat typed arrays so
-// thousands of cells and ~180 colonies stay cheap.
+// thousands of cells and dozens of nations stay cheap.
 //
-// Economy: workers carry nutrient motes back to their colony's biofilm; photosynthesisers make energy on the biofilm
-// (twice as much under a light shaft); the mother cell divides into new cells (food + energy + time, population cap
-// from the mother and the biofilm nodes). Territory = biofilm, spread by the mother and by nodes (a worker settles into
-// one): inside it cells heal, outside they burn their reserve and then starve - the first lesson in supply lines.
-// Combat: melee contact, toxin spit at range, armour; hunters engulf wounded smaller cells. Dead cells leave motes.
-// Rival colonies run the same rules with a small brain (economy -> expansion -> armies that attack weaker neighbours
-// of another species; colonies of the same species are allies). Wild life: bacteria (prey), diatoms, amoebas.
-// Delegation: every unit has a stance (automatic, gather, defend, hunt, explore) that drives it without orders.
+// Nations: every species is one nation (the player's too). Its colonies - each one a rooted mother cell - share one
+// economy, one population cap and one army. A nation grows by dividing, by settling biofilm nodes and by founding
+// new colonies: a mother cell divides into a new mother that swims to free space and roots there (far from any
+// other mother, never inside a foreign biofilm) - it can take the room a destroyed colony left.
+// Economy: workers carry nutrient motes to the nation's biofilm; photosynthesisers make energy on it (x2 under light);
+// the mothers divide (food + energy + time; population cap: 8 per colony + 6 per node). Territory = biofilm: inside it
+// cells heal, outside they burn a reserve and starve - the first lesson in supply lines.
+// Combat: melee contact, toxin at range, armour; hunters engulf wounded smaller cells; dead cells leave motes.
+// Groups (like Hearts of Iron's army groups): named, coloured sets of cells that are selected and ordered together;
+// the AI keeps a guard and an attack group per nation. Stances (automatic, gather, defend, hunt, explore) drive units
+// without orders. The AI nations colonise, defend their colonies together and raid weaker neighbours.
+// Wild life: bacteria (prey), diatoms, amoebas.
 import { KINDS, Kind, TRAINABLE } from './look';
 import { WorldDef, WORLD, BIO, BIO_N, flowAt } from './world';
 import { mulberry, seedToInt } from '../terrain/noise';
 
-export const CAP = 12000;
+export const CAP = 14000;
 export const TICK = 1 / 20;
-export const STRIDE = 8;           // snapshot floats per entity
-export const NEUTRAL_SET = 17;     // sprite sets: 0..16 species, 17.. neutral variants
+export const STRIDE = 9;           // snapshot floats per entity
+export const NEUTRAL_SET = 65;     // sprite sets: 0..64 nations (species), 65.. wild variants
 
 // tasks
 const T_IDLE = 0, T_MOVE = 1, T_ATTACK = 2, T_GATHER = 3, T_RETURN = 4, T_BUILD = 5, T_AMOVE = 6, T_WANDER = 7;
 // stances
 export const ST_AUTO = 0, ST_GATHER = 1, ST_DEFEND = 2, ST_HUNT = 3, ST_EXPLORE = 4;
 export const STANCES = ['Automático', 'Coletar', 'Defender', 'Caçar', 'Explorar'];
+/** seconds before rival armies may raid the player */
+export const GRACE = 60;
+/** a new colony must root this far from any other mother cell */
+export const COLONY_GAP = 450;
 
-export interface Colony {
+export interface Nation {
   id: number; species: number; player: boolean; alive: boolean;
-  mother: number; hx: number; hy: number;
-  food: number; energy: number; pop: number; cap: number;
-  queue: { kind: Kind; t: number }[];
-  nodes: number; builder: number;
+  food: number; energy: number; pop: number; cap: number; counts: number[];
+  mothers: number; nodes: number; builder: number;
   aggr: number; greed: number; prefs: number[]; nextThink: number;
-  target: number; power: number; area: number; kills: number; lost: number; born: number;
-  counts: number[]; emitters: number[];
+  target: number; targetMother: number; power: number; area: number;
+  kills: number; lost: number; born: number; founded: number;
+  emitters: number[]; motherList: number[]; hx: number; hy: number;
+  seedSite: { x: number; y: number } | null; seedAt: number;
+  defGroup: number; atkGroup: number;
 }
+export interface Group { id: number; nation: number; name: string; color: string; stance: number; key: number; ai: number; n: number; cx: number; cy: number }
+export interface MotherInfo { id: number; x: number; y: number; rooted: boolean; queue: { kind: number; p: number }[] }
+
 export type Cmd =
   | { t: 'move'; ids: number[]; x: number; y: number }
   | { t: 'attack'; ids: number[]; target: number }
   | { t: 'gather'; ids: number[]; x: number; y: number }
-  | { t: 'stance'; ids: number[]; stance: number }
-  | { t: 'train'; kind: Kind }
-  | { t: 'cancel'; index: number }
+  | { t: 'stance'; ids: number[]; stance: number; group?: number }
+  | { t: 'train'; kind: Kind; mother?: number }
+  | { t: 'cancel'; mother: number; index: number }
   | { t: 'node'; id: number; x: number; y: number }
+  | { t: 'group'; ids: number[]; name: string; color: string; key: number }
+  | { t: 'groupAdd'; group: number; ids: number[] }
+  | { t: 'groupDel'; group: number }
   | { t: 'pause'; on: boolean }
   | { t: 'speed'; k: number };
 
 export interface Stats {
   time: number; food: number; energy: number; pop: number; cap: number; alive: boolean;
-  queue: { kind: number; p: number }[]; counts: number[]; nodes: number; area: number; kills: number; lost: number;
-  colonies: number; rivalsAlive: number; msg: string | null; won: boolean;
+  counts: number[]; nodes: number; colonies: number; area: number; kills: number; lost: number; founded: number;
+  nationsAlive: number; msg: string | null; won: boolean;
+  mothers: MotherInfo[]; groups: Group[];
 }
 
 const HB = 64, HN = WORLD / HB;
-/** seconds before rival armies may raid the player */
-export const GRACE = 600;
-const MCAP = 9000, PCAP = 2500;
+const MCAP = 9000, PCAP = 3000;
 const clampW = (v: number) => (v < 8 ? 8 : v > WORLD - 8 ? WORLD - 8 : v);
+const AI_GUARD = ['Guarda', 'Muralha', 'Sentinelas', 'Vigília'];
+const AI_ATTACK = ['Horda', 'Enxame', 'Maré', 'Vanguarda'];
 
 export class Sim {
   w: WorldDef;
   time = 0; tick = 0; paused = false; speed = 1;
   // entities
   alive = new Uint8Array(CAP); gen = new Uint16Array(CAP); kind = new Uint8Array(CAP); col = new Int16Array(CAP).fill(-1);
-  set = new Uint8Array(CAP);
+  set = new Uint8Array(CAP); rooted = new Uint8Array(CAP); grp = new Int16Array(CAP).fill(-1); warned = new Uint8Array(CAP);
   x = new Float32Array(CAP); y = new Float32Array(CAP); vx = new Float32Array(CAP); vy = new Float32Array(CAP); ang = new Float32Array(CAP);
   hp = new Float32Array(CAP); sat = new Float32Array(CAP); cd = new Float32Array(CAP); carry = new Float32Array(CAP);
   task = new Uint8Array(CAP); stance = new Uint8Array(CAP); manual = new Uint8Array(CAP);
@@ -80,83 +96,96 @@ export class Sim {
   fieldCount: Int32Array;
   // projectiles
   px = new Float32Array(PCAP); py = new Float32Array(PCAP); pvx = new Float32Array(PCAP); pvy = new Float32Array(PCAP);
-  pdmg = new Float32Array(PCAP); pcol = new Int16Array(PCAP); plife = new Float32Array(PCAP); ptgt = new Int32Array(PCAP); pown = new Int32Array(PCAP);
+  pdmg = new Float32Array(PCAP); plife = new Float32Array(PCAP); ptgt = new Int32Array(PCAP); pown = new Int32Array(PCAP);
   palive = new Uint8Array(PCAP); ptop = 0; pfree: number[] = [];
   // biofilm
   bOwn = new Uint8Array(BIO_N * BIO_N).fill(255); bStr = new Uint8Array(BIO_N * BIO_N);
   nOwn = new Uint8Array(BIO_N * BIO_N); nStr = new Uint8Array(BIO_N * BIO_N);
   bioDirty = true;
-  // rocks (static grid)
-  rHead: Int32Array; rNext: Int32Array;
-  colonies: Colony[] = [];
+  // obstacles (static grid): sand grains and vent chimneys
+  rHead: Int32Array; rNext: Int32Array; rIdx: Int32Array;
+  obst: { x: number; y: number; r: number }[] = [];
+  nations: Nation[] = [];
+  queues = new Map<number, { kind: Kind; t: number }[]>();   // per mother cell
+  groups = new Map<number, Group>(); nextGroup = 1;
+  allMothers: number[] = [];
   deaths: number[] = [];       // x, y, set, kind (for death bursts)
-  msg: string | null = null; msgAt = 0; won = false; wonShown = false;
+  msg: string | null = null; msgAt = 0; won = false;
   r: () => number;
   neutralTarget = { bac: 1300, dia: 240, ame: 10 };
   neutralCount = { bac: 0, dia: 0, ame: 0 };
+  goals = { food: false, divide: false, photo: false, node: false, colony: false, rival: false, big: false };
 
   constructor(w: WorldDef) {
     this.w = w;
     this.r = mulberry(seedToInt(w.seed + ':sim'));
     this.fieldCount = new Int32Array(w.fields.length);
-    // static rock grid (bucket 64)
-    this.rHead = new Int32Array(HN * HN).fill(-1); this.rNext = new Int32Array(w.rocks.length * 16).fill(-1);
-    let k = 0;
     const cells: number[] = [];
-    // obstacles: sand grains and the solid vent chimneys
     this.obst = [...w.rocks.map(r => ({ x: r.x, y: r.y, r: r.r })), ...w.vents.map(v => ({ x: v.x, y: v.y, r: v.r * 0.8 }))];
     this.obst.forEach((rk, i) => {
       const e = rk.r + 24, x0 = Math.floor((rk.x - e) / HB), x1 = Math.floor((rk.x + e) / HB), y0 = Math.floor((rk.y - e) / HB), y1 = Math.floor((rk.y + e) / HB);
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { if (x < 0 || y < 0 || x >= HN || y >= HN) continue; cells.push(y * HN + x, i); }
     });
+    this.rHead = new Int32Array(HN * HN).fill(-1);
     this.rNext = new Int32Array(cells.length / 2).fill(-1);
-    const rIdx = new Int32Array(cells.length / 2);
-    for (let i = 0; i < cells.length; i += 2) { const b = cells[i]; rIdx[k] = cells[i + 1]; this.rNext[k] = this.rHead[b]; this.rHead[b] = k; k++; }
-    this.rIdx = rIdx;
-    // colonies
-    w.homes.forEach((h, i) => {
+    this.rIdx = new Int32Array(cells.length / 2);
+    for (let i = 0, k = 0; i < cells.length; i += 2, k++) { const b = cells[i]; this.rIdx[k] = cells[i + 1]; this.rNext[k] = this.rHead[b]; this.rHead[b] = k; }
+    // nations and their first colonies
+    w.starts.forEach((list, i) => {
       const r = this.r;
-      const c: Colony = {
-        id: i, species: h.species, player: i === 0, alive: true, mother: -1, hx: h.x, hy: h.y,
-        food: i === 0 ? 120 : 90, energy: i === 0 ? 60 : 50, pop: 0, cap: 8, queue: [], nodes: 0, builder: -1,
+      const N: Nation = {
+        id: i, species: i, player: i === 0, alive: true,
+        food: i === 0 ? 120 : 100, energy: i === 0 ? 60 : 50, pop: 0, cap: 0, counts: new Array(8).fill(0),
+        mothers: 0, nodes: 0, builder: -1,
         aggr: 0.25 + r() * 0.75, greed: 0.3 + r() * 0.7, prefs: [r(), r(), r()], nextThink: r() * 2,
-        target: -1, power: 0, area: 0, kills: 0, lost: 0, born: 0, counts: new Array(8).fill(0), emitters: [],
+        target: -1, targetMother: -1, power: 0, area: 0, kills: 0, lost: 0, born: 0, founded: 0,
+        emitters: [], motherList: [], hx: list[0].x, hy: list[0].y, seedSite: null, seedAt: 0, defGroup: -1, atkGroup: -1,
       };
-      this.colonies.push(c);
-      c.mother = this.spawn(Kind.MOTHER, i, h.x, h.y);
-      this.grow[c.mother] = 160;
-      const start: Kind[] = i === 0 ? [Kind.WORKER, Kind.WORKER, Kind.WORKER, Kind.PHOTO, Kind.SCOUT] : [Kind.WORKER, Kind.WORKER, Kind.WORKER, Kind.PHOTO];
-      start.forEach((k2, j) => { const a = (j / start.length) * Math.PI * 2; this.spawn(k2, i, h.x + Math.cos(a) * 60, h.y + Math.sin(a) * 60); });
+      this.nations.push(N);
+      list.forEach((h, j) => {
+        const m = this.spawn(Kind.MOTHER, i, h.x, h.y);
+        this.root(m, false);
+        this.grow[m] = 160;
+        const start: Kind[] = j > 0 ? [Kind.WORKER, Kind.WORKER] : i === 0 ? [Kind.WORKER, Kind.WORKER, Kind.WORKER, Kind.PHOTO, Kind.SCOUT] : [Kind.WORKER, Kind.WORKER, Kind.WORKER, Kind.PHOTO];
+        start.forEach((k2, q) => { const a = (q / start.length) * Math.PI * 2; this.spawn(k2, i, h.x + Math.cos(a) * 60, h.y + Math.sin(a) * 60); });
+      });
     });
-    // seed the fields and the wild life
     for (let i = 0; i < 40; i++) this.spawnMotes(1);
     for (let i = 0; i < this.neutralTarget.bac; i++) this.spawnNeutral(Kind.BACTERIA);
     for (let i = 0; i < this.neutralTarget.dia; i++) this.spawnNeutral(Kind.DIATOM);
     for (let i = 0; i < this.neutralTarget.ame; i++) this.spawnNeutral(Kind.AMOEBA);
     this.updateBiofilm();
   }
-  rIdx: Int32Array;
-  obst: { x: number; y: number; r: number }[] = [];
 
   // ---------------------------------------------------------------------------------------------------------------------
-  spawn(k: Kind, colony: number, x: number, y: number, variant = 0): number {
+  spawn(k: Kind, nation: number, x: number, y: number, variant = 0): number {
     const i = this.free.length ? this.free.pop()! : this.top < CAP ? this.top++ : -1;
     if (i < 0) return -1;
     const K = KINDS[k];
-    this.alive[i] = 1; this.gen[i] = (this.gen[i] + 1) & 0xffff; this.kind[i] = k; this.col[i] = colony;
-    this.set[i] = colony >= 0 ? this.colonies[colony].species : NEUTRAL_SET + variant;
+    this.alive[i] = 1; this.gen[i] = (this.gen[i] + 1) & 0xffff; this.kind[i] = k; this.col[i] = nation;
+    this.set[i] = nation >= 0 ? this.nations[nation].species : NEUTRAL_SET + variant;
     this.x[i] = clampW(x); this.y[i] = clampW(y); this.vx[i] = 0; this.vy[i] = 0; this.ang[i] = this.r() * Math.PI * 2;
-    this.hp[i] = K.hp; this.sat[i] = k === Kind.SCOUT ? 80 : 40; this.cd[i] = 0; this.carry[i] = 0;
-    this.task[i] = T_IDLE; this.stance[i] = ST_AUTO; this.manual[i] = 0; this.tgt[i] = -1;
+    this.hp[i] = K.hp; this.sat[i] = k === Kind.SCOUT ? 80 : k === Kind.MOTHER ? 120 : 40; this.cd[i] = 0; this.carry[i] = 0;
+    this.task[i] = T_IDLE; this.stance[i] = ST_AUTO; this.manual[i] = 0; this.tgt[i] = -1; this.rooted[i] = 0; this.grp[i] = -1; this.warned[i] = 0;
     this.gx[i] = x; this.gy[i] = y; this.ax[i] = x; this.ay[i] = y; this.hitAt[i] = -99; this.hitBy[i] = -1; this.grow[i] = 0;
-    if (colony >= 0) {
-      const c = this.colonies[colony];
-      c.pop += K.pop; c.counts[k]++;
-      if (k === Kind.NODE) { c.nodes++; c.cap += 6; }
-      if (k === Kind.MOTHER) { this.ax[i] = x; this.ay[i] = y; }
+    if (nation >= 0) {
+      const N = this.nations[nation];
+      N.pop += K.pop; N.counts[k]++;
+      if (k === Kind.NODE) { N.nodes++; N.cap += 6; }
+      if (k === Kind.MOTHER) N.motherList.push(i);
     }
     this.count++;
     return i;
+  }
+  /** a mother cell settles: a colony is founded */
+  root(m: number, announce = true) {
+    const N = this.nations[this.col[m]];
+    this.rooted[m] = 1; N.mothers++; N.cap += 8;
+    this.task[m] = T_IDLE; this.manual[m] = 0; this.vx[m] = 0; this.vy[m] = 0;
+    this.grow[m] = Math.max(this.grow[m], 60); this.ax[m] = this.x[m]; this.ay[m] = this.y[m];
+    if (this.grp[m] >= 0) this.grp[m] = -1;
+    if (!this.queues.has(m)) this.queues.set(m, []);
+    if (announce) { N.founded++; if (N.player) this.say(`Nova colônia fundada! (${N.mothers} colônias)`); }
   }
   kill(i: number, by = -1) {
     if (!this.alive[i]) return;
@@ -166,18 +195,24 @@ export class Sim {
     const drop = [3, 2, 5, 4, 7, 5, 26, 10, 1, 4, 12][k] ?? 2;
     for (let j = 0; j < drop; j++) this.addMote(this.x[i] + (this.r() - 0.5) * KINDS[k].r * 2, this.y[i] + (this.r() - 0.5) * KINDS[k].r * 2, 4 + this.r() * 3, -1);
     if (k === Kind.BACTERIA) this.neutralCount.bac--; else if (k === Kind.DIATOM) this.neutralCount.dia--; else if (k === Kind.AMOEBA) this.neutralCount.ame--;
-    if (c >= 0) {
-      const C = this.colonies[c];
-      C.pop -= KINDS[k].pop; C.counts[k]--; C.lost++;
-      if (k === Kind.NODE) { C.nodes--; C.cap -= 6; }
-      if (C.builder === i) C.builder = -1;
-      if (k === Kind.MOTHER) {
-        C.alive = false; C.queue = [];
-        const killer = by >= 0 ? this.col[by] : -1;
-        if (killer >= 0) this.colonies[killer].kills++;
-        if (killer === 0) this.say(`Colônia rival destruída! (${this.colonies[0].kills})`);
-        if (C.player) this.say('Sua célula-mãe morreu. A colônia está condenada.');
+    if (c < 0) return;
+    const N = this.nations[c];
+    N.pop -= KINDS[k].pop; N.counts[k]--; N.lost++;
+    if (k === Kind.NODE) { N.nodes--; N.cap -= 6; }
+    if (N.builder === i) N.builder = -1;
+    if (k === Kind.MOTHER) {
+      N.motherList = N.motherList.filter(m => m !== i);
+      if (this.rooted[i]) { N.mothers--; N.cap -= 8; }
+      this.queues.delete(i);
+      const killer = by >= 0 ? this.col[by] : -1;
+      if (killer >= 0 && this.rooted[i]) {
+        this.nations[killer].kills++;
+        if (killer === 0) this.say(`Colônia rival destruída! (${this.nations[0].kills})`);
       }
+      if (N.counts[Kind.MOTHER] <= 0) {
+        N.alive = false;
+        if (N.player) this.say('Sua última célula-mãe morreu. A espécie está condenada.');
+      } else if (N.player && this.rooted[i]) this.say('Uma das suas colônias caiu!');
     }
   }
   say(m: string) { this.msg = m; this.msgAt = this.time; }
@@ -214,7 +249,7 @@ export class Sim {
     for (let t = 0; t < 12; t++) {
       if (k === Kind.BACTERIA) { const f = F[Math.floor(r() * F.length)], a = r() * 6.283, d = Math.sqrt(r()) * f.r * 1.2; x = f.x + Math.cos(a) * d; y = f.y + Math.sin(a) * d; }
       else { x = 200 + r() * (WORLD - 400); y = 200 + r() * (WORLD - 400); }
-      if (k === Kind.AMOEBA && Math.hypot(x - this.w.homes[0].x, y - this.w.homes[0].y) < 1500) continue;
+      if (k === Kind.AMOEBA && Math.hypot(x - this.w.starts[0][0].x, y - this.w.starts[0][0].y) < 1500) continue;
       if (!this.inRock(x, y, KINDS[k].r)) break;
     }
     const v = k === Kind.BACTERIA ? Math.floor(r() * 4) : k === Kind.DIATOM ? 4 + Math.floor(r() * 2) : 6;
@@ -230,13 +265,12 @@ export class Sim {
     return false;
   }
 
-  // relations
+  // relations: every nation is at war with the others; the wild amoebas eat anyone
   hostile(a: number, b: number): boolean {
     const ca = this.col[a], cb = this.col[b];
     if (ca === cb) return ca === -1 ? (this.kind[a] === Kind.AMOEBA) !== (this.kind[b] === Kind.AMOEBA) : false;
     if (ca < 0 || cb < 0) return this.kind[a] === Kind.AMOEBA || this.kind[b] === Kind.AMOEBA;
-    const A = this.colonies[ca], B = this.colonies[cb];
-    return A.player || B.player || A.species !== B.species;
+    return true;
   }
   /** hostile and worth attacking on sight: during the grace period rivals leave the player alone unless provoked */
   aggro(a: number, b: number): boolean {
@@ -259,16 +293,16 @@ export class Sim {
     this.time += dt; this.tick++;
     this.buildHash();
     if (this.tick % 10 === 0) { this.updateBiofilm(); this.spawnMotes(0.5); this.moteDecay(0.5); this.respawnNeutral(); }
-    for (const c of this.colonies) if (c.alive && this.time >= c.nextThink) { c.nextThink = this.time + 1; this.colonyThink(c); }
+    for (const N of this.nations) if (N.alive && this.time >= N.nextThink) { N.nextThink = this.time + 1; this.nationThink(N); }
     const think = this.tick & 7;
     for (let i = 0; i < this.top; i++) {
       if (!this.alive[i]) continue;
       if ((i & 7) === think) this.unitThink(i);
-      this.unitAct(i, dt);
+      if (this.alive[i]) this.unitAct(i, dt);
     }
     this.moveAll(dt);
     this.moveProjectiles(dt);
-    for (const c of this.colonies) if (c.alive) this.produce(c, dt);
+    for (const N of this.nations) if (N.alive) this.produce(N, dt);
     this.checkGoals();
   }
 
@@ -315,28 +349,29 @@ export class Sim {
   updateBiofilm() {
     const N = BIO_N;
     this.nStr.fill(0); this.nOwn.fill(255);
-    for (const c of this.colonies) c.emitters = [];
+    for (const n of this.nations) n.emitters = [];
+    this.allMothers = [];
     for (let i = 0; i < this.top; i++) {
       const k = this.kind[i];
       if (!this.alive[i] || (k !== Kind.MOTHER && k !== Kind.NODE) || this.col[i] < 0) continue;
-      const c = this.colonies[this.col[i]];
+      if (k === Kind.MOTHER) this.allMothers.push(i);
+      if (k === Kind.MOTHER && !this.rooted[i]) continue;
+      const c = this.nations[this.col[i]];
       c.emitters.push(i);
       if (!c.alive) continue;
-      {
-        const maxR = k === Kind.MOTHER ? 300 : 240;
-        this.grow[i] = Math.min(maxR, this.grow[i] + 6);
-        const R = this.grow[i], cx = this.x[i] / BIO, cy = this.y[i] / BIO, rc = R / BIO;
-        for (let y = Math.max(0, Math.floor(cy - rc)); y <= Math.min(N - 1, Math.ceil(cy + rc)); y++)
-          for (let x = Math.max(0, Math.floor(cx - rc)); x <= Math.min(N - 1, Math.ceil(cx + rc)); x++) {
-            const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / rc;
-            if (d > 1) continue;
-            const s = Math.min(255, Math.round((1 - d) * 3 * 255));
-            const j = y * N + x;
-            if (s > this.nStr[j]) { this.nStr[j] = s; this.nOwn[j] = c.id; }
-          }
-      }
+      const maxR = k === Kind.MOTHER ? 300 : 240;
+      this.grow[i] = Math.min(maxR, this.grow[i] + 6);
+      const R = this.grow[i], cx = this.x[i] / BIO, cy = this.y[i] / BIO, rc = R / BIO;
+      for (let y = Math.max(0, Math.floor(cy - rc)); y <= Math.min(N - 1, Math.ceil(cy + rc)); y++)
+        for (let x = Math.max(0, Math.floor(cx - rc)); x <= Math.min(N - 1, Math.ceil(cx + rc)); x++) {
+          const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / rc;
+          if (d > 1) continue;
+          const s = Math.min(255, Math.round((1 - d) * 3 * 255));
+          const j = y * N + x;
+          if (s > this.nStr[j]) { this.nStr[j] = s; this.nOwn[j] = c.id; }
+        }
     }
-    for (const c of this.colonies) c.area = 0;
+    for (const c of this.nations) c.area = 0;
     for (let j = 0; j < N * N; j++) {
       if (this.nStr[j] > 0 && (this.nOwn[j] === this.bOwn[j] || this.nStr[j] >= this.bStr[j] - 10)) {
         this.bOwn[j] = this.nOwn[j];
@@ -345,7 +380,7 @@ export class Sim {
         this.bStr[j] = Math.max(0, this.bStr[j] - 10);
         if (!this.bStr[j]) this.bOwn[j] = 255;
       }
-      if (this.bStr[j] > 40 && this.bOwn[j] !== 255) this.colonies[this.bOwn[j]].area++;
+      if (this.bStr[j] > 40 && this.bOwn[j] !== 255) this.nations[this.bOwn[j]].area++;
     }
     this.bioDirty = true;
   }
@@ -365,97 +400,224 @@ export class Sim {
     if (n.ame < t.ame && this.r() < 0.02) this.spawnNeutral(Kind.AMOEBA);
   }
 
-  // --- colony brain --------------------------------------------------------------------------------------------------------------
-  produce(c: Colony, dt: number) {
-    const m = c.mother;
-    if (m < 0 || !this.alive[m]) return;
-    // the mother cell's own metabolism: a trickle so a colony never locks up
-    c.food += 0.8 * dt; c.energy += 0.8 * dt;
-    const q = c.queue[0];
-    if (!q) return;
-    const K = KINDS[q.kind];
-    if (c.pop + K.pop > c.cap) return;
-    q.t += dt;
-    if (q.t >= K.time) {
-      c.queue.shift();
+  // --- production ------------------------------------------------------------------------------------------------------------
+  rootedMothers(N: Nation) { return N.motherList.filter(m => this.alive[m] && this.rooted[m]); }
+  produce(N: Nation, dt: number) {
+    for (const m of N.motherList) {
+      if (!this.alive[m] || !this.rooted[m]) continue;
+      // each colony's own metabolism: a trickle so a nation never locks up
+      N.food += 0.8 * dt; N.energy += 0.8 * dt;
+      const q = this.queues.get(m)?.[0];
+      if (!q) continue;
+      const K = KINDS[q.kind];
+      if (N.pop + K.pop > N.cap) continue;
+      q.t += dt;
+      if (q.t < K.time) continue;
+      this.queues.get(m)!.shift();
       const a = this.ang[m] + Math.PI + (this.r() - 0.5) * 1.5;
-      const i = this.spawn(q.kind, c.id, this.x[m] + Math.cos(a) * 34, this.y[m] + Math.sin(a) * 34);
-      if (i >= 0) { c.born++; this.vx[i] = Math.cos(a) * 40; this.vy[i] = Math.sin(a) * 40; this.ax[i] = this.x[m] + Math.cos(a) * 90; this.ay[i] = this.y[m] + Math.sin(a) * 90; }
+      const i = this.spawn(q.kind, N.id, this.x[m] + Math.cos(a) * 34, this.y[m] + Math.sin(a) * 34);
+      if (i < 0) continue;
+      N.born++;
+      this.vx[i] = Math.cos(a) * 40; this.vy[i] = Math.sin(a) * 40;
+      this.ax[i] = this.x[m] + Math.cos(a) * 90; this.ay[i] = this.y[m] + Math.sin(a) * 90;
+      if (q.kind === Kind.MOTHER) {
+        this.warned[i] = 1;   // no complaint before the player has moved her
+        if (N.player) this.say('Nova célula-mãe! Leve-a a um espaço livre para fundar uma colônia.');
+        else if (N.seedSite) { this.task[i] = T_MOVE; this.gx[i] = N.seedSite.x; this.gy[i] = N.seedSite.y; this.manual[i] = 1; }
+      } else if (!N.player && isMil(q.kind)) this.joinGroup(i, this.aiGroup(N, 1));
     }
   }
-  canTrain(c: Colony, k: Kind) { const K = KINDS[k]; return c.food >= K.food && c.energy >= K.energy && c.queue.length < 6; }
-  train(c: Colony, k: Kind) {
-    if (!this.canTrain(c, k)) return false;
-    c.food -= KINDS[k].food; c.energy -= KINDS[k].energy; c.queue.push({ kind: k, t: 0 });
+  canTrain(N: Nation, k: Kind) { const K = KINDS[k]; return N.food >= K.food && N.energy >= K.energy; }
+  train(N: Nation, m: number, k: Kind) {
+    const q = this.queues.get(m);
+    if (!q || q.length >= 6 || !this.canTrain(N, k)) return false;
+    N.food -= KINDS[k].food; N.energy -= KINDS[k].energy; q.push({ kind: k, t: 0 });
     return true;
   }
-  colonyThink(c: Colony) {
-    const m = c.mother;
-    if (m < 0 || !this.alive[m]) return;
-    c.hx = this.x[m]; c.hy = this.y[m];
-    const cnt = c.counts;
+  capital(N: Nation): number { for (const m of N.motherList) if (this.alive[m] && this.rooted[m]) return m; return N.motherList.find(m => this.alive[m]) ?? -1; }
+
+  // --- groups ------------------------------------------------------------------------------------------------------------------
+  newGroup(nation: number, name: string, color: string, ai: number, key = 0): Group {
+    const g: Group = { id: this.nextGroup++, nation, name, color, stance: ST_AUTO, key, ai, n: 0, cx: 0, cy: 0 };
+    this.groups.set(g.id, g);
+    return g;
+  }
+  joinGroup(i: number, g: number) { this.grp[i] = g; }
+  /** the AI's guard (1) or attack (2) group of a nation, created on demand */
+  aiGroup(N: Nation, ai: 1 | 2): number {
+    const id = ai === 1 ? N.defGroup : N.atkGroup;
+    if (id >= 0 && this.groups.has(id)) return id;
+    const sp = this.w.species[N.species];
+    const name = `${(ai === 1 ? AI_GUARD : AI_ATTACK)[N.id % 4]} ${sp.genus}`;
+    const g = this.newGroup(N.id, name, ai === 1 ? '#94a3b8' : '#f87171', ai);
+    g.stance = ai === 1 ? ST_DEFEND : ST_HUNT;
+    if (ai === 1) N.defGroup = g.id; else N.atkGroup = g.id;
+    return g.id;
+  }
+
+  // --- nation brain --------------------------------------------------------------------------------------------------------------
+  nationThink(N: Nation) {
+    const cap = this.capital(N);
+    if (cap >= 0) { N.hx = this.x[cap]; N.hy = this.y[cap]; }
+    const cnt = N.counts;
     const mil = cnt[Kind.HUNTER] + cnt[Kind.ARMOR] + cnt[Kind.SPITTER];
-    c.power = cnt[Kind.HUNTER] * 3 + cnt[Kind.ARMOR] * 4 + cnt[Kind.SPITTER] * 3 + cnt[Kind.MOTHER] * 4;
-    if (c.player) return;
-    // economy first, then a garrison, then an army
-    if (c.queue.length < 2) {
-      const wantW = Math.min(14, 3 + c.nodes * 2), wantP = 1 + Math.floor(c.nodes / 2);
-      const wantM = Math.floor(Math.min(4 + c.nodes * 3, this.time / 60 * c.aggr * 2 + c.nodes * 2 * c.aggr));
-      let k: Kind | -1 = -1;
-      if (cnt[Kind.WORKER] < wantW && !(c.builder >= 0 && cnt[Kind.WORKER] >= 3)) k = Kind.WORKER;
-      else if (cnt[Kind.PHOTO] < wantP) k = Kind.PHOTO;
-      else if (mil < wantM) { const p = c.prefs, s = p[0] + p[1] + p[2], u = this.r() * s; k = u < p[0] ? Kind.HUNTER : u < p[0] + p[1] ? Kind.SPITTER : Kind.ARMOR; }
-      else if (cnt[Kind.SCOUT] < 1 && this.time > 60) k = Kind.SCOUT;
-      if (k >= 0 && c.pop + KINDS[k].pop <= c.cap) this.train(c, k as Kind);
+    N.power = cnt[Kind.HUNTER] * 3 + cnt[Kind.ARMOR] * 4 + cnt[Kind.SPITTER] * 3 + N.mothers * 4;
+    if (N.player) return;
+    const colonies = this.rootedMothers(N);
+    if (!colonies.length) {
+      // a lone travelling mother: root wherever she can
+      return;
     }
-    // expansion: settle a worker into a node at the edge of the biofilm, towards food or light
-    const maxNodes = 2 + Math.round(c.greed * 4);
-    if (c.pop >= c.cap - 2 && c.nodes < maxNodes && (c.builder < 0 || !this.alive[c.builder] || this.task[c.builder] !== T_BUILD) && c.food >= 80 && c.energy >= 30) {
-      const w = this.nearest(c.hx, c.hy, 700, j => this.col[j] === c.id && this.kind[j] === Kind.WORKER);
-      if (w >= 0) {
-        const f = this.w.fields.reduce((b, f2) => { const d = Math.hypot(f2.x - c.hx, f2.y - c.hy); return d < b.d && d > 150 ? { d, f: f2 } : b; }, { d: 1e9, f: null as null | { x: number; y: number } });
-        for (let t = 0; t < 8; t++) {
-          const base = f.f && t < 4 ? Math.atan2(f.f.y - c.hy, f.f.x - c.hx) : this.r() * Math.PI * 2;
-          const a = base + (this.r() - 0.5) * 1.2, d = 220 + c.nodes * 70 + this.r() * 60;
-          const x = c.hx + Math.cos(a) * d, y = c.hy + Math.sin(a) * d;
-          if (this.nodeSpotOk(c.id, x, y)) { this.order(w, T_BUILD, x, y); c.builder = w; break; }
-        }
+    // --- economy: every colony keeps dividing, the nation shares the stock
+    const M = colonies.length;
+    const wantW = Math.min(60, 3 * M + N.nodes * 2 + 1), wantP = M + Math.floor(N.nodes / 2);
+    const wantMil = Math.floor(Math.min(M * 4 + N.nodes * 3, this.time / 60 * N.aggr * 2 * M + N.nodes * 2 * N.aggr));
+    const seeding = N.seedSite !== null && this.time - N.seedAt < 150;
+    for (const m of colonies) {
+      const q = this.queues.get(m)!;
+      if (q.length >= 2) continue;
+      let k: Kind | -1 = -1;
+      if (cnt[Kind.WORKER] < wantW && !(N.builder >= 0 && cnt[Kind.WORKER] >= 3)) k = Kind.WORKER;
+      else if (cnt[Kind.PHOTO] < wantP) k = Kind.PHOTO;
+      else if (mil < wantMil) { const p = N.prefs, s = p[0] + p[1] + p[2], u = this.r() * s; k = u < p[0] ? Kind.HUNTER : u < p[0] + p[1] ? Kind.SPITTER : Kind.ARMOR; }
+      else if (cnt[Kind.SCOUT] < 1 && this.time > 60) k = Kind.SCOUT;
+      // keep a reserve for the next colony
+      if (k >= 0 && seeding && N.food < KINDS[Kind.MOTHER].food + 40 && k !== Kind.WORKER) k = -1;
+      if (k >= 0 && N.pop + KINDS[k].pop <= N.cap) this.train(N, m, k as Kind);
+    }
+    // --- expansion: biofilm nodes at the edge of a colony's biofilm
+    const maxNodes = M * (2 + Math.round(N.greed * 3));
+    if (N.pop >= N.cap - 2 && N.nodes < maxNodes && (N.builder < 0 || !this.alive[N.builder] || this.task[N.builder] !== T_BUILD) && N.food >= 80 && N.energy >= 30) {
+      const home = colonies[Math.floor(this.r() * M)], hx = this.x[home], hy = this.y[home];
+      const w = this.nearest(hx, hy, 700, j => this.col[j] === N.id && this.kind[j] === Kind.WORKER);
+      if (w >= 0) for (let t = 0; t < 8; t++) {
+        const a = this.r() * Math.PI * 2, d = 220 + this.r() * 120;
+        const x = hx + Math.cos(a) * d, y = hy + Math.sin(a) * d;
+        if (this.nodeSpotOk(N.id, x, y)) { this.order(w, T_BUILD, x, y); N.builder = w; break; }
       }
     }
-    // war: send the army at a weaker neighbour of another species
-    if (c.target >= 0) {
-      const T = this.colonies[c.target];
-      if (!T.alive || mil < 2) { c.target = -1; this.recall(c); }
-    } else if (mil >= 4 && this.time > 90 + (1 - c.aggr) * 240 && this.r() < 0.08 * c.aggr) {
-      let best = -1, bd = 2600;
-      for (const o of this.colonies) {
-        if (!o.alive || o.id === c.id || (!o.player && o.species === c.species)) continue;
-        if (o.player && this.time < GRACE) continue;   // give a new player time to learn before the first raid
-        const d = Math.hypot(o.hx - c.hx, o.hy - c.hy);
-        if (d < bd && o.power < c.power * (0.6 + c.aggr * 0.6)) { bd = d; best = o.id; }
+    // --- colonisation: found a new colony in free space nearby
+    const maxColonies = 2 + Math.round(N.greed * 5);
+    if (!seeding) N.seedSite = null;
+    if (!seeding && M < maxColonies && this.time > 45 && N.food >= KINDS[Kind.MOTHER].food + 60 && N.energy >= KINDS[Kind.MOTHER].energy + 20 && (N.pop >= N.cap - 4 || N.nodes >= M * 2)) {
+      const site = this.pickSite(N, colonies);
+      if (site) {
+        let best = colonies[0], bd = 1e18;
+        for (const m of colonies) { const d = (this.x[m] - site.x) ** 2 + (this.y[m] - site.y) ** 2; if (d < bd) { bd = d; best = m; } }
+        if (this.train(N, best, Kind.MOTHER)) { N.seedSite = site; N.seedAt = this.time; }
+      }
+    }
+    // travelling mothers of the AI root when they arrive (or look for another spot)
+    for (const m of N.motherList) {
+      if (!this.alive[m] || this.rooted[m] || this.task[m] !== T_IDLE) continue;
+      if (this.rootSpotOk(N.id, this.x[m], this.y[m], m)) { this.root(m); N.seedSite = null; }
+      else { const s = this.pickSite(N, colonies, this.x[m], this.y[m]); if (s) { this.task[m] = T_MOVE; this.gx[m] = s.x; this.gy[m] = s.y; this.manual[m] = 1; } }
+    }
+    // --- defence: the guard of the whole nation rushes to a colony under attack
+    for (const m of colonies) {
+      if (this.time - this.hitAt[m] > 2) continue;
+      const g = N.defGroup;
+      for (let i = 0; i < this.top; i++) {
+        if (!this.alive[i] || this.col[i] !== N.id || this.grp[i] !== g || this.task[i] === T_ATTACK) continue;
+        if ((this.x[i] - this.x[m]) ** 2 + (this.y[i] - this.y[m]) ** 2 > 1600 * 1600) continue;
+        this.task[i] = T_AMOVE; this.manual[i] = 2; this.gx[i] = this.ax[i] = this.x[m] + (this.r() - 0.5) * 120; this.gy[i] = this.ay[i] = this.y[m] + (this.r() - 0.5) * 120;
+      }
+      break;
+    }
+    // --- war: the attack group raids the nearest colony of a weaker neighbour
+    if (N.target >= 0) {
+      const T = this.nations[N.target];
+      const atk = this.members(N.atkGroup);
+      if (!T.alive || atk.length < 2) { this.recall(N); return; }
+      if (!this.valid(N.targetMother, this.gen[N.targetMother]) || !this.alive[N.targetMother]) {
+        // next colony of the same nation, nearest to the army
+        const [cx, cy] = this.centroid(atk);
+        let best = -1, bd = 3000 * 3000;
+        for (const m of T.motherList) { if (!this.alive[m]) continue; const d = (this.x[m] - cx) ** 2 + (this.y[m] - cy) ** 2; if (d < bd) { bd = d; best = m; } }
+        if (best < 0) { this.recall(N); return; }
+        N.targetMother = best;
+        this.march(atk, this.x[best], this.y[best]);
+      }
+    } else if (mil >= 5 && this.time > 60 + (1 - N.aggr) * 180 && this.r() < 0.1 * N.aggr) {
+      let best = -1, bm = -1, bd = 2600;
+      for (const o of this.nations) {
+        if (!o.alive || o.id === N.id || o.power >= N.power * (0.6 + N.aggr * 0.6)) continue;
+        if (o.player && this.time < GRACE) continue;
+        for (const m of o.motherList) {
+          if (!this.alive[m]) continue;
+          for (const h of colonies) { const d = Math.hypot(this.x[m] - this.x[h], this.y[m] - this.y[h]); if (d < bd) { bd = d; best = o.id; bm = m; } }
+        }
       }
       if (best >= 0) {
-        c.target = best;
-        const T = this.colonies[best];
-        for (let i = 0; i < this.top; i++) if (this.alive[i] && this.col[i] === c.id && isMil(this.kind[i])) {
-          this.task[i] = T_AMOVE; this.manual[i] = 2; this.tgt[i] = -1;
-          this.gx[i] = this.ax[i] = T.hx + (this.r() - 0.5) * 80; this.gy[i] = this.ay[i] = T.hy + (this.r() - 0.5) * 80;
-        }
+        N.target = best; N.targetMother = bm;
+        // most of the guard marches; a garrison stays home
+        const guard = this.members(N.defGroup).sort((a, b) => ((this.x[a] - this.x[bm]) ** 2 + (this.y[a] - this.y[bm]) ** 2) - ((this.x[b] - this.x[bm]) ** 2 + (this.y[b] - this.y[bm]) ** 2));
+        const go = guard.slice(0, Math.ceil(guard.length * 0.7));
+        const ag = this.aiGroup(N, 2);
+        for (const i of go) this.grp[i] = ag;
+        this.march(go, this.x[bm], this.y[bm]);
       }
     }
   }
-  recall(c: Colony) {
-    for (let i = 0; i < this.top; i++) if (this.alive[i] && this.col[i] === c.id && isMil(this.kind[i])) { this.task[i] = T_IDLE; this.manual[i] = 0; this.tgt[i] = -1; this.ax[i] = c.hx + (this.r() - 0.5) * 200; this.ay[i] = c.hy + (this.r() - 0.5) * 200; }
+  members(g: number): number[] {
+    const out: number[] = [];
+    if (g < 0) return out;
+    for (let i = 0; i < this.top; i++) if (this.alive[i] && this.grp[i] === g) out.push(i);
+    return out;
   }
-  nodeSpotOk(colony: number, x: number, y: number) {
+  centroid(ids: number[]): [number, number] {
+    let x = 0, y = 0;
+    for (const i of ids) { x += this.x[i]; y += this.y[i]; }
+    return ids.length ? [x / ids.length, y / ids.length] : [0, 0];
+  }
+  march(ids: number[], x: number, y: number) {
+    for (const i of ids) { this.task[i] = T_AMOVE; this.manual[i] = 2; this.tgt[i] = -1; this.gx[i] = this.ax[i] = x + (this.r() - 0.5) * 90; this.gy[i] = this.ay[i] = y + (this.r() - 0.5) * 90; }
+  }
+  recall(N: Nation) {
+    N.target = -1; N.targetMother = -1;
+    const colonies = this.rootedMothers(N);
+    const def = this.aiGroup(N, 1);
+    for (const i of this.members(N.atkGroup)) {
+      this.grp[i] = def; this.task[i] = T_IDLE; this.manual[i] = 0; this.tgt[i] = -1;
+      let best = -1, bd = 1e18;
+      for (const m of colonies) { const d = (this.x[m] - this.x[i]) ** 2 + (this.y[m] - this.y[i]) ** 2; if (d < bd) { bd = d; best = m; } }
+      if (best >= 0) { this.ax[i] = this.x[best] + (this.r() - 0.5) * 200; this.ay[i] = this.y[best] + (this.r() - 0.5) * 200; }
+    }
+  }
+  /** a free spot for a new colony around the nation's colonies (or around a travelling mother) */
+  pickSite(N: Nation, colonies: number[], ox?: number, oy?: number): { x: number; y: number } | null {
+    let best: { x: number; y: number } | null = null, bs = -1e9;
+    for (let t = 0; t < 40; t++) {
+      const base = colonies[Math.floor(this.r() * colonies.length)];
+      const bx = ox ?? this.x[base], by = oy ?? this.y[base];
+      const a = this.r() * Math.PI * 2, d = (ox !== undefined ? 150 : 520) + this.r() * 800;
+      const x = bx + Math.cos(a) * d, y = by + Math.sin(a) * d;
+      if (!this.rootSpotOk(N.id, x, y, -1)) continue;
+      let s = -d * 0.4;
+      for (const f of this.w.fields) if (Math.hypot(f.x - x, f.y - y) < f.r + 150) { s += 300; break; }
+      if (this.inLight(x, y)) s += 150;
+      for (const m of this.allMothers) if (this.alive[m] && this.col[m] !== N.id && Math.hypot(this.x[m] - x, this.y[m] - y) < 1000) s -= 500;
+      if (this.bioOwner(x, y) === 255) s += 200;
+      if (s > bs) { bs = s; best = { x, y }; }
+    }
+    return best;
+  }
+  rootSpotOk(nation: number, x: number, y: number, self: number) {
+    if (x < 220 || y < 220 || x > WORLD - 220 || y > WORLD - 220 || this.inRock(x, y, 30)) return false;
+    const own = this.bioOwner(x, y);
+    if (own !== 255 && own !== nation) return false;          // never inside a foreign biofilm
+    for (const m of this.allMothers) if (m !== self && this.alive[m] && Math.hypot(this.x[m] - x, this.y[m] - y) < COLONY_GAP) return false;
+    return this.nearest(x, y, 140, j => j !== self && this.kind[j] === Kind.NODE) < 0;
+  }
+  nodeSpotOk(nation: number, x: number, y: number) {
     if (x < 200 || y < 200 || x > WORLD - 200 || y > WORLD - 200 || this.inRock(x, y, 18)) return false;
-    // must touch the colony's own biofilm (expand from your territory, not into the void)
+    // must touch the nation's own biofilm (expand from your territory, not into the void)
     let touch = false;
     for (let dy = -4; dy <= 4 && !touch; dy++) for (let dx = -4; dx <= 4; dx++) {
       const bx = Math.floor(x / BIO) + dx, by = Math.floor(y / BIO) + dy;
       if (bx < 0 || by < 0 || bx >= BIO_N || by >= BIO_N) continue;
       const j = by * BIO_N + bx;
-      if (this.bOwn[j] === colony && this.bStr[j] > 40) { touch = true; break; }
+      if (this.bOwn[j] === nation && this.bStr[j] > 40) { touch = true; break; }
     }
     if (!touch) return false;
     return this.nearest(x, y, 150, j => this.kind[j] === Kind.NODE || this.kind[j] === Kind.MOTHER) < 0;
@@ -487,20 +649,30 @@ export class Sim {
       }
       return;
     }
-    const C = this.colonies[c];
-    // a colony without its mother falls apart: its cells roam and starve
-    if (!C.alive) { if (this.task[i] === T_IDLE) this.wander(i, 200); return; }
+    const N = this.nations[c];
+    // a nation without mothers falls apart: its cells roam and starve
+    if (!N.alive) { if (this.task[i] === T_IDLE) this.wander(i, 200); return; }
     const t = this.task[i];
-    // current target still worth it?
     if (t === T_ATTACK && !this.valid(this.tgt[i], this.tgen[i])) { this.task[i] = this.manual[i] === 2 ? T_AMOVE : T_IDLE; this.tgt[i] = -1; }
-    if (this.manual[i] && (this.task[i] === T_MOVE || this.task[i] === T_ATTACK || this.task[i] === T_BUILD)) return;
     if (k === Kind.MOTHER) {
+      if (!this.rooted[i]) {
+        // the player's travelling mother roots where she stops, if the spot is free
+        if (N.player && this.task[i] === T_IDLE) {
+          if (this.rootSpotOk(c, x, y, i)) this.root(i);
+          else if (!this.warned[i] && this.manual[i] === 0 && this.time - this.hitAt[i] > 1) {
+            this.warned[i] = 1;
+            this.say('A célula-mãe precisa de espaço livre: longe de outras células-mãe e fora de biofilme estrangeiro.');
+          }
+        }
+        return;
+      }
       if (K.dmg && !this.valid(this.tgt[i], this.tgen[i])) {
         const j = this.nearest(x, y, K.r + 30, j2 => this.aggro(i, j2));
         if (j >= 0) { this.setTarget(i, j); this.task[i] = T_ATTACK; }
       }
       return;
     }
+    if (this.manual[i] && (this.task[i] === T_MOVE || this.task[i] === T_ATTACK || this.task[i] === T_BUILD)) return;
     // hungry and away from the biofilm: go back and eat (units on direct orders push on and may starve)
     if (!this.manual[i] && this.task[i] !== T_RETURN && this.task[i] !== T_BUILD && this.sat[i] < (k === Kind.SCOUT ? 30 : 16) && this.bioOwner(x, y) !== c) { this.goHome(i); return; }
     const stance = this.stance[i];
@@ -514,9 +686,10 @@ export class Sim {
       const mj2 = mj >= 0 ? mj : this.nearestMote(x, y, 420);
       if (mj2 >= 0) { this.task[i] = T_GATHER; this.gx[i] = this.mx[mj2]; this.gy[i] = this.my[mj2]; this.tgt[i] = mj2; return; }
       if (this.carry[i] > 0) { this.goHome(i); return; }
-      // nothing near: head for the closest nutrient field to home
+      // nothing near: head for the nutrient field closest to the nearest colony
+      const [hx, hy] = this.homeOf(i);
       let bf = -1, bd = 1e12;
-      this.w.fields.forEach((f, fi) => { const d = (f.x - C.hx) ** 2 + (f.y - C.hy) ** 2 + (this.fieldCount[fi] < 3 ? 1e7 : 0); if (d < bd) { bd = d; bf = fi; } });
+      this.w.fields.forEach((f, fi) => { const d = (f.x - hx) ** 2 + (f.y - hy) ** 2 + (this.fieldCount[fi] < 3 ? 1e7 : 0); if (d < bd) { bd = d; bf = fi; } });
       if (bf >= 0) { const f = this.w.fields[bf]; this.ax[i] = f.x; this.ay[i] = f.y; this.task[i] = T_MOVE; this.gx[i] = f.x + (this.r() - 0.5) * f.r; this.gy[i] = f.y + (this.r() - 0.5) * f.r; }
       return;
     }
@@ -524,12 +697,13 @@ export class Sim {
       if (retaliate >= 0) { this.goHome(i); return; }
       // bask in the brightest spot of the own biofilm
       if (this.bioOwner(x, y) === c && this.inLight(x, y)) { if (this.task[i] !== T_WANDER || Math.hypot(this.gx[i] - x, this.gy[i] - y) < 6) this.wander(i, 40); return; }
+      const [hx, hy] = this.homeOf(i);
       let best: [number, number] | null = null, bd = 1e12;
       for (const l of this.w.lights) {
-        const d = Math.hypot(l.x - C.hx, l.y - C.hy);
+        const d = Math.hypot(l.x - hx, l.y - hy);
         if (d > 900) continue;
-        const a = Math.atan2(l.y - C.hy, l.x - C.hx), reach = Math.min(d, 230);
-        const px = C.hx + Math.cos(a) * reach, py = C.hy + Math.sin(a) * reach;
+        const a = Math.atan2(l.y - hy, l.x - hx), reach = Math.min(d, 230);
+        const px = hx + Math.cos(a) * reach, py = hy + Math.sin(a) * reach;
         if (Math.hypot(px - l.x, py - l.y) < l.r && d < bd) { bd = d; best = [px, py]; }
       }
       if (best) { this.task[i] = T_MOVE; this.gx[i] = best[0] + (this.r() - 0.5) * 60; this.gy[i] = best[1] + (this.r() - 0.5) * 60; }
@@ -539,7 +713,7 @@ export class Sim {
     }
     if (k === Kind.SCOUT || stance === ST_EXPLORE) {
       if (retaliate >= 0 && K.dmg < 5) { this.goHome(i); return; }
-      if (stance === ST_EXPLORE || !C.player) {
+      if (stance === ST_EXPLORE || !N.player) {
         if (this.task[i] !== T_WANDER || Math.hypot(this.gx[i] - x, this.gy[i] - y) < 30) this.wander(i, 1800);
         return;
       }
@@ -567,13 +741,16 @@ export class Sim {
     const a = this.r() * 6.283, d = rad * (0.3 + this.r() * 0.7);
     this.gx[i] = clampW(this.x[i] + Math.cos(a) * d); this.gy[i] = clampW(this.y[i] + Math.sin(a) * d);
   }
+  /** the nearest emitter (colony or node) of the unit's nation */
+  homeOf(i: number): [number, number] {
+    const N = this.nations[this.col[i]];
+    let bx = N.hx, by = N.hy, bd = (N.hx - this.x[i]) ** 2 + (N.hy - this.y[i]) ** 2;
+    for (const j of N.emitters) if (this.alive[j]) { const d = (this.x[j] - this.x[i]) ** 2 + (this.y[j] - this.y[i]) ** 2; if (d < bd) { bd = d; bx = this.x[j]; by = this.y[j]; } }
+    return [bx, by];
+  }
   goHome(i: number) {
-    const c = this.col[i];
-    if (c < 0) return;
-    // the nearest emitter of the colony (mother or node)
-    const C = this.colonies[c];
-    let bx = C.hx, by = C.hy, bd = (C.hx - this.x[i]) ** 2 + (C.hy - this.y[i]) ** 2;
-    for (const j of C.emitters) if (this.alive[j] && this.kind[j] === Kind.NODE) { const d = (this.x[j] - this.x[i]) ** 2 + (this.y[j] - this.y[i]) ** 2; if (d < bd) { bd = d; bx = this.x[j]; by = this.y[j]; } }
+    if (this.col[i] < 0) return;
+    const [bx, by] = this.homeOf(i);
     this.task[i] = T_RETURN; this.gx[i] = bx; this.gy[i] = by;
   }
 
@@ -582,13 +759,14 @@ export class Sim {
     const x = this.x[i], y = this.y[i];
     // metabolism: heal on the own biofilm, burn reserve outside it, starve when it runs out
     if (c >= 0) {
-      const C = this.colonies[c];
-      const home = C.alive && this.bioOwner(x, y) === c;
-      if (home) { this.sat[i] = Math.min(k === Kind.SCOUT ? 80 : 40, this.sat[i] + 6 * dt); if (this.hp[i] < K.hp && this.time - this.hitAt[i] > 2) this.hp[i] = Math.min(K.hp, this.hp[i] + K.hp * 0.02 * dt); }
-      else if (k !== Kind.MOTHER && k !== Kind.NODE) { this.sat[i] -= dt; if (this.sat[i] <= 0) { this.sat[i] = 0; this.hp[i] -= Math.max(1.5, K.hp * 0.02) * dt; if (this.hp[i] <= 0) { this.kill(i); return; } } }
-      if (!C.alive && (k === Kind.NODE || k === Kind.MOTHER)) { this.hp[i] -= 6 * dt; if (this.hp[i] <= 0) { this.kill(i); return; } }
-      if (k === Kind.PHOTO && home) { const e = (this.inLight(x, y) ? 2.4 : 1.2) * dt; C.energy += e; }
-      if (k === Kind.NODE) C.food += 0.15 * dt;
+      const N = this.nations[c];
+      const home = N.alive && this.bioOwner(x, y) === c;
+      const settled = (k === Kind.MOTHER && this.rooted[i]) || k === Kind.NODE;
+      if (home) { this.sat[i] = Math.min(k === Kind.SCOUT ? 80 : k === Kind.MOTHER ? 120 : 40, this.sat[i] + 6 * dt); if (this.hp[i] < K.hp && this.time - this.hitAt[i] > 2) this.hp[i] = Math.min(K.hp, this.hp[i] + K.hp * 0.02 * dt); }
+      else if (!settled) { this.sat[i] -= dt; if (this.sat[i] <= 0) { this.sat[i] = 0; this.hp[i] -= Math.max(1.5, K.hp * 0.02) * dt; if (this.hp[i] <= 0) { this.kill(i); return; } } }
+      if (!N.alive && settled) { this.hp[i] -= 6 * dt; if (this.hp[i] <= 0) { this.kill(i); return; } }
+      if (k === Kind.PHOTO && home) N.energy += (this.inLight(x, y) ? 2.4 : 1.2) * dt;
+      if (k === Kind.NODE) N.food += 0.15 * dt;
     }
     // vents scald what swims too close
     if (this.tick % 5 === 0) for (const v of this.w.vents) { const d = Math.hypot(v.x - x, v.y - y); if (d < v.r + 16) { this.hp[i] -= 3 * dt * 5; if (this.hp[i] <= 0) { this.kill(i); return; } } }
@@ -605,8 +783,8 @@ export class Sim {
       }
     } else if (t === T_RETURN) {
       if (this.bioOwner(x, y) === c) {
-        const C = this.colonies[c];
-        if (this.carry[i] > 0) { C.food += this.carry[i]; this.carry[i] = 0; }
+        const N = this.nations[c];
+        if (this.carry[i] > 0) { N.food += this.carry[i]; this.carry[i] = 0; }
         // stay a little deeper inside until the reserve is refilled
         if (this.sat[i] > 30 || Math.hypot(this.gx[i] - x, this.gy[i] - y) < 40) this.task[i] = T_IDLE;
       }
@@ -616,10 +794,10 @@ export class Sim {
       const j = this.tgt[i];
       if (!this.valid(j, this.tgen[i])) { this.task[i] = this.manual[i] === 2 ? T_AMOVE : T_IDLE; this.tgt[i] = -1; if (this.task[i] === T_AMOVE) { this.gx[i] = this.ax[i]; this.gy[i] = this.ay[i]; } return; }
       const d = Math.hypot(this.x[j] - x, this.y[j] - y) - K.r - KINDS[this.kind[j]].r;
-      // chase, but give up on prey that drags too far from home
-      if (!this.manual[i] && c >= 0 && this.task[i] === T_ATTACK && this.stance[i] !== ST_HUNT && this.col[j] >= 0 && Math.hypot(this.x[j] - this.ax[i], this.y[j] - this.ay[i]) > 450 && this.colonies[c].target < 0) { this.task[i] = T_IDLE; this.tgt[i] = -1; return; }
+      // chase, but give up on prey that drags too far from the anchor
+      if (!this.manual[i] && c >= 0 && this.stance[i] !== ST_HUNT && this.col[j] >= 0 && Math.hypot(this.x[j] - this.ax[i], this.y[j] - this.ay[i]) > 450) { this.task[i] = T_IDLE; this.tgt[i] = -1; return; }
       if (k === Kind.MOTHER) {
-        // the mother cell only strikes what touches it, it never chases
+        // a mother cell only strikes what touches it, it never chases
         this.gx[i] = x; this.gy[i] = y;
         if (d > K.range + 6) { this.task[i] = T_IDLE; this.tgt[i] = -1; }
         else if (this.cd[i] <= 0) { this.cd[i] = K.cd; this.strike(i, j); }
@@ -643,7 +821,7 @@ export class Sim {
     const kj = this.kind[j] as Kind;
     if ((k === Kind.HUNTER || k === Kind.AMOEBA) && kj !== Kind.MOTHER && kj !== Kind.NODE && KINDS[kj].r <= K.r * 1.05 && this.hp[j] < KINDS[kj].hp * 0.3) {
       this.hp[i] = Math.min(K.hp, this.hp[i] + KINDS[kj].hp * 0.5);
-      if (this.col[i] >= 0) this.colonies[this.col[i]].food += 6;
+      if (this.col[i] >= 0) this.nations[this.col[i]].food += 6;
       this.kill(j, i);
       if (k === Kind.AMOEBA) { this.cd[i] = 8; this.task[i] = T_IDLE; this.tgt[i] = -1; }
       return;
@@ -660,7 +838,7 @@ export class Sim {
     if (p < 0) return;
     const a = Math.atan2(this.y[j] - this.y[i], this.x[j] - this.x[i]), v = 240;
     this.px[p] = this.x[i] + Math.cos(a) * KINDS[this.kind[i]].r; this.py[p] = this.y[i] + Math.sin(a) * KINDS[this.kind[i]].r;
-    this.pvx[p] = Math.cos(a) * v; this.pvy[p] = Math.sin(a) * v; this.pdmg[p] = dmg; this.pcol[p] = this.col[i]; this.plife[p] = 1.2;
+    this.pvx[p] = Math.cos(a) * v; this.pvy[p] = Math.sin(a) * v; this.pdmg[p] = dmg; this.plife[p] = 1.2;
     this.ptgt[p] = j; this.pown[p] = i; this.palive[p] = 1;
     this.ang[i] = a;
   }
@@ -670,7 +848,6 @@ export class Sim {
       this.plife[p] -= dt;
       const j = this.ptgt[p];
       if (j >= 0 && this.alive[j]) {
-        // mild homing
         const a = Math.atan2(this.y[j] - this.py[p], this.x[j] - this.px[p]), v = Math.hypot(this.pvx[p], this.pvy[p]);
         this.pvx[p] += (Math.cos(a) * v - this.pvx[p]) * Math.min(1, dt * 6); this.pvy[p] += (Math.sin(a) * v - this.pvy[p]) * Math.min(1, dt * 6);
         if ((this.x[j] - this.px[p]) ** 2 + (this.y[j] - this.py[p]) ** 2 < (KINDS[this.kind[j]].r + 3) ** 2) {
@@ -683,22 +860,22 @@ export class Sim {
     }
   }
   settle(i: number) {
-    const c = this.col[i], C = this.colonies[c];
+    const c = this.col[i], N = this.nations[c];
     const K = KINDS[Kind.NODE];
-    if (C.food < K.food || C.energy < K.energy || !this.nodeSpotOk(c, this.x[i], this.y[i])) {
+    if (N.food < K.food || N.energy < K.energy || !this.nodeSpotOk(c, this.x[i], this.y[i])) {
       this.task[i] = T_IDLE; this.manual[i] = 0;
-      if (C.player) this.say(C.food < K.food || C.energy < K.energy ? 'Recursos insuficientes para o nódulo.' : 'O nódulo precisa tocar o seu biofilme, longe de outros nódulos e rochas.');
-      if (C.builder === i) C.builder = -1;
+      if (N.player) this.say(N.food < K.food || N.energy < K.energy ? 'Recursos insuficientes para o nódulo.' : 'O nódulo precisa tocar o seu biofilme, longe de outros nódulos e rochas.');
+      if (N.builder === i) N.builder = -1;
       return;
     }
-    C.food -= K.food; C.energy -= K.energy;
+    N.food -= K.food; N.energy -= K.energy;
     const x = this.x[i], y = this.y[i];
-    C.pop -= KINDS[Kind.WORKER].pop; C.counts[Kind.WORKER]--;
+    N.pop -= KINDS[Kind.WORKER].pop; N.counts[Kind.WORKER]--;
     this.alive[i] = 0; this.free.push(i); this.count--;
     const n = this.spawn(Kind.NODE, c, x, y);
     if (n >= 0) this.grow[n] = 40;
-    if (C.builder === i) C.builder = -1;
-    if (C.player) this.say('Nódulo de biofilme fixado: o território cresce.');
+    if (N.builder === i) N.builder = -1;
+    if (N.player) this.say('Nódulo de biofilme fixado: o território cresce e cabem +6 células.');
   }
 
   moveAll(dt: number) {
@@ -708,28 +885,28 @@ export class Sim {
       const k = this.kind[i] as Kind, K = KINDS[k];
       let dvx = 0, dvy = 0;
       const t = this.task[i];
-      if (K.speed > 0 && t !== T_IDLE) {
+      const speed = k === Kind.MOTHER && !this.rooted[i] ? 36 : K.speed;
+      if (speed > 0 && t !== T_IDLE) {
         const dx = this.gx[i] - this.x[i], dy = this.gy[i] - this.y[i], d = Math.hypot(dx, dy);
-        const sp = K.speed * (t === T_WANDER ? 0.45 : 1) * (this.sat[i] <= 0 ? 0.6 : 1);
+        const sp = speed * (t === T_WANDER ? 0.45 : 1) * (this.sat[i] <= 0 ? 0.6 : 1);
         if (d > 1) { const f = Math.min(1, d / 30); dvx = (dx / d) * sp * f; dvy = (dy / d) * sp * f; }
       }
       const [fx, fy] = flowAt(this.x[i], this.y[i], this.time);
-      const drift = k === Kind.NODE || k === Kind.MOTHER ? 0 : this.col[i] < 0 ? 1 : 0.5;
+      const drift = k === Kind.NODE || (k === Kind.MOTHER && this.rooted[i]) ? 0 : this.col[i] < 0 ? 1 : 0.5;
       const a = 1 - Math.exp(-dt * 5);
       this.vx[i] += (dvx + fx * drift - this.vx[i]) * a; this.vy[i] += (dvy + fy * drift - this.vy[i]) * a;
       if (k === Kind.NODE) { this.vx[i] = 0; this.vy[i] = 0; }
       this.x[i] = clampW(this.x[i] + this.vx[i] * dt); this.y[i] = clampW(this.y[i] + this.vy[i] * dt);
-      // heading follows the swimming direction (or faces the target in a fight)
       let hx = dvx, hy = dvy;
       if (t === T_ATTACK && this.tgt[i] >= 0 && this.alive[this.tgt[i]]) { hx = this.x[this.tgt[i]] - this.x[i]; hy = this.y[this.tgt[i]] - this.y[i]; }
       if (hx * hx + hy * hy > 4 && k !== Kind.NODE) {
         const want = Math.atan2(hy, hx);
         let da = want - this.ang[i];
         da -= Math.round(da / (Math.PI * 2)) * Math.PI * 2;
-        this.ang[i] += da * turn * (k === Kind.MOTHER ? 0.15 : 0.6);
+        this.ang[i] += da * turn * (k === Kind.MOTHER ? (this.rooted[i] ? 0.15 : 0.4) : 0.6);
       }
     }
-    // separation (soft bodies push apart) + rocks
+    // separation (soft bodies push apart) + obstacles
     for (let i = 0; i < this.top; i++) {
       if (!this.alive[i]) continue;
       const ri = KINDS[this.kind[i]].r, xi = this.x[i], yi = this.y[i];
@@ -748,7 +925,6 @@ export class Sim {
           this.x[i] -= nx * o * wi; this.y[i] -= ny * o * wi; this.x[j] += nx * o * wj; this.y[j] += ny * o * wj;
         }
       }
-      // rocks
       for (let k = this.rHead[by * HN + bx]; k >= 0; k = this.rNext[k]) {
         const rk = this.obst[this.rIdx[k]], dx = this.x[i] - rk.x, dy = this.y[i] - rk.y, d = Math.hypot(dx, dy), rr = rk.r + ri;
         if (d < rr && d > 1e-3) { this.x[i] = rk.x + (dx / d) * rr; this.y[i] = rk.y + (dy / d) * rr; }
@@ -757,35 +933,35 @@ export class Sim {
   }
 
   // --- goals (the tutorial-ish objectives of the player) ------------------------------------------------------------------------
-  goals = { food: false, divide: false, node: false, photo: false, rival: false, big: false };
   checkGoals() {
-    const P = this.colonies[0];
+    const P = this.nations[0];
     if (this.tick % 10) return;
     const g = this.goals;
-    if (!g.food && P.food >= 200) { g.food = true; }
+    if (!g.food && P.food >= 200) g.food = true;
     if (!g.divide && P.born > 0) g.divide = true;
     if (!g.node && P.nodes > 0) g.node = true;
+    if (!g.colony && P.founded > 0) g.colony = true;
     if (!g.photo) for (let i = 0; i < this.top; i++) if (this.alive[i] && this.col[i] === 0 && this.kind[i] === Kind.PHOTO && this.inLight(this.x[i], this.y[i]) && this.bioOwner(this.x[i], this.y[i]) === 0) { g.photo = true; break; }
     if (!g.rival && P.kills > 0) g.rival = true;
     const cells = P.counts.reduce((a, b) => a + b, 0);
     if (!g.big && cells >= 80) g.big = true;
-    if (!this.won && g.big && g.rival && g.node) { this.won = true; this.say('A sua colônia domina a poça!'); }
+    if (!this.won && g.big && g.rival && g.colony) { this.won = true; this.say('A sua espécie domina a poça!'); }
   }
 
   // --- commands ---------------------------------------------------------------------------------------------------------------------
   command(cmd: Cmd) {
-    const P = this.colonies[0];
+    const P = this.nations[0];
     const mine = (i: number) => i >= 0 && i < this.top && this.alive[i] && this.col[i] === 0;
     switch (cmd.t) {
       case 'move': case 'gather': {
         const ids = cmd.ids.filter(mine);
-        // spread a group around the point instead of stacking it
         ids.forEach((i, n) => {
           const k = this.kind[i];
-          if (k === Kind.NODE) return;
+          if (k === Kind.NODE || (k === Kind.MOTHER && this.rooted[i])) return;
           const ring = n === 0 ? 0 : 12 + Math.sqrt(n) * 14, a = n * 2.4;
           const x = clampW(cmd.x + Math.cos(a) * ring), y = clampW(cmd.y + Math.sin(a) * ring);
           this.tgt[i] = -1; this.manual[i] = 1;
+          if (k === Kind.MOTHER) { this.task[i] = T_MOVE; this.gx[i] = cmd.x; this.gy[i] = cmd.y; this.warned[i] = 0; return; }
           if (cmd.t === 'gather' && k === Kind.WORKER) { this.ax[i] = cmd.x; this.ay[i] = cmd.y; this.task[i] = T_MOVE; this.gx[i] = x; this.gy[i] = y; this.manual[i] = 0; }
           else if (isMil(k)) { this.task[i] = T_AMOVE; this.gx[i] = x; this.gy[i] = y; this.ax[i] = x; this.ay[i] = y; this.manual[i] = 2; }
           else { this.task[i] = T_MOVE; this.gx[i] = x; this.gy[i] = y; this.ax[i] = x; this.ay[i] = y; }
@@ -797,14 +973,49 @@ export class Sim {
         for (const i of cmd.ids.filter(mine)) { if (!KINDS[this.kind[i]].dmg || this.kind[i] === Kind.MOTHER) continue; this.setTarget(i, cmd.target); this.task[i] = T_ATTACK; this.manual[i] = 1; }
         break;
       }
-      case 'stance': for (const i of cmd.ids.filter(mine)) { this.stance[i] = cmd.stance; this.manual[i] = 0; if (this.task[i] !== T_ATTACK) this.task[i] = T_IDLE; this.ax[i] = this.x[i]; this.ay[i] = this.y[i]; } break;
-      case 'train': if (P.alive && !this.train(P, cmd.kind)) this.say(P.queue.length >= 6 ? 'Fila de divisão cheia.' : 'Nutrientes ou energia insuficientes.'); break;
-      case 'cancel': { const q = P.queue[cmd.index]; if (q) { P.food += KINDS[q.kind].food; P.energy += KINDS[q.kind].energy; P.queue.splice(cmd.index, 1); } break; }
+      case 'stance':
+        for (const i of cmd.ids.filter(mine)) { this.stance[i] = cmd.stance; this.manual[i] = 0; if (this.task[i] !== T_ATTACK) this.task[i] = T_IDLE; this.ax[i] = this.x[i]; this.ay[i] = this.y[i]; }
+        if (cmd.group !== undefined) { const g = this.groups.get(cmd.group); if (g && g.nation === 0) g.stance = cmd.stance; }
+        break;
+      case 'train': {
+        const m = cmd.mother !== undefined && mine(cmd.mother) && this.kind[cmd.mother] === Kind.MOTHER && this.rooted[cmd.mother] ? cmd.mother : this.capital(P);
+        if (m < 0 || !this.rooted[m]) { this.say('Nenhuma célula-mãe fixada para dividir.'); break; }
+        if (!this.train(P, m, cmd.kind)) this.say((this.queues.get(m)?.length ?? 0) >= 6 ? 'Fila de divisão cheia.' : 'Nutrientes ou energia insuficientes.');
+        break;
+      }
+      case 'cancel': {
+        const q = this.queues.get(cmd.mother)?.[cmd.index];
+        if (q && mine(cmd.mother)) { P.food += KINDS[q.kind].food; P.energy += KINDS[q.kind].energy; this.queues.get(cmd.mother)!.splice(cmd.index, 1); }
+        break;
+      }
       case 'node': {
         const i = cmd.id;
         if (!mine(i) || this.kind[i] !== Kind.WORKER) break;
         if (!this.nodeSpotOk(0, cmd.x, cmd.y)) { this.say('O nódulo precisa tocar o seu biofilme, longe de outros nódulos e rochas.'); break; }
         this.order(i, T_BUILD, cmd.x, cmd.y); this.manual[i] = 1;
+        break;
+      }
+      case 'group': {
+        const ids = cmd.ids.filter(i => mine(i) && this.kind[i] !== Kind.NODE && !(this.kind[i] === Kind.MOTHER && this.rooted[i]));
+        if (!ids.length) break;
+        const g = this.newGroup(0, cmd.name.slice(0, 24) || `Grupo ${this.nextGroup}`, cmd.color, 0, cmd.key);
+        // a hotkey belongs to one group only
+        if (cmd.key) for (const o of this.groups.values()) if (o !== g && o.nation === 0 && o.key === cmd.key) o.key = 0;
+        for (const i of ids) this.grp[i] = g.id;
+        g.stance = this.stance[ids[0]];
+        break;
+      }
+      case 'groupAdd': {
+        const g = this.groups.get(cmd.group);
+        if (!g || g.nation !== 0) break;
+        for (const i of cmd.ids) if (mine(i) && this.kind[i] !== Kind.NODE && !(this.kind[i] === Kind.MOTHER && this.rooted[i])) { this.grp[i] = g.id; this.stance[i] = g.stance; }
+        break;
+      }
+      case 'groupDel': {
+        const g = this.groups.get(cmd.group);
+        if (!g || g.nation !== 0) break;
+        for (let i = 0; i < this.top; i++) if (this.grp[i] === g.id) this.grp[i] = -1;
+        this.groups.delete(g.id);
         break;
       }
       case 'pause': this.paused = cmd.on; break;
@@ -822,8 +1033,9 @@ export class Sim {
       ents[o] = this.x[i]; ents[o + 1] = this.y[i]; ents[o + 2] = this.ang[i];
       ents[o + 3] = this.set[i] * 16 + k; ents[o + 4] = this.col[i];
       ents[o + 5] = Math.max(0, this.hp[i]) / KINDS[k].hp;
-      ents[o + 6] = (this.carry[i] > 0 ? 1 : 0) | (this.time - this.hitAt[i] < 0.15 ? 2 : 0) | (this.sat[i] <= 0 ? 4 : 0) | (this.stance[i] << 4) | (this.task[i] === T_BUILD ? 128 : 0);
+      ents[o + 6] = (this.carry[i] > 0 ? 1 : 0) | (this.time - this.hitAt[i] < 0.15 ? 2 : 0) | (this.sat[i] <= 0 ? 4 : 0) | (this.stance[i] << 4) | (this.task[i] === T_BUILD ? 128 : 0) | (k === Kind.MOTHER && !this.rooted[i] ? 256 : 0);
       ents[o + 7] = this.gen[i];
+      ents[o + 8] = this.grp[i];
     }
     let nm = 0;
     const motes = new Float32Array(this.mtop * 3);
@@ -834,19 +1046,39 @@ export class Sim {
     const deaths = this.deaths; this.deaths = [];
     return { ents, n, motes, nm, shots, np, deaths };
   }
+  /** group sizes and centres (the player's groups + the AI's armies); empty groups are dropped */
+  groupTable(): Group[] {
+    for (const g of this.groups.values()) { g.n = 0; g.cx = 0; g.cy = 0; }
+    for (let i = 0; i < this.top; i++) {
+      if (!this.alive[i] || this.grp[i] < 0) continue;
+      const g = this.groups.get(this.grp[i]);
+      if (!g) { this.grp[i] = -1; continue; }
+      g.n++; g.cx += this.x[i]; g.cy += this.y[i];
+    }
+    const out: Group[] = [];
+    for (const g of [...this.groups.values()]) {
+      if (!g.n) { this.groups.delete(g.id); continue; }
+      g.cx /= g.n; g.cy /= g.n;
+      out.push({ ...g });
+    }
+    return out;
+  }
   stats(): Stats {
-    const P = this.colonies[0];
+    const P = this.nations[0];
     const msg = this.msg && this.time - this.msgAt < 4 ? this.msg : null;
     return {
       time: this.time, food: P.food, energy: P.energy, pop: P.pop, cap: P.cap, alive: P.alive,
-      queue: P.queue.map((q, i) => ({ kind: q.kind, p: i === 0 ? q.t / KINDS[q.kind].time : 0 })), counts: P.counts.slice(), nodes: P.nodes, area: P.area,
-      kills: P.kills, lost: P.lost, colonies: this.colonies.length, rivalsAlive: this.colonies.filter(c => c.alive && !c.player).length, msg, won: this.won,
+      counts: P.counts.slice(), nodes: P.nodes, colonies: P.mothers, area: P.area, kills: P.kills, lost: P.lost, founded: P.founded,
+      nationsAlive: this.nations.filter(n => n.alive).length, msg, won: this.won,
+      mothers: P.motherList.filter(m => this.alive[m]).map(m => ({ id: m, x: this.x[m], y: this.y[m], rooted: !!this.rooted[m], queue: (this.queues.get(m) ?? []).map((q, i) => ({ kind: q.kind, p: i === 0 ? q.t / KINDS[q.kind].time : 0 })) })),
+      groups: this.groupTable(),
     };
   }
-  /** colony table for labels / minimap: x, y, species, pop, alive, area */
+  /** colony table for labels / minimap: x, y, nation, rooted (one row per mother cell) */
   colonyTable(): Float32Array {
-    const out = new Float32Array(this.colonies.length * 6);
-    this.colonies.forEach((c, i) => { out.set([c.hx, c.hy, c.species, c.pop + c.counts[Kind.NODE], c.alive ? 1 : 0, c.area], i * 6); });
+    const ms = this.allMothers.filter(m => this.alive[m]);
+    const out = new Float32Array(ms.length * 4);
+    ms.forEach((m, i) => out.set([this.x[m], this.y[m], this.col[m], this.rooted[m]], i * 4));
     return out;
   }
 }

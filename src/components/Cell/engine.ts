@@ -5,14 +5,17 @@ import { CellGL, INST, View, Batch } from '../../lib/cell/gl';
 import type { Atlas, AtlasEntry } from '../../lib/cell/atlas';
 import { WorldDef, WORLD, BIO, BIO_N } from '../../lib/cell/world';
 import { KINDS, Kind, CellSpecies, teamColour } from '../../lib/cell/look';
-import { STRIDE, Cmd, Stats, NEUTRAL_SET } from '../../lib/cell/sim';
+import { STRIDE, Cmd, Stats, NEUTRAL_SET, Group } from '../../lib/cell/sim';
 
 interface Frame { ents: Float32Array; n: number; t: number }
-export interface Selection { ids: number[]; counts: number[]; stance: number; workers: number }
+export interface Selection { ids: number[]; counts: number[]; stance: number; workers: number; group: number; seeds: number }
 export interface HudState {
   stats: Stats | null; goals: Record<string, boolean>; sel: Selection; paused: boolean; speed: number;
-  placing: boolean; hover: string | null; fps: number; groups: { n: number; size: number }[]; zoom: number;
+  placing: boolean; hover: string | null; fps: number; groups: Group[]; zoom: number; active: number;
 }
+/** group colours the player can pick (Ctrl+1..9 uses them in order) */
+export const GROUP_COLORS = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#22d3ee', '#60a5fa', '#a78bfa', '#f472b6', '#e5e7eb'];
+const hexRgb = (h: string): [number, number, number] => { const v = parseInt(h.slice(1), 16); return [(v >> 16) & 255, (v >> 8) & 255, v & 255]; };
 const ZOOMS = [0.1, 0.13, 0.17, 0.22, 0.28, 0.36, 0.46, 0.6, 0.78, 1, 2];
 const DOT_ZOOM = 0.3;
 
@@ -24,7 +27,9 @@ export class CellEngine {
   motes = new Float32Array(0); nm = 0; shots = new Float32Array(0); np = 0;
   colonies = new Float32Array(0);
   sel = new Map<number, number>();
-  groups = new Map<number, Map<number, number>>();
+  groups: Group[] = [];
+  groupRgb = new Map<number, [number, number, number]>();
+  badges: { x: number; y: number; w: number; h: number; id: number }[] = [];
   keys = new Set<string>();
   stats: Stats | null = null; goals: Record<string, boolean> = {};
   paused = false; speed = 1;
@@ -36,6 +41,7 @@ export class CellEngine {
   fx: { x: number; y: number; vx: number; vy: number; t: number; life: number; c: [number, number, number]; e: AtlasEntry }[] = [];
   hover: number = -1;
   lastClick = { i: -1, t: 0 };
+  lastKey = { n: 0, t: 0 };
   palette: [number, number, number][];
   paletteCss: string[];
   ground: Float32Array; groundN: number;
@@ -51,10 +57,10 @@ export class CellEngine {
     public world: WorldDef, public atlas: Atlas, public sim: Worker, public onHud: (s: HudState) => void,
   ) {
     const alien = world.species[0].mode === 'alien';
-    this.palette = world.homes.map(h => teamColour(world.species[h.species]));
+    this.palette = world.species.map(sp => teamColour(sp));
     this.paletteCss = this.palette.map(c => `rgb(${c[0]},${c[1]},${c[2]})`);
     this.gl = new CellGL(canvas, atlas, world, this.palette, alien);
-    const home = world.homes[0];
+    const home = world.starts[0][0];
     this.view = { x: home.x, y: home.y, zoom: 1 };
     // static ground batch: sand grains + vents
     this.ground = new Float32Array((world.rocks.length + world.vents.length) * INST);
@@ -86,7 +92,13 @@ export class CellEngine {
     this.paused = m.paused; this.speed = m.speed;
     if (m.bioOwn && m.bioStr) { this.gl.setBio(m.bioOwn, m.bioStr); this.bioOwn = m.bioOwn; this.miniDirty = true; }
     if (m.colonies) this.colonies = m.colonies;
-    if (m.stats) { this.stats = m.stats; this.goals = m.goals ?? {}; this.hud(); }
+    if (m.stats) {
+      this.stats = m.stats; this.goals = m.goals ?? {};
+      this.groups = m.stats.groups;
+      this.groupRgb.clear();
+      for (const g of this.groups) this.groupRgb.set(g.id, hexRgb(g.color));
+      this.hud();
+    }
     for (let i = 0; i < m.deaths.length; i += 4) this.burst(m.deaths[i], m.deaths[i + 1], m.deaths[i + 2], m.deaths[i + 3]);
     // forget selected cells that died
     for (const [id, g] of this.sel) if (id >= m.n || m.ents[id * STRIDE + 7] !== g) this.sel.delete(id);
@@ -106,43 +118,72 @@ export class CellEngine {
   // --- commands -------------------------------------------------------------------------------------------------------------------
   cmd(c: Cmd) { this.sim.postMessage({ t: 'cmd', cmd: c }); }
   selIds() { return [...this.sel.keys()]; }
-  setStance(s: number) { this.cmd({ t: 'stance', ids: this.selIds(), stance: s }); }
-  train(k: Kind) { this.cmd({ t: 'train', kind: k }); }
-  cancel(i: number) { this.cmd({ t: 'cancel', index: i }); }
+  setStance(s: number) { const g = this.selection().group; this.cmd({ t: 'stance', ids: this.selIds(), stance: s, group: g >= 0 ? g : undefined }); }
+  /** the mother cell the division bar works on: a selected colony, else the capital */
+  activeMother(): number {
+    const f = this.cur, st = this.stats;
+    if (f) for (const id of this.sel.keys()) { const o = id * STRIDE; if (f.ents[o + 3] % 16 === Kind.MOTHER && !(f.ents[o + 6] & 256)) return id; }
+    return st?.mothers.find(m => m.rooted)?.id ?? -1;
+  }
+  train(k: Kind) { const m = this.activeMother(); this.cmd({ t: 'train', kind: k, mother: m >= 0 ? m : undefined }); }
+  cancel(i: number) { const m = this.activeMother(); if (m >= 0) this.cmd({ t: 'cancel', mother: m, index: i }); }
   togglePause() { this.cmd({ t: 'pause', on: !this.paused }); }
   setSpeed(k: number) { this.cmd({ t: 'speed', k }); }
   startPlacing() { if (this.selection().workers) { this.placing = true; this.hud(); } }
-  focusHome() { const c = this.colonies; if (c.length) { this.view.x = c[0]; this.view.y = c[1]; } }
-  selectKind(k: number) { const f = this.cur; if (!f) return; for (const id of [...this.sel.keys()]) if (f.ents[id * STRIDE + 3] % 16 !== k) this.sel.delete(id); this.hud(); }
-  selectMother() {
+  focus(x: number, y: number) { this.view.x = x; this.view.y = y; }
+  focusHome() { const m = this.stats?.mothers.find(q => q.rooted) ?? this.stats?.mothers[0]; if (m) this.focus(m.x, m.y); }
+  /** keep only the cells of one kind in the selection */
+  filterKind(k: number) { const f = this.cur; if (!f) return; for (const id of [...this.sel.keys()]) if (f.ents[id * STRIDE + 3] % 16 !== k) this.sel.delete(id); this.hud(); }
+  /** every cell of a kind in the whole nation */
+  selectAllKind(k: number, add = false) {
     const f = this.cur; if (!f) return;
-    this.sel.clear();
-    for (let i = 0; i < f.n; i++) { const o = i * STRIDE; if (f.ents[o + 7] >= 0 && f.ents[o + 4] === 0 && f.ents[o + 3] % 16 === Kind.MOTHER) this.sel.set(i, f.ents[o + 7]); }
-    this.focusHome(); this.hud();
-  }
-  selectGroup(n: number, add = false) {
-    const g = this.groups.get(n); if (!g) return;
     if (!add) this.sel.clear();
-    for (const [id, gen] of g) this.sel.set(id, gen);
+    for (let i = 0; i < f.n; i++) { const o = i * STRIDE; if (f.ents[o + 7] >= 0 && f.ents[o + 4] === 0 && f.ents[o + 3] % 16 === k) this.sel.set(i, f.ents[o + 7]); }
     this.hud();
   }
-  setGroup(n: number) { this.groups.set(n, new Map(this.sel)); this.hud(); }
+  selectMother() {
+    const m = this.activeMother(), f = this.cur;
+    if (!f || m < 0) return;
+    this.sel.clear(); this.sel.set(m, f.ents[m * STRIDE + 7]);
+    this.focus(this.rx[m] || f.ents[m * STRIDE], this.ry[m] || f.ents[m * STRIDE + 1]); this.hud();
+  }
+  selectGroup(id: number, add = false, focus = false) {
+    const f = this.cur; if (!f) return;
+    if (!add) this.sel.clear();
+    for (let i = 0; i < f.n; i++) { const o = i * STRIDE; if (f.ents[o + 7] >= 0 && f.ents[o + 4] === 0 && f.ents[o + 8] === id) this.sel.set(i, f.ents[o + 7]); }
+    const g = this.groups.find(q => q.id === id);
+    if (focus && g) this.focus(g.cx, g.cy);
+    this.hud();
+  }
+  createGroup(name: string, color: string, key = 0) {
+    if (!this.sel.size) return;
+    if (!key) { const used = new Set(this.groups.filter(g => g.nation === 0).map(g => g.key)); for (let n = 1; n <= 9; n++) if (!used.has(n)) { key = n; break; } }
+    this.cmd({ t: 'group', ids: this.selIds(), name, color, key });
+  }
+  addToGroup(id: number) { if (this.sel.size) this.cmd({ t: 'groupAdd', group: id, ids: this.selIds() }); }
+  deleteGroup(id: number) { this.cmd({ t: 'groupDel', group: id }); }
+  myGroups() { return this.groups.filter(g => g.nation === 0); }
 
   selection(): Selection {
     const counts = new Array(8).fill(0), f = this.cur;
-    let stance = -1, workers = 0;
+    let stance = -1, workers = 0, group = -2, seeds = 0;
     if (f) for (const id of this.sel.keys()) {
       const o = id * STRIDE, k = f.ents[o + 3] % 16;
       counts[k]++;
       if (k === Kind.WORKER) workers++;
+      if (f.ents[o + 6] & 256) seeds++;
       const st = (f.ents[o + 6] >> 4) & 7;
       stance = stance < 0 ? st : stance === st ? st : 9;
+      const g = f.ents[o + 8];
+      group = group === -2 ? g : group === g ? g : -1;
     }
-    return { ids: this.selIds(), counts, stance, workers };
+    // the selection is a group when it holds the whole group
+    const G = this.groups.find(q => q.id === group);
+    if (!G || G.nation !== 0 || G.n !== this.sel.size) group = -1;
+    return { ids: this.selIds(), counts, stance, workers, group, seeds };
   }
   hud() {
-    const groups = [...this.groups.entries()].filter(([, g]) => g.size).map(([n, g]) => ({ n, size: g.size })).sort((a, b) => a.n - b.n);
-    this.onHud({ stats: this.stats, goals: this.goals, sel: this.selection(), paused: this.paused, speed: this.speed, placing: this.placing, hover: this.hoverText(), fps: this.fps, groups, zoom: this.view.zoom });
+    this.onHud({ stats: this.stats, goals: this.goals, sel: this.selection(), paused: this.paused, speed: this.speed, placing: this.placing, hover: this.hoverText(), fps: this.fps, groups: this.myGroups(), zoom: this.view.zoom, active: this.activeMother() });
   }
   hoverText(): string | null {
     const f = this.cur, i = this.hover;
@@ -151,7 +192,7 @@ export class CellEngine {
     const K = KINDS[k];
     if (col < 0) return K.name;
     const sp = this.world.species[set];
-    return col === 0 ? `${K.name} · sua colônia` : `${K.name} · ${sp.genus} ${sp.species}`;
+    return col === 0 ? `${K.name} · sua espécie` : `${K.name} · ${sp.genus} ${sp.species}`;
   }
 
   // --- coordinates ---------------------------------------------------------------------------------------------------------------------
@@ -192,6 +233,8 @@ export class CellEngine {
       if (e.button === 2) { if (this.placing) { this.placing = false; this.hud(); return; } this.order(x, y); return; }
       if (e.button === 0) {
         if (this.placing) { this.placeNode(x, y); return; }
+        const b = this.badges.find(q => x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h);
+        if (b) { this.selectGroup(b.id, e.shiftKey); return; }
         this.drag = { x0: x, y0: y, x1: x, y1: y, add: e.shiftKey };
       }
     });
@@ -224,7 +267,11 @@ export class CellEngine {
       else if (k === 'escape') { if (this.placing) this.placing = false; else this.sel.clear(); this.hud(); }
       else if (k === 'h') this.selectMother();
       else if (k === 'n' || k === 'b') this.startPlacing();
-      else if (/^[1-9]$/.test(k)) { if (e.ctrlKey || e.metaKey) { e.preventDefault(); this.setGroup(+k); } else this.selectGroup(+k, e.shiftKey); }
+      else if (/^[1-9]$/.test(k)) {
+        const n = +k;
+        if (e.ctrlKey || e.metaKey) { e.preventDefault(); this.createGroup(`Grupo ${n}`, GROUP_COLORS[n - 1], n); }
+        else { const g = this.myGroups().find(q => q.key === n); if (g) this.selectGroup(g.id, e.shiftKey, this.lastKey.n === n && performance.now() - this.lastKey.t < 400); this.lastKey = { n, t: performance.now() }; }
+      }
       else if (k === '+' || k === '=') { this.zi = Math.min(ZOOMS.length - 1, this.zi + 1); this.view.zoom = ZOOMS[this.zi]; this.hud(); }
       else if (k === '-') { this.zi = Math.max(0, this.zi - 1); this.view.zoom = ZOOMS[this.zi]; this.hud(); }
       else if (k === 'delete') this.sel.clear();
@@ -345,7 +392,7 @@ export class CellEngine {
       const h = hashf(tx, ty);
       if (h > 0.55 || n >= 190) continue;
       const h2 = hashf(tx + 91, ty - 17), h3 = hashf(tx - 33, ty + 57);
-      const set = 1 + Math.floor(h2 * 16), amoeba = h3 < 0.2;
+      const set = 1 + Math.floor(h2 * (this.world.species.length - 1)), amoeba = h3 < 0.2;
       const e = amoeba ? this.atlas.bySprite[(NEUTRAL_SET + 6) * 16 + Kind.AMOEBA] : this.atlas.bySprite[set * 16 + (h3 < 0.6 ? Kind.MOTHER : Kind.HUNTER)];
       if (!e) continue;
       const x = (tx + 0.2 + h2 * 0.6) * T + Math.sin(t * 0.05 + h * 9) * 60, y = (ty + 0.2 + h3 * 0.6) * T + Math.cos(t * 0.04 + h2 * 7) * 60;
@@ -382,8 +429,9 @@ export class CellEngine {
       const e = this.atlas.bySprite[f.ents[o + 3]];
       if (!e) continue;
       if (dots) {
-        const c = col >= 0 ? this.palette[col] : [150, 170, 160];
-        const d = KINDS[k].r * 2.4;
+        const gc = col === 0 && f.ents[o + 8] >= 0 ? this.groupRgb.get(f.ents[o + 8]) : undefined;
+        const c = gc ?? (col >= 0 ? this.palette[col] : [150, 170, 160]);
+        const d = KINDS[k].r * (gc ? 3.2 : 2.4);
         const oo = n * INST;
         this.put(a, n++, x, y, 0, -1, e, 0, 0, c[0] / 255, c[1] / 255, c[2] / 255, 1, col < 0 ? 0.6 : 1);
         a[oo + 6] = d; a[oo + 7] = d;
@@ -425,6 +473,27 @@ export class CellEngine {
     c.clearRect(0, 0, this.w, this.h);
     const k = (this.px / dpr) * z;   // css px per world px
     if (f) {
+      // the player's groups: a ring in the group's colour around each member
+      if (z >= DOT_ZOOM && this.groupRgb.size) {
+        c.lineWidth = z >= 0.6 ? 2 : 1.5;
+        for (let i = 0; i < f.n; i++) {
+          const o = i * STRIDE; if (f.ents[o + 7] < 0 || f.ents[o + 4] !== 0 || f.ents[o + 8] < 0 || this.sel.has(i)) continue;
+          const gc = this.groupRgb.get(f.ents[o + 8]); if (!gc) continue;
+          const [sx, sy] = this.toScreen(this.rx[i], this.ry[i]);
+          if (sx < -20 || sy < -20 || sx > this.w + 20 || sy > this.h + 20) continue;
+          const r = Math.max(3, KINDS[f.ents[o + 3] % 16].r * k + 2);
+          c.strokeStyle = `rgba(${gc[0]},${gc[1]},${gc[2]},0.75)`;
+          c.beginPath(); c.arc(sx, sy, r, 0, Math.PI * 2); c.stroke();
+        }
+      }
+      // travelling mother cells: a dashed ring where they would root
+      c.lineWidth = 1.5;
+      for (let i = 0; i < f.n; i++) {
+        const o = i * STRIDE; if (f.ents[o + 7] < 0 || f.ents[o + 4] !== 0 || !(f.ents[o + 6] & 256)) continue;
+        const [sx, sy] = this.toScreen(this.rx[i], this.ry[i]);
+        c.strokeStyle = 'rgba(253,230,138,0.8)'; c.setLineDash([4, 4]);
+        c.beginPath(); c.arc(sx, sy, Math.max(8, 450 * k), 0, Math.PI * 2); c.stroke(); c.setLineDash([]);
+      }
       // selection rings + health
       c.lineWidth = 1.5;
       for (const id of this.sel.keys()) {
@@ -451,23 +520,45 @@ export class CellEngine {
       }
     }
     // colony names when zoomed out
+    this.badges = [];
     if (z < 0.5 && this.colonies.length) {
       c.font = '600 11px ui-sans-serif, system-ui'; c.textAlign = 'center';
-      // one name per cluster of the same species (the player's colony always)
+      // one name per cluster of the same nation (every colony of the player)
       const shown: [number, number, number][] = [];
-      for (let i = 0; i < this.colonies.length / 6; i++) {
-        const o = i * 6; if (!this.colonies[o + 4]) continue;
+      for (let i = 0; i < this.colonies.length / 4; i++) {
+        const o = i * 4, nat = this.colonies[o + 2];
+        if (!this.colonies[o + 3]) continue;
         const [sx, sy] = this.toScreen(this.colonies[o], this.colonies[o + 1]);
         if (sx < -80 || sy < -20 || sx > this.w + 80 || sy > this.h + 20) continue;
-        const set = this.colonies[o + 2];
-        if (i > 0 && shown.some(q => q[2] === set && Math.hypot(q[0] - sx, q[1] - sy) < 260)) continue;
-        shown.push([sx, sy, set]);
-        const sp = this.world.species[set];
-        const label = i === 0 ? 'Sua colônia' : `${sp.genus} ${sp.species}`;
+        if (shown.some(q => q[2] === nat && Math.hypot(q[0] - sx, q[1] - sy) < (nat === 0 ? 90 : 260))) continue;
+        shown.push([sx, sy, nat]);
+        const sp = this.world.species[nat];
+        const label = nat === 0 ? 'Sua colônia' : `${sp.genus} ${sp.species}`;
         const tw = c.measureText(label).width + 12;
         c.fillStyle = 'rgba(0,0,0,0.55)'; c.fillRect(sx - tw / 2, sy - 26, tw, 16);
-        c.fillStyle = i === 0 ? '#86efac' : this.paletteCss[i];
+        c.fillStyle = nat === 0 ? '#86efac' : this.paletteCss[nat];
         c.fillText(label, sx, sy - 14);
+      }
+    }
+    // group badges in the regional view: the player's groups (clickable) and the AI's armies on the march
+    if (z < 0.5) {
+      c.font = '700 11px ui-sans-serif, system-ui'; c.textAlign = 'left';
+      const all = this.stats?.groups ?? [];
+      for (const g of all) {
+        const mine = g.nation === 0;
+        if (!mine && (g.ai !== 2 || g.n < 4)) continue;
+        const [sx, sy] = this.toScreen(g.cx, g.cy);
+        if (sx < -100 || sy < -20 || sx > this.w + 100 || sy > this.h + 20) continue;
+        const label = `${g.name} · ${g.n}`, tw = c.measureText(label).width + 22, bh = 18;
+        const bx = sx - tw / 2, by = sy - bh / 2;
+        c.fillStyle = mine ? 'rgba(6,12,16,0.85)' : 'rgba(40,6,6,0.75)';
+        c.beginPath(); c.roundRect(bx, by, tw, bh, 9); c.fill();
+        c.strokeStyle = mine ? g.color : this.paletteCss[g.nation]; c.lineWidth = 1.5; c.stroke();
+        c.fillStyle = mine ? g.color : this.paletteCss[g.nation];
+        c.beginPath(); c.arc(bx + 9, sy, 4, 0, Math.PI * 2); c.fill();
+        c.fillStyle = mine ? '#f8fafc' : '#fecaca';
+        c.fillText(label, bx + 17, sy + 4);
+        if (mine) this.badges.push({ x: bx, y: by, w: tw, h: bh, id: g.id });
       }
     }
     // order pings
@@ -526,10 +617,10 @@ export class CellEngine {
     c.drawImage(this.miniBase, 0, 0, W, H);
     const s = W / WORLD;
     // colonies
-    for (let i = 0; i < this.colonies.length / 6; i++) {
-      const o = i * 6; if (!this.colonies[o + 4]) continue;
-      c.fillStyle = i === 0 ? '#ffffff' : this.paletteCss[i];
-      const r = i === 0 ? 3 : 2;
+    for (let i = 0; i < this.colonies.length / 4; i++) {
+      const o = i * 4, nat = this.colonies[o + 2];
+      c.fillStyle = nat === 0 ? '#ffffff' : this.paletteCss[nat];
+      const r = nat === 0 ? 3 : 2;
       c.fillRect(this.colonies[o] * s - r / 2, this.colonies[o + 1] * s - r / 2, r, r);
     }
     // selected cells

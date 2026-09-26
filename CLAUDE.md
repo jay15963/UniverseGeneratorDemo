@@ -290,15 +290,32 @@ Owner's rules - keep them:
   (chloroplasts), Encouraçada (armour plates), Secretora (toxin vesicles + pore), Célula-mãe (big, budding daughter,
   rhizoids), Nódulo de biofilme (rooted slime tendrils). Wild: bacteria, diatoms, amoebas; props: motes, grains, vents.
   Sprites are rendered by a worker pool (`art.worker.ts`) and packed into a texture array (`atlas.ts`).
-- **Scale**: thousands of cells, ~160 colonies of 16 rival species (homelands: neighbours tend to share a species, same
-  species = allies). The RTS runs in `sim.worker.ts` (`sim.ts`, 20 Hz, typed arrays, spatial hash); the view
-  (`Cell/engine.ts`) interpolates snapshots and draws everything instanced (engine FPS shown like the demo).
+- **Nations**: every species is one nation (the player's too) - its colonies (rooted mother cells) share one stock of
+  food/energy, one population cap and one army, and the AI plays each nation as a whole (colonies defend each other,
+  one attack group raids the weaker neighbour). **64 rival species**, each starting with **1 mother cell (some 2, a few
+  3); the player always starts with 1** - the pool starts nearly empty and gets colonised.
+- **New colonies**: a mother cell divides into a new mother ("Colônia" in the division bar) that swims (loose, it can
+  starve) to free space and roots where it stops - `COLONY_GAP` (450) from any other mother, never inside a foreign
+  biofilm - so a destroyed colony's room can be taken. Rooted: biofilm, its own division queue, +8 population. The
+  division bar works on the selected colony (else the capital). The AI colonises the same way.
+- **Groups** (Hearts of Iron style): select cells -> G / "Criar grupo" (name + colour) or Ctrl+1..9 (quick); 1..9
+  selects a group (twice: jump to it). Members get a ring in the group colour at normal zoom; in the regional view
+  their dots take the group colour and a badge (colour + name + count) sits on the group's centre - click it to
+  select. Stances set on a whole group become the group's. The AI keeps a guard and an attack group per nation
+  (attack groups on the march show as red badges).
+- **HUD**: top-right panel with every kind of the nation (icon, name, count - click selects all of that kind, shift
+  adds) and the groups list; instant styled tooltips on the division buttons (the Coletora one explains that it is the
+  worker that becomes the biofilm node which expands territory and room).
+- **Scale**: thousands of cells, ~65 nations and a few hundred colonies after some minutes. The RTS runs in
+  `sim.worker.ts` (`sim.ts`, 20 Hz, typed arrays, spatial hash); the view (`Cell/engine.ts`) interpolates snapshots
+  and draws everything instanced (engine FPS shown like the demo).
 - **Gameplay** (a gentle tutorial for grand strategy): nutrients (workers carry motes to the biofilm) + energy
   (photosynthesisers on the biofilm, x2 under light); the mother divides into units (cost + time + population cap:
-  mother 8, +6 per node); **biofilm = territory and supply**: inside, cells heal and eat; outside they burn a reserve
+  +8 per colony, +6 per node); **biofilm = territory and supply**: inside, cells heal and eat; outside they burn a reserve
   and starve (units without direct orders go home when hungry); workers settle into nodes at the biofilm's edge.
   Combat: melee, toxin at range, armour, hunters engulf wounded smaller cells, deaths drop motes, vents scald.
   **Delegation**: stances Automático / Coletar / Defender / Caçar / Explorar + control groups ("tecidos", Ctrl+1..9).
-  Rival AI: economy -> nodes -> armies that raid weaker neighbours of other species; the player gets a **10-minute
-  grace** (`GRACE`) before raids or aggro. Objectives panel; victory = 80 cells + a node + a destroyed rival colony.
+  Rival AI: economy -> nodes -> new colonies -> armies that raid weaker neighbours; the player gets a **1-minute
+  grace** (`GRACE`, owner's request) before raids or aggro. Objectives panel; victory = 80 cells + a founded colony + a
+  destroyed rival colony.
 - Next rounds (agreed with the owner): gene stealing, symbiosis as diplomacy, endosymbiosis, the move to multicellular.

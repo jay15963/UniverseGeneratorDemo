@@ -15,17 +15,16 @@ export interface Rock { x: number; y: number; r: number; v: number; rot: number 
 export interface Vent { x: number; y: number; r: number; v: number }
 export interface Light { x: number; y: number; r: number }
 export interface Field { x: number; y: number; r: number; rate: number }
-export interface Home { x: number; y: number; species: number }
 
 export interface WorldDef {
   seed: string;
-  species: CellSpecies[];         // 0 = the player
+  species: CellSpecies[];         // one per nation: 0 = the player
   rocks: Rock[]; vents: Vent[]; lights: Light[]; fields: Field[];
-  homes: Home[];                  // 0 = the player's start
+  /** where each nation's first mother cells sit (the player: one; rivals: one, some two, a few three) */
+  starts: { x: number; y: number }[][];
 }
 
-export const RIVAL_SPECIES = 16;
-export const COLONIES = 180;
+export const RIVAL_SPECIES = 64;
 
 export function makeWorld(seed: string, player: CellSpecies): WorldDef {
   const r = mulberry(seedToInt(seed + ':world'));
@@ -48,12 +47,10 @@ export function makeWorld(seed: string, player: CellSpecies): WorldDef {
     rocks.push({ x, y, r: rr, v, rot: r() * Math.PI * 2 });
   }
 
-  // species: the player + rivals, each rival with a homeland; colonies take the species of the nearest homeland
+  // nations: the player + 64 rival species, every species one nation; the pool starts nearly empty
   const species: CellSpecies[] = [player];
-  const modes: ColorMode[] = [player.mode];
-  for (let i = 0; i < RIVAL_SPECIES; i++) species.push(makeSpecies(seed + ':sp' + i, modes[0]));
-  const lands = Array.from({ length: RIVAL_SPECIES }, () => ({ x: r() * S, y: r() * S }));
-  const homes: Home[] = [];
+  const mode: ColorMode = player.mode;
+  for (let i = 0; i < RIVAL_SPECIES; i++) species.push(makeSpecies(seed + ':sp' + i, mode));
   const free = (x: number, y: number) =>
     x > 500 && y > 500 && x < S - 500 && y < S - 500 &&
     !rocks.some(q => Math.hypot(q.x - x, q.y - y) < q.r + 90) && !vents.some(q => Math.hypot(q.x - x, q.y - y) < 260);
@@ -67,19 +64,29 @@ export function makeWorld(seed: string, player: CellSpecies): WorldDef {
     const d = Math.max(0, dl) + Math.max(0, df) * 0.7;
     if (d < bd) { bd = d; best = { x, y }; }
   }
-  homes.push({ x: best.x, y: best.y, species: 0 });
-  const g = Math.ceil(Math.sqrt(COLONIES * 2.4)), step = S / g;
+  const starts: { x: number; y: number }[][] = [[best]];
+  const all = [best];
+  const g = 22, step = S / g;
   const spots: { x: number; y: number }[] = [];
   for (let j = 0; j < g; j++) for (let i = 0; i < g; i++) spots.push({ x: (i + 0.5) * step + (r() - 0.5) * step * 0.6, y: (j + 0.5) * step + (r() - 0.5) * step * 0.6 });
   for (let i = spots.length - 1; i > 0; i--) { const k = Math.floor(r() * (i + 1)); [spots[i], spots[k]] = [spots[k], spots[i]]; }
-  for (const s of spots) {
-    if (homes.length > COLONIES) break;
-    if (!free(s.x, s.y) || homes.some(h => Math.hypot(h.x - s.x, h.y - s.y) < 560)) continue;
-    let k = 0, kd = 1e18;
-    lands.forEach((l, i) => { const d = (l.x - s.x) ** 2 + (l.y - s.y) ** 2; if (d < kd) { kd = d; k = i; } });
-    homes.push({ x: s.x, y: s.y, species: 1 + k });
+  for (const sp of spots) {
+    if (starts.length > RIVAL_SPECIES) break;
+    if (!free(sp.x, sp.y) || all.some(h => Math.hypot(h.x - sp.x, h.y - sp.y) < 860) || Math.hypot(best.x - sp.x, best.y - sp.y) < 1300) continue;
+    const list = [sp];
+    all.push(sp);
+    // a few nations start with a second (rarely a third) mother cell nearby
+    const extra = r() < 0.06 ? 2 : r() < 0.27 ? 1 : 0;
+    for (let e = 0, t = 0; e < extra && t < 30; t++) {
+      const a = r() * Math.PI * 2, d = 480 + r() * 180, x = sp.x + Math.cos(a) * d, y = sp.y + Math.sin(a) * d;
+      if (!free(x, y) || all.some(h => Math.hypot(h.x - x, h.y - y) < 460)) continue;
+      list.push({ x, y }); all.push({ x, y }); e++;
+    }
+    starts.push(list);
   }
-  return { seed, species, rocks, vents, lights, fields, homes };
+  // spots ran out: drop the species that got no home
+  species.length = starts.length;
+  return { seed, species, rocks, vents, lights, fields, starts };
 }
 
 /** the slow current (world px / s): a divergence-free swirl from two noise-like stream functions */

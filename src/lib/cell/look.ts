@@ -142,20 +142,25 @@ export interface KindInfo {
   pop: number;                                  // population it takes
 }
 export const KINDS: KindInfo[] = [
-  { name: 'Coletora', short: 'COL', blurb: 'Colhe nutrientes e os leva ao biofilme. Pode virar um nódulo de biofilme.', food: 20, energy: 5, time: 4, hp: 30, armor: 0, speed: 46, r: 7, sight: 150, dmg: 2, range: 2, cd: 1.2, pop: 1 },
+  { name: 'Coletora', short: 'COL', blurb: 'Colhe nutrientes e os leva ao biofilme. É ela que vira um nódulo de biofilme (tecla N): o nódulo espalha o território e dá +6 de população.', food: 20, energy: 5, time: 4, hp: 30, armor: 0, speed: 46, r: 7, sight: 150, dmg: 2, range: 2, cd: 1.2, pop: 1 },
   { name: 'Flagelada', short: 'FLA', blurb: 'Batedora veloz de visão longa. Aguenta mais tempo longe do biofilme.', food: 15, energy: 15, time: 4, hp: 22, armor: 0, speed: 92, r: 6, sight: 320, dmg: 2, range: 2, cd: 1, pop: 1 },
   { name: 'Fagócita', short: 'FAG', blurb: 'Predadora: engole células feridas e se cura comendo restos.', food: 40, energy: 20, time: 7, hp: 70, armor: 1, speed: 52, r: 9, sight: 200, dmg: 9, range: 3, cd: 0.9, pop: 2 },
   { name: 'Fotossintética', short: 'FOT', blurb: 'Gera energia no biofilme, o dobro sob os feixes de luz.', food: 30, energy: 0, time: 6, hp: 34, armor: 0, speed: 28, r: 7.5, sight: 140, dmg: 0, range: 0, cd: 1, pop: 1 },
   { name: 'Encouraçada', short: 'ENC', blurb: 'Tanque lento de placas duras: segura a linha de frente.', food: 60, energy: 30, time: 10, hp: 160, armor: 4, speed: 30, r: 11, sight: 170, dmg: 5, range: 3, cd: 1.3, pop: 3 },
   { name: 'Secretora', short: 'SEC', blurb: 'Dispara toxina à distância. Frágil de perto.', food: 45, energy: 35, time: 8, hp: 38, armor: 0, speed: 40, r: 8, sight: 230, dmg: 7, range: 150, cd: 1.6, pop: 2 },
-  { name: 'Célula-mãe', short: 'MÃE', blurb: 'O coração da colônia: divide-se para gerar as outras células e sustenta o biofilme.', food: 0, energy: 0, time: 0, hp: 700, armor: 3, speed: 9, r: 22, sight: 260, dmg: 6, range: 4, cd: 1, pop: 0 },
+  { name: 'Célula-mãe', short: 'MÃE', blurb: 'Funda uma nova colônia: leve-a a um espaço livre (longe de outras células-mãe) e ela se fixa, cria biofilme, divide-se e dá +8 de população.', food: 160, energy: 70, time: 18, hp: 700, armor: 3, speed: 9, r: 22, sight: 260, dmg: 6, range: 4, cd: 1, pop: 0 },
   { name: 'Nódulo de biofilme', short: 'NÓD', blurb: 'Célula fixa que espalha biofilme: território, cura e mais população.', food: 50, energy: 20, time: 6, hp: 180, armor: 2, speed: 0, r: 12, sight: 180, dmg: 0, range: 0, cd: 1, pop: 0 },
   { name: 'Bactéria', short: 'BAC', blurb: 'Presa selvagem. Vira nutriente.', food: 0, energy: 0, time: 0, hp: 8, armor: 0, speed: 30, r: 4, sight: 90, dmg: 0, range: 0, cd: 1, pop: 0 },
   { name: 'Diatomácea', short: 'DIA', blurb: 'Alga de carapaça de vidro, quase parada. Rica em nutrientes.', food: 0, energy: 0, time: 0, hp: 60, armor: 3, speed: 3, r: 10, sight: 0, dmg: 0, range: 0, cd: 1, pop: 0 },
   { name: 'Ameba selvagem', short: 'AME', blurb: 'Predadora solitária que devora qualquer célula.', food: 0, energy: 0, time: 0, hp: 260, armor: 1, speed: 34, r: 20, sight: 220, dmg: 14, range: 4, cd: 1.1, pop: 0 },
 ];
 /** the kinds the mother cell can divide into */
-export const TRAINABLE = [Kind.WORKER, Kind.SCOUT, Kind.HUNTER, Kind.PHOTO, Kind.ARMOR, Kind.SPITTER];
+export const TRAINABLE = [Kind.WORKER, Kind.SCOUT, Kind.HUNTER, Kind.PHOTO, Kind.ARMOR, Kind.SPITTER, Kind.MOTHER];
+/** what each kind is for, in one line (the division tooltips) */
+export const ROLE: Partial<Record<Kind, string>> = {
+  [Kind.WORKER]: 'Economia · território', [Kind.SCOUT]: 'Batedora', [Kind.HUNTER]: 'Combate corpo a corpo', [Kind.PHOTO]: 'Energia',
+  [Kind.ARMOR]: 'Linha de frente', [Kind.SPITTER]: 'Combate à distância', [Kind.MOTHER]: 'Nova colônia', [Kind.NODE]: 'Território',
+};
 
 // ---------------------------------------------------------------------------------------------------
 // The player's species is kept in the browser (it carries into the later eras)
