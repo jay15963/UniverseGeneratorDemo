@@ -300,7 +300,8 @@ Owner's rules - keep them:
   division bar works on the selected colony (else the capital). The AI colonises the same way.
 - **Colonies are the groups** (Hearts of Iron style, owner's rule - there are no hand-made groups): every cell belongs
   to the colony whose mother bore it (`grp`), each colony has a name ("Colônia N") and a colour (`COLONY_COLORS`);
-  when a colony falls its cells join the nearest one. 1..9 / the top-right card select a colony (or one kind of it);
+  when a colony falls its cells join the nearest one. 1..9 / the top-right card select a colony's **combat cells only**
+  (hunters, spitters, armoured, titans - workers and structures stay put; the kind chips select one kind);
   with 2+ colonies their cells get a ring in the colony colour at normal zoom and coloured dots + a clickable badge
   (colour, name, size) in the regional view. A stance set on a whole colony becomes the colony's (new cells take it).
   The AI keeps its attack force apart with a per-cell `role`.
@@ -308,6 +309,7 @@ Owner's rules - keep them:
   that kind of that colony). The division bar has a **colony dropdown** (clicking a mother cell picks it) and a
   **"Nódulo" button**: it enters place mode showing the keep-out range (`NODE_GAP`, 200) of every node and colony of
   every nation (own violet, foreign red); on click the nearest free worker of that colony swims there and settles.
+  Without workers the button says "sem coletoras" and warns instead (view messages: `CellEngine.notify`).
   Instant styled tooltips on every division button.
 - **Workers never fight** (0 damage): they flee from anything dangerous (even on a direct order, except when going to
   settle a node) and go back to gathering.
@@ -351,7 +353,9 @@ Owner's rules - keep them:
   Sentinela, Secretora), abilities (Cisto - still, armoured, no upkeep; Nuvem de toxina from secretoras) and
   Multicelularidade (needed to evolve). The AI researches too.
 - **Pool events** (`startEvent`, every ~2-4 min): algal bloom, toxic tide, current shift, vent heat wave and the
-  **viral plague** (20 s incubation, spreads to neighbours, bursts; structures pull through; Imunidade antiviral).
+  **viral plague**: visible virions (tiny machine-like phages, `phage` prop, `virus` in the snapshot) roam, home in on
+  healthy cells and infect on contact; infected cells shed more and burst after 20 s (structures and titans pull
+  through; Imunidade antiviral resists); the outbreak sheds for 2.5 min, then burns out.
 - **Active AI diplomacy**: AI species offer peace / symbiosis and demand tributes (Aceitar / Recusar cards, 30 s;
   ignoring = refusing; a refused tribute sends them to war), make and break pacts among themselves and gang up on a
   player grown far stronger than everyone (coalition).

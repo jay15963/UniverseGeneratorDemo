@@ -317,7 +317,7 @@ export const ROCK_VARIANTS = 24;
 /** a grain's radius (world px): variant % 4 picks the size, variant / 4 the mineral */
 export const rockSize = (variant: number) => 16 + (variant % 4) * 13;
 /** props: food motes, toxin spit, sand grains, vents (one frame, except vents and motes) */
-export type PropKind = 'mote' | 'toxin' | 'rock' | 'vent' | 'spark';
+export type PropKind = 'mote' | 'toxin' | 'rock' | 'vent' | 'spark' | 'phage';
 function buildProp(rig: Rig, prop: PropKind, variant: number, ph: number) {
   const r = mulberry(seedToInt(prop + variant));
   if (prop === 'mote') {
@@ -335,6 +335,35 @@ function buildProp(rig: Rig, prop: PropKind, variant: number, ph: number) {
   if (prop === 'toxin') {
     rig.e(0, 0, 2.2, 1.7, 0, { ramp: ramp(0.28, 0.9, 0.55), tex: 'glow', emit: true, line: [20, 50, 10] });
     rig.c(-4, 0, -1, 0, 0.5, 1.2, { ramp: ramp(0.28, 0.8, 0.45), tex: 'glow', emit: true, line: null });
+    return;
+  }
+  if (prop === 'phage') {
+    // a bacteriophage: faceted crystal head full of DNA, collar, ringed tail sheath, base plate and jointed legs that
+    // reach forward like a landing machine (it swims tail first, towards the cell it will inject)
+    const head: Mat = { ramp: ramp(0.8, 0.28, 0.66), tex: 'glass', spec: 0.9 };
+    const facet: Mat = { ramp: ramp(0.78, 0.3, 0.5), tex: 'smooth', line: null, alpha: 0.8 };
+    const steel: Mat = { ramp: ramp(0.72, 0.12, 0.5), tex: 'metal', spec: 0.8 };
+    const dark: Mat = { ramp: ramp(0.72, 0.15, 0.3), tex: 'metal', spec: 0.5 };
+    const flex = Math.sin(ph), pulse = 0.5 + 0.5 * Math.sin(ph * 2);
+    // legs (behind the body): three per side, kinked at the knee, stepping
+    for (const s of [-1, 1]) for (let j = 0; j < 3; j++) {
+      const bx = 5.6, by = s * (0.6 + j * 0.35), kx = 7.4 + j * 0.6, ky = s * (3.6 + j * 0.9 + flex * 0.6 * (j % 2 ? 1 : -1));
+      const fx = 10.2 + j * 0.4 + flex * 0.5, fy = s * (2.4 + j * 1.2);
+      rig.c(bx, by, kx, ky, 0.55, 0.5, dark, { noLine: true });
+      rig.c(kx, ky, fx, fy, 0.5, 0.45, dark, { noLine: true });
+    }
+    // tail sheath with its rings, base plate and tail pins
+    rig.c(-0.8, 0, 5.6, 0, 1.35, 1.35, steel);
+    for (let i = 0; i < 4; i++) rig.c(0.4 + i * 1.4, -1.35, 0.4 + i * 1.4, 1.35, 0.45, 0.45, dark, { noLine: true });
+    rig.p([5.2, -2.2, 6.4, -2.2, 6.4, 2.2, 5.2, 2.2], steel);
+    rig.c(6.4, 0, 7.8 + pulse * 0.8, 0, 0.45, 0.35, dark, { noLine: true });
+    // collar and the icosahedral head (a hexagon with facets), a glowing core of DNA
+    rig.e(-1.2, 0, 0.9, 2.1, 0, dark);
+    const hx = -5.4, R = 4.4, pts: number[] = [];
+    for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; pts.push(hx + Math.cos(a) * R, Math.sin(a) * R * 0.92); }
+    rig.p(pts, head);
+    for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2 + 0.5; rig.p([hx, 0, hx + Math.cos(a) * R, Math.sin(a) * R * 0.92, hx + Math.cos(a + 1.05) * R, Math.sin(a + 1.05) * R * 0.92], facet, { noLine: true }); }
+    rig.e(hx, 0, 1.2 + pulse * 0.4, 1.2 + pulse * 0.4, 0, { ramp: ramp(0.86, 0.9, 0.6), tex: 'glow', emit: true, line: null });
     return;
   }
   if (prop === 'spark') {

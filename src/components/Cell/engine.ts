@@ -12,18 +12,20 @@ export interface Selection { ids: number[]; counts: number[]; stance: number; wo
 export interface HudState {
   stats: Stats | null; goals: Record<string, boolean>; sel: Selection; paused: boolean; speed: number;
   /** placement mode: the kind being placed (node, photosynthesiser, sentinel) or -1; cloud: aiming a toxin cloud */
-  placing: number; cloud: boolean; hover: string | null; fps: number; colonies: ColonyInfo[]; zoom: number; active: number;
+  placing: number; cloud: boolean; note: string | null; hover: string | null; fps: number; colonies: ColonyInfo[]; zoom: number; active: number;
 }
 const hexRgb = (h: string): [number, number, number] => { const v = parseInt(h.slice(1), 16); return [(v >> 16) & 255, (v >> 8) & 255, v & 255]; };
 const ZOOMS = [0.1, 0.13, 0.17, 0.22, 0.28, 0.36, 0.46, 0.6, 0.78, 1, 2];
 const DOT_ZOOM = 0.3;
+/** the cells a colony click selects: its fighters */
+const COMBAT: number[] = [Kind.HUNTER, Kind.SPITTER, Kind.ARMOR, Kind.TITAN];
 
 export class CellEngine {
   gl: CellGL;
   view: View; zoomTarget = 1; zi = 9;
   prev: Frame | null = null; cur: Frame | null = null;
   rx = new Float32Array(0); ry = new Float32Array(0); ra = new Float32Array(0);
-  motes = new Float32Array(0); nm = 0; shots = new Float32Array(0); np = 0;
+  motes = new Float32Array(0); nm = 0; shots = new Float32Array(0); np = 0; virus = new Float32Array(0); nv = 0;
   colonies = new Float32Array(0);
   sel = new Map<number, number>();
   cols: ColonyInfo[] = [];
@@ -34,6 +36,7 @@ export class CellEngine {
   stats: Stats | null = null; goals: Record<string, boolean> = {};
   paused = false; speed = 1;
   placing = -1; cloudMode = false;
+  note: { text: string; at: number } | null = null;
   vis = new Uint8Array(VIS_N * VIS_N); met = new Uint8Array(256);
   drag: { x0: number; y0: number; x1: number; y1: number; add: boolean } | null = null;
   pan: { x: number; y: number; cx: number; cy: number } | null = null;
@@ -86,11 +89,12 @@ export class CellEngine {
   }
 
   // --- data from the simulation ---------------------------------------------------------------------------------------------
-  onFrame(m: { ents: Float32Array; n: number; motes: Float32Array; nm: number; shots: Float32Array; np: number; deaths: number[]; fx?: number[]; paused: boolean; speed: number;
+  onFrame(m: { ents: Float32Array; n: number; motes: Float32Array; nm: number; shots: Float32Array; np: number; deaths: number[]; fx?: number[]; virus?: Float32Array; nv?: number; paused: boolean; speed: number;
     bioOwn?: Uint8Array; bioStr?: Uint8Array; colonies?: Float32Array; stats?: Stats; goals?: Record<string, boolean>; vis?: Uint8Array; met?: Uint8Array }) {
     this.prev = this.cur;
     this.cur = { ents: m.ents, n: m.n, t: performance.now() };
     this.motes = m.motes; this.nm = m.nm; this.shots = m.shots; this.np = m.np;
+    if (m.virus) { this.virus = m.virus; this.nv = m.nv ?? 0; }
     this.paused = m.paused; this.speed = m.speed;
     if (m.bioOwn && m.bioStr) { this.gl.setBio(m.bioOwn, m.bioStr); this.bioOwn = m.bioOwn; this.miniDirty = true; }
     if (m.colonies) this.colonies = m.colonies;
@@ -144,13 +148,16 @@ export class CellEngine {
   /** the colony the division bar works on (its dropdown; clicking a mother cell picks hers) */
   setColony(id: number) { this.activeCol = id; this.hud(); }
   train(k: Kind) {
+    if (k === Kind.NODE && this.placing !== Kind.NODE && this.stats && !this.stats.counts[Kind.WORKER]) {
+      this.notify('Sem coletoras: o nódulo nasce de uma coletora. Divida uma Coletora primeiro.'); return;
+    }
     if (k === Kind.NODE || k === Kind.PHOTO || k === Kind.SENTINEL) { this.placing = this.placing === k ? -1 : k; this.cloudMode = false; this.hud(); return; }
     this.cmd({ t: 'train', kind: k, colony: this.activeCol >= 0 ? this.activeCol : undefined });
   }
   cancel(i: number) { if (this.activeCol >= 0) this.cmd({ t: 'cancel', colony: this.activeCol, index: i }); }
   togglePause() { this.cmd({ t: 'pause', on: !this.paused }); }
   setSpeed(k: number) { this.cmd({ t: 'speed', k }); }
-  startPlacing() { this.placing = Kind.NODE; this.cloudMode = false; this.hud(); }
+  startPlacing() { this.train(Kind.NODE); }
   /** abilities of the selection */
   cyst() { this.cmd({ t: 'cyst', ids: this.selIds() }); }
   aimCloud() { this.cloudMode = !this.cloudMode; this.placing = -1; this.hud(); }
@@ -164,21 +171,25 @@ export class CellEngine {
     this.sel.clear(); this.sel.set(c.mother, f.ents[c.mother * STRIDE + 7]);
     this.focus(c.x, c.y); this.hud();
   }
-  /** a colony's cells (optionally one kind only); nodes are never selected with them */
+  /** a colony's combat cells (the army that moves), or one kind of it; workers, scouts and structures stay put */
   selectColony(id: number, add = false, focus = false, kind = -1) {
     const f = this.cur; if (!f) return;
     if (!add) this.sel.clear();
+    let n = 0;
     for (let i = 0; i < f.n; i++) {
       const o = i * STRIDE, k = f.ents[o + 3] % 16;
       if (f.ents[o + 7] < 0 || f.ents[o + 4] !== 0 || f.ents[o + 8] !== id) continue;
-      if (kind >= 0 ? k !== kind : k === Kind.NODE) continue;
-      this.sel.set(i, f.ents[o + 7]);
+      if (kind >= 0 ? k !== kind : !COMBAT.includes(k)) continue;
+      this.sel.set(i, f.ents[o + 7]); n++;
     }
     const c = this.cols.find(q => q.id === id);
     if (c) this.activeCol = id;
     if (focus && c) this.focus(c.cx, c.cy);
+    if (kind < 0 && !n && c) this.notify(`${c.name} não tem células de combate (Fagócita, Secretora, Encouraçada ou Titã).`);
     this.hud();
   }
+  /** a short message from the view itself (shown like the simulation's messages) */
+  notify(text: string) { this.note = { text, at: performance.now() }; this.hud(); }
 
   selection(): Selection {
     const counts = new Array(16).fill(0), f = this.cur;
@@ -195,11 +206,11 @@ export class CellEngine {
     }
     // the selection is a colony when it holds all its (swimming) cells
     const C = this.cols.find(q => q.id === colony);
-    if (!C || C.n - (C.counts[Kind.NODE] ?? 0) !== this.sel.size) colony = -1;
+    if (!C || COMBAT.reduce((a, k) => a + (C.counts[k] ?? 0), 0) !== this.sel.size) colony = -1;
     return { ids: this.selIds(), counts, stance, workers, colony, seeds };
   }
   hud() {
-    this.onHud({ stats: this.stats, goals: this.goals, sel: this.selection(), paused: this.paused, speed: this.speed, placing: this.placing, cloud: this.cloudMode, hover: this.hoverText(), fps: this.fps, colonies: this.cols, zoom: this.view.zoom, active: this.activeCol });
+    this.onHud({ stats: this.stats, goals: this.goals, sel: this.selection(), paused: this.paused, speed: this.speed, placing: this.placing, cloud: this.cloudMode, note: this.note && performance.now() - this.note.at < 4000 ? this.note.text : null, hover: this.hoverText(), fps: this.fps, colonies: this.cols, zoom: this.view.zoom, active: this.activeCol });
   }
   hoverText(): string | null {
     const f = this.cur, i = this.hover;
@@ -522,6 +533,13 @@ export class CellEngine {
         if (Math.abs(x - v.x) > hw || Math.abs(y - v.y) > hh) continue;
         const e = this.atlas.entries.get(`mote:${this.motes[i * 3 + 2] | 0}`)!;
         this.put(mb, nm++, x, y, 0, 1, e, (i * 0.13) % 1, 3, 0, 0, 0, 0, 1);
+      }
+      // the plague's virions: tiny phages, always visible, drifting between the cells
+      const ve = this.atlas.entries.get('phage');
+      if (ve) for (let i = 0; i < this.nv && nm < 8990; i++) {
+        const x = this.virus[i * 3], y = this.virus[i * 3 + 1];
+        if (Math.abs(x - v.x) > hw || Math.abs(y - v.y) > hh) continue;
+        this.put(mb, nm++, x, y, this.virus[i * 3 + 2], 1, ve, (i * 0.29) % 1, 6, 0, 0, 0, 0, 1);
       }
       const te = this.atlas.entries.get('toxin')!;
       for (let i = 0; i < this.np && nm < 8990; i++) {

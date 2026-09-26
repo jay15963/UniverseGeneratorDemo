@@ -102,7 +102,7 @@ export interface Stats {
 }
 
 const HB = 64, HN = WORLD / HB;
-const MCAP = 9000, PCAP = 3000;
+const MCAP = 9000, PCAP = 3000, VCAP = 900;
 const clampW = (v: number) => (v < 8 ? 8 : v > WORLD - 8 ? WORLD - 8 : v);
 
 export class Sim {
@@ -151,6 +151,10 @@ export class Sim {
   allMothers: number[] = [];
   deaths: number[] = [];       // x, y, set, kind (for death bursts)
   fx: number[] = [];           // x, y, radius, type (titan powers: 0 sting, 1 leap impact)
+  // virions of the plague: tiny phages that roam, home in on healthy cells and infect them on contact
+  qx = new Float32Array(VCAP); qy = new Float32Array(VCAP); qvx = new Float32Array(VCAP); qvy = new Float32Array(VCAP);
+  plagueEnd = 0;
+  qlife = new Float32Array(VCAP); qalive = new Uint8Array(VCAP); qtgt = new Int32Array(VCAP).fill(-1); qtop = 0; qfree: number[] = []; qn = 0;
   titanWarn = -99;
   msg: string | null = null; msgAt = 0; won = false;
   r: () => number;
@@ -436,6 +440,7 @@ export class Sim {
     }
     this.moveAll(dt);
     this.moveProjectiles(dt);
+    this.moveVirions(dt);
     for (const N of this.nations) if (N.alive) this.produce(N, dt);
     this.checkGoals();
   }
@@ -1393,6 +1398,8 @@ export class Sim {
       const z = cands[Math.floor(r() * cands.length)];
       this.infect(z, true);
       for (let i = 0; i < this.top; i++) if (this.alive[i] && i !== z && Math.hypot(this.x[i] - this.x[z], this.y[i] - this.y[z]) < 60) this.infect(i, true);
+      for (let v = 0; v < 12; v++) this.virion(this.x[z], this.y[z]);
+      this.plagueEnd = this.time + 150;   // the outbreak sheds new virions for 2.5 min, then burns out
       e.x = this.x[z]; e.y = this.y[z]; e.r = 220; e.until = 1e9; e.name = 'Praga viral';
       this.plagueHitPlayer = false;
     }
@@ -1400,7 +1407,7 @@ export class Sim {
     const where = kind === 'current' || kind === 'heat' ? '' : ' (veja o mapa)';
     const tips: Record<EventKind, string> = {
       bloom: 'nutrientes em excesso numa região', toxic: 'uma área que machuca todas as células', current: 'o fluxo mudou de direção',
-      heat: 'as fontes termais queimam muito mais longe', plague: 'células infectadas morrem em 20 s e contaminam as vizinhas',
+      heat: 'as fontes termais queimam muito mais longe', plague: 'vírus minúsculos vagam infectando células; as infectadas morrem em 20 s e soltam mais vírus',
     };
     this.say(`${e.name}: ${tips[kind]}${where}.`);
   }
@@ -1429,16 +1436,20 @@ export class Sim {
     for (let i = 0; i < this.top; i++) {
       if (!this.alive[i] || this.inf[i] <= 0) continue;
       this.inf[i] += dt; n++; sx += this.x[i]; sy += this.y[i];
-      if (this.r() < 0.35) { const j = this.nearest(this.x[i], this.y[i], 30, q => q !== i && this.inf[q] <= 0 && this.kind[q] !== Kind.DIATOM); if (j >= 0) this.infect(j); }
+      // infected cells shed new virions (more as the infection ripens)
+      if (this.time < this.plagueEnd && this.r() < 0.03 + this.inf[i] * 0.004) this.virion(this.x[i], this.y[i]);
       if (this.inf[i] >= 20) {
         if (isStructure(this.kind[i]) || this.kind[i] === Kind.TITAN) { this.inf[i] = 0; this.immune[i] = this.time + 120; continue; }
         const x = this.x[i], y = this.y[i];
         this.kill(i);
-        for (let j = 0; j < this.top; j++) if (this.alive[j] && (this.x[j] - x) ** 2 + (this.y[j] - y) ** 2 < 55 * 55 && this.r() < 0.5) this.infect(j);
+        if (this.time < this.plagueEnd) for (let v = 0; v < 4; v++) this.virion(x, y);   // the cell bursts and releases a swarm
       }
     }
     const pl = this.events.find(e => e.kind === 'plague');
-    if (pl) { if (!n) pl.until = 0; else { pl.x = sx / n; pl.y = sy / n; } }
+    if (pl) {
+      if (!n && !this.qn) pl.until = 0;
+      else if (n) { pl.x = sx / n; pl.y = sy / n; }
+    }
     const before = this.events.length;
     this.events = this.events.filter(e => e.until > this.time);
     if (this.events.length < before && pl && pl.until === 0) this.say('A praga viral acabou.');
@@ -1449,6 +1460,35 @@ export class Sim {
       this.hp[i] -= 4; this.hitAt[i] = this.time; if (this.hp[i] <= 0) this.kill(i);
     }
     this.clouds = this.clouds.filter(c => c.until > this.time);
+  }
+  virion(x: number, y: number) {
+    const q = this.qfree.length ? this.qfree.pop()! : this.qtop < VCAP ? this.qtop++ : -1;
+    if (q < 0) return;
+    const a = this.r() * Math.PI * 2, v = 30 + this.r() * 40;
+    this.qx[q] = x + Math.cos(a) * 6; this.qy[q] = y + Math.sin(a) * 6; this.qvx[q] = Math.cos(a) * v; this.qvy[q] = Math.sin(a) * v;
+    this.qlife[q] = 12 + this.r() * 8; this.qalive[q] = 1; this.qtgt[q] = -1; this.qn++;
+  }
+  /** a healthy cell a virion can infect */
+  susceptible(j: number) { return this.alive[j] && this.inf[j] <= 0 && this.immune[j] <= this.time && this.kind[j] !== Kind.DIATOM && !this.tough(j); }
+  moveVirions(dt: number) {
+    if (!this.qn) return;
+    for (let q = 0; q < this.qtop; q++) {
+      if (!this.qalive[q]) continue;
+      this.qlife[q] -= dt;
+      if (this.qlife[q] <= 0) { this.qalive[q] = 0; this.qfree.push(q); this.qn--; continue; }
+      let j = this.qtgt[q];
+      if ((q & 3) === (this.tick & 3) && (j < 0 || !this.susceptible(j))) { j = this.nearest(this.qx[q], this.qy[q], 110, c => this.susceptible(c)); this.qtgt[q] = j; }
+      let ax = 0, ay = 0;
+      if (j >= 0 && this.alive[j]) {
+        const dx = this.x[j] - this.qx[q], dy = this.y[j] - this.qy[q], d = Math.hypot(dx, dy) || 1;
+        if (d < KINDS[this.kind[j]].r + 3) { this.infect(j); this.qalive[q] = 0; this.qfree.push(q); this.qn--; continue; }
+        ax = (dx / d) * 55; ay = (dy / d) * 55;
+      } else { const w = Math.sin(this.time * 1.7 + q) * 30; ax = -this.qvy[q] * 0.02 * w; ay = this.qvx[q] * 0.02 * w; }
+      const [fx, fy] = this.flow(this.qx[q], this.qy[q]);
+      const k = Math.min(1, dt * 2.5);
+      this.qvx[q] += (ax + fx * 0.6 - this.qvx[q]) * k; this.qvy[q] += (ay + fy * 0.6 - this.qvy[q]) * k;
+      this.qx[q] = clampW(this.qx[q] + this.qvx[q] * dt); this.qy[q] = clampW(this.qy[q] + this.qvy[q] * dt);
+    }
   }
   hostileNations(a: number, b: number) {
     if (a === b) return false;
@@ -1645,7 +1685,7 @@ export class Sim {
   }
 
   // --- snapshots for the view ---------------------------------------------------------------------------------------------------
-  snapshot(): { ents: Float32Array; n: number; motes: Float32Array; nm: number; shots: Float32Array; np: number; deaths: number[]; fx: number[] } {
+  snapshot(): { ents: Float32Array; n: number; motes: Float32Array; nm: number; shots: Float32Array; np: number; deaths: number[]; fx: number[]; virus: Float32Array; nv: number } {
     const n = this.top, ents = new Float32Array(n * STRIDE);
     for (let i = 0; i < n; i++) {
       const o = i * STRIDE;
@@ -1666,7 +1706,10 @@ export class Sim {
     for (let p = 0; p < this.ptop; p++) if (this.palive[p]) { shots[np * 3] = this.px[p]; shots[np * 3 + 1] = this.py[p]; shots[np * 3 + 2] = Math.atan2(this.pvy[p], this.pvx[p]); np++; }
     const deaths = this.deaths; this.deaths = [];
     const fx = this.fx; this.fx = [];
-    return { ents, n, motes, nm, shots, np, deaths, fx };
+    let nv = 0;
+    const virus = new Float32Array(this.qn * 3);
+    for (let q = 0; q < this.qtop && nv < this.qn; q++) if (this.qalive[q]) { virus[nv * 3] = this.qx[q]; virus[nv * 3 + 1] = this.qy[q]; virus[nv * 3 + 2] = Math.atan2(this.qvy[q], this.qvx[q]); nv++; }
+    return { ents, n, motes, nm, shots, np, deaths, fx, virus, nv };
   }
   /** the player's colonies with their cells counted by kind, centre and division queue */
   colonyInfo(): ColonyInfo[] {

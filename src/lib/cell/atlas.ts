@@ -25,6 +25,7 @@ export function atlasJobs(species: CellSpecies[]): ArtJob[] {
   }
   for (let v = 0; v < 4; v++) jobs.push({ key: `mote:${v}`, t: 'prop', prop: 'mote', variant: v, frames: 4 });
   jobs.push({ key: 'toxin', t: 'prop', prop: 'toxin', variant: 0, frames: 1 });
+  jobs.push({ key: 'phage', t: 'prop', prop: 'phage', variant: 0, frames: 4 });
   for (let v = 0; v < 3; v++) jobs.push({ key: `spark:${v}`, t: 'prop', prop: 'spark', variant: v, frames: 1 });
   for (let v = 0; v < ROCK_VARIANTS; v++) jobs.push({ key: `rock:${v}`, t: 'prop', prop: 'rock', variant: v, frames: 1 });
   for (let v = 0; v < 3; v++) jobs.push({ key: `vent:${v}`, t: 'prop', prop: 'vent', variant: v, frames: 4 });
