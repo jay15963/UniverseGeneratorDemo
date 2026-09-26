@@ -26,7 +26,11 @@ export interface CellLook {
   spikes: number; eyespot: number;
 }
 
-export interface CellSpecies { seed: string; genus: string; species: string; mode: ColorMode; look: CellLook }
+export interface CellSpecies {
+  seed: string; genus: string; species: string; mode: ColorMode; look: CellLook;
+  /** set when the cellular era is won: the stolen genes and the body the colony evolved into (diet, size...) */
+  evolved?: { genes: string[]; diet: number; size: number; at: number };
+}
 
 export const SHAPES: [CellShape, string][] = [
   ['round', 'Esférica'], ['oval', 'Ovalada'], ['rod', 'Bastonete'], ['egg', 'Gota'], ['star', 'Estrelada'], ['bean', 'Feijão'], ['blob', 'Ameboide'],
@@ -176,3 +180,24 @@ export function loadSpecies(): CellSpecies | null {
     return { ...makeSpecies(sp.seed, sp.mode), ...sp, look: { ...randomLook(sp.seed), ...sp.look } };
   } catch { return null; }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Genes: every rival species carries one; the player steals them (DNA from engulfed / killed cells)
+// ---------------------------------------------------------------------------------------------------
+export type GeneId = 'armor' | 'speed' | 'toxin' | 'jaws' | 'photo' | 'reserve' | 'heat' | 'fast' | 'film' | 'regen';
+export interface Gene { id: GeneId; name: string; desc: string }
+export const GENES: Gene[] = [
+  { id: 'armor', name: 'Membrana reforçada', desc: '+1 de armadura em todas as células' },
+  { id: 'speed', name: 'Flagelo veloz', desc: 'Todas as células nadam 15% mais rápido' },
+  { id: 'toxin', name: 'Toxina potente', desc: 'Secretoras causam 35% mais dano' },
+  { id: 'jaws', name: 'Citóstomo voraz', desc: 'Fagócitas causam 30% mais dano e engolem mais cedo' },
+  { id: 'photo', name: 'Cloroplastos eficientes', desc: 'Fotossintéticas geram 40% mais energia' },
+  { id: 'reserve', name: 'Metabolismo lento', desc: 'A reserva fora do biofilme dura 60% mais' },
+  { id: 'heat', name: 'Proteínas termorresistentes', desc: 'Imune ao calor das fontes termais' },
+  { id: 'fast', name: 'Mitose acelerada', desc: 'Divisões 25% mais rápidas' },
+  { id: 'film', name: 'Biofilme denso', desc: 'O biofilme se espalha 20% mais longe' },
+  { id: 'regen', name: 'Reparo celular', desc: 'Cura duas vezes mais rápido no biofilme' },
+];
+/** DNA needed to steal a species' gene (an engulfed cell gives 1, a killed one about a third) */
+export const DNA_FOR_GENE = 3;
+export const geneOf = (sp: CellSpecies): Gene => GENES[seedToInt(sp.seed + ':gene') % GENES.length];

@@ -3,8 +3,11 @@
 // colonies and their cells (top right), the division bar of the chosen colony, selection and stances (delegation), objectives,
 // minimap.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Pause, Play, FastForward, Home, Target, HelpCircle, X, CheckCircle2, Circle, Sprout, Zap, Users, Hexagon, Trophy, Skull, CircleDot, ChevronDown } from 'lucide-react';
-import { CellSpecies, KINDS, Kind, TRAINABLE, ROLE } from '../../lib/cell/look';
+import { ArrowLeft, Pause, Play, FastForward, Home, Target, HelpCircle, X, CheckCircle2, Circle, Sprout, Zap, Users, Hexagon, Trophy, Skull, CircleDot, ChevronDown, Dna } from 'lucide-react';
+import { CellSpecies, KINDS, Kind, TRAINABLE, ROLE, saveSpecies } from '../../lib/cell/look';
+import { makeGenome, Stage, DEFAULT_PARAMS } from '../../lib/creature/genome';
+import { renderCreature } from '../../lib/creature/render';
+import { SpeciesPanel } from './SpeciesPanel';
 import { makeWorld, WorldDef } from '../../lib/cell/world';
 import { buildAtlas, atlasJobs, Atlas, LAYER } from '../../lib/cell/atlas';
 import { STANCES, GRACE, COLONY_GAP, NODE_GAP } from '../../lib/cell/sim';
@@ -18,8 +21,10 @@ const GOALS: [string, string][] = [
   ['photo', 'Leve uma fotossintética a um feixe de luz dentro do biofilme'],
   ['node', 'Fixe um nódulo de biofilme (botão Nódulo na barra de divisão)'],
   ['colony', 'Funde uma nova colônia (divida uma célula-mãe e leve-a a um espaço livre)'],
-  ['rival', 'Destrua uma colônia rival (a célula-mãe dela)'],
-  ['big', 'Chegue a 80 células'],
+  ['gene', 'Roube um gene: engula células de outra espécie com fagócitas'],
+  ['pact', 'Faça as pazes com outra espécie (painel Espécies)'],
+  ['endo', 'Endossimbiose: transforme um parceiro simbiótico em organela'],
+  ['big', 'Chegue a 60 células'],
 ];
 const STANCE_HINT = [
   'Cada tipo faz o seu trabalho sozinho: coletoras colhem, fotossintéticas buscam luz, combatentes guardam a área.',
@@ -54,6 +59,8 @@ export function CellGame({ species, onExit, onRestart }: Props) {
   const [wonSeen, setWonSeen] = useState(false);
   const [atlas, setAtlas] = useState<Atlas | null>(null);
   const [tip, setTip] = useState<{ k: Kind; x: number } | null>(null);
+  const [panel, setPanel] = useState(false);
+  const [world, setWorld] = useState<WorldDef | null>(null);
   const worldSeed = useMemo(() => Math.random().toString(36).slice(2, 8), []);
 
   useEffect(() => {
@@ -69,7 +76,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
         const at = await buildAtlas(atlasJobs(world.species), p => !dead && setProg(p));
         await ready;
         if (dead) return;
-        setAtlas(at);
+        setAtlas(at); setWorld(world);
         const eng = new CellEngine(canvasRef.current!, overlayRef.current!, miniRef.current!, world, at, sim, s => setHud(s));
         engineRef.current = eng;
         sim.onmessage = (e: MessageEvent) => { if (e.data.t === 'frame') eng.onFrame(e.data); };
@@ -105,13 +112,40 @@ export function CellGame({ species, onExit, onRestart }: Props) {
     return out;
   }, [atlas]);
 
+  // portraits of other species (their mother cell) for the species panel
+  const thumbCache = useRef(new Map<number, string>());
+  const thumbOf = (set: number) => {
+    if (!atlas) return undefined;
+    const hit = thumbCache.current.get(set);
+    if (hit) return hit;
+    const e = atlas.bySprite[set * 16 + Kind.MOTHER];
+    if (!e) return undefined;
+    const c = document.createElement('canvas'); c.width = e.w; c.height = e.h;
+    const img = c.getContext('2d')!.createImageData(e.w, e.h), L = atlas.layers[e.layer];
+    for (let y = 0; y < e.h; y++) img.data.set(L.subarray(((e.y + y) * LAYER + e.x) * 4, ((e.y + y) * LAYER + e.x + e.w) * 4), y * e.w * 4);
+    c.getContext('2d')!.putImageData(img, 0, 0);
+    const url = c.toDataURL();
+    thumbCache.current.set(set, url);
+    return url;
+  };
+
   const eng = engineRef.current;
   const st = hud?.stats;
   const sel = hud?.sel;
   const mm = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   const selTotal = sel ? sel.counts.reduce((a, b) => a + b, 0) : 0;
   const lost = st && !st.alive;
-  const won = st?.won && !wonSeen;
+  const won = st?.evolved && !wonSeen;
+  const evolvedPic = useMemo(() => {
+    if (!st?.evolved) return null;
+    const c = st.counts, fight = c[Kind.HUNTER] + c[Kind.SPITTER] * 0.8, calm = c[Kind.PHOTO] + c[Kind.WORKER] * 0.5;
+    const diet = Math.max(0.05, Math.min(0.95, 0.2 + fight / Math.max(1, fight + calm) * 0.8));
+    const size = Math.max(0.1, Math.min(0.95, 0.35 + c[Kind.ARMOR] / Math.max(1, c.reduce((a, b) => a + b, 0)) * 3));
+    saveSpecies({ ...species, evolved: { genes: st.genes, diet, size, at: Date.now() } });
+    const g = makeGenome(species.seed, { ...DEFAULT_PARAMS, diet, size, exotic: species.mode === 'alien' ? 0.6 : 0.25 }, species.mode);
+    return { url: renderCreature(g, Stage.AQUA_LARVA, 'E').frames[0].toDataURL(), diet };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [st?.evolved]);
   const colonies = hud?.colonies ?? [];
   const active = colonies.find(c => c.id === hud?.active) ?? colonies[0];
   const queue = active?.queue ?? [];
@@ -156,6 +190,9 @@ export function CellGame({ species, onExit, onRestart }: Props) {
           </div>
           <div className="pointer-events-auto flex gap-2 items-center">
             <span className="hidden sm:inline text-[10px] font-mono text-emerald-300/80 bg-black/50 rounded px-2 py-1" title="FPS do motor (1000 / ms de CPU por quadro)">{hud!.fps} FPS</span>
+            <button onClick={() => setPanel(o => !o)} title="Espécies: genes, diplomacia e evolução" className={`relative flex items-center gap-1.5 px-2.5 py-2 rounded-xl border text-xs font-bold ${panel ? 'bg-teal-400 text-black border-teal-300' : st.canEvolve ? 'bg-violet-500/30 border-violet-300 text-violet-50 animate-pulse' : 'bg-black/60 border-white/10 hover:bg-white/10'}`}>
+              <Dna className="w-4 h-4" /> Espécies <span className="font-mono font-normal text-[10px] opacity-80">{st.nations.length} · {st.genes.length + (st.mito ? 1 : 0)} genes</span>
+            </button>
             <button onClick={() => eng?.selectMother()} title="Célula-mãe (H)" className="p-2 rounded-xl bg-black/60 border border-white/10 hover:bg-white/10"><Home className="w-4 h-4" /></button>
             <button onClick={() => setHelp(true)} title="Como jogar" className="p-2 rounded-xl bg-black/60 border border-white/10 hover:bg-white/10"><HelpCircle className="w-4 h-4" /></button>
           </div>
@@ -166,7 +203,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
       {st?.msg && <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-xl bg-black/75 border border-teal-300/30 text-sm text-teal-50 pointer-events-none max-w-[520px] text-center">{st.msg}</div>}
 
       {/* objectives */}
-      {phase === 'play' && st && (
+      {phase === 'play' && st && !panel && (
         <div className="absolute top-16 left-2 z-20 w-64 max-w-[calc(100vw-16px)] rounded-xl bg-black/60 border border-white/10 text-xs">
           <button onClick={() => setGoalsOpen(o => !o)} className="w-full flex items-center justify-between px-3 py-2 font-bold text-teal-200"><span className="flex items-center gap-1.5"><Target className="w-3.5 h-3.5" /> Objetivos</span><span className="text-neutral-500">{Object.values(hud!.goals).filter(Boolean).length}/{GOALS.length}</span></button>
           {goalsOpen && <div className="px-3 pb-2 space-y-1">
@@ -213,6 +250,8 @@ export function CellGame({ species, onExit, onRestart }: Props) {
           </div>
         </div>
       )}
+
+      {phase === 'play' && st && panel && world && <SpeciesPanel st={st} species={world.species} eng={eng} thumb={thumbOf} onClose={() => setPanel(false)} />}
 
       {/* minimap */}
       <div className={`absolute left-2 bottom-2 z-20 ${phase === 'play' ? '' : 'invisible'}`}>
@@ -326,6 +365,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
               <li>🟡 <b>Nutrientes</b>: as coletoras colhem e levam ao biofilme. ⚡ <b>Energia</b>: fotossintéticas (o dobro sob os feixes de luz).</li>
               <li>🧫 <b>Dividir</b>: os botões embaixo criam células a partir da célula-mãe. O botão <b>Colônia</b> cria uma nova célula-mãe para fundar outra colônia num espaço livre.</li>
               <li>🟣 <b>Biofilme</b> é o seu território: dentro dele as células se curam e comem; fora, morrem de fome. O botão <b>Nódulo</b> manda uma coletora virar nódulo: expande o território e dá +6 de população.</li>
+              <li>🧬 <b>Espécies</b> (botão no topo): roube genes engolindo células de outras espécies, faça paz e simbiose, e chegue à endossimbiose para evoluir para <b>multicelular</b>.</li>
               <li>🎯 <b>Colônias</b>: cada colônia é um grupo com cor e nome, com as células que ela gerou. Selecione uma colônia (painel à direita ou 1..9) e dê ordens e comportamentos (Defender, Caçar…) a ela inteira. Coletoras nunca lutam: fogem.</li>
             </ul>
             <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-neutral-400 font-mono">
@@ -344,12 +384,18 @@ export function CellGame({ species, onExit, onRestart }: Props) {
         <div className="absolute inset-0 z-40 bg-black/60 flex items-center justify-center p-4">
           <div className={`max-w-md w-full rounded-2xl p-6 text-center border ${won ? 'bg-[#0b1a12]/95 border-emerald-300/40' : 'bg-[#1a0b0b]/95 border-red-300/30'}`}>
             {won ? <Trophy className="w-10 h-10 mx-auto text-amber-300 mb-2" /> : <Skull className="w-10 h-10 mx-auto text-red-300 mb-2" />}
-            <div className="text-2xl font-black mb-1">{won ? 'A poça é sua!' : 'Extinção'}</div>
+            <div className="text-2xl font-black mb-1">{won ? 'Multicelular!' : 'Extinção'}</div>
+            {won && evolvedPic && (
+              <div className="my-3 flex flex-col items-center">
+                <div className="w-full h-36 rounded-xl bg-[#07181e] border border-white/10 flex items-center justify-center"><img src={evolvedPic.url} className="max-h-32" style={{ imageRendering: 'pixelated', height: '8rem', objectFit: 'contain' }} /></div>
+                <div className="mt-1 text-[11px] text-neutral-400">A larva aquática de {species.genus} · {evolvedPic.diet > 0.6 ? 'predadora' : evolvedPic.diet < 0.36 ? 'filtradora' : 'onívora'} · {st!.genes.length} genes herdados</div>
+              </div>
+            )}
             <p className="text-sm text-neutral-300 mb-4">{won
-              ? `${species.genus} ${species.species} domina a poça primordial. A próxima era (aquática) chega em breve — por enquanto você pode continuar jogando.`
+              ? `As células de ${species.genus} ${species.species} se uniram num só corpo. A composição da sua colônia decidiu o corpo da espécie (mais fagócitas: predadora; mais fotossintéticas: tranquila). A era aquática chega em breve — sua espécie está salva para ela.`
               : 'A última célula-mãe da sua espécie morreu. Sem ela, o biofilme desaparece e as células morrem de fome.'}</p>
             <div className="flex gap-2 justify-center">
-              {won && <button onClick={() => setWonSeen(true)} className="px-4 py-2 rounded-xl font-bold bg-emerald-400 text-black">Continuar jogando</button>}
+              {won && <button onClick={() => { setWonSeen(true); eng?.cmd({ t: 'pause', on: false }); }} className="px-4 py-2 rounded-xl font-bold bg-emerald-400 text-black">Continuar na poça</button>}
               {!won && <button onClick={onRestart} className="px-4 py-2 rounded-xl font-bold bg-teal-300 text-black">Tentar de novo</button>}
               <button onClick={onExit} className="px-4 py-2 rounded-xl font-bold bg-white/10 hover:bg-white/15">Menu</button>
             </div>

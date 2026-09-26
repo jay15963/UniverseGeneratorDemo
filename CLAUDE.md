@@ -323,4 +323,14 @@ Owner's rules - keep them:
   Rival AI: economy -> nodes -> new colonies -> armies that raid weaker neighbours; the player gets a **1-minute
   grace** (`GRACE`, owner's request) before raids or aggro. Objectives panel; victory = 80 cells + a founded colony + a
   destroyed rival colony.
-- Next rounds (agreed with the owner): gene stealing, symbiosis as diplomacy, endosymbiosis, the move to multicellular.
+- **Genes** (`look.ts` `GENES`): every rival species carries one (armour, speed, toxin, jaws, photosynthesis, reserve,
+  heat, fast division, dense biofilm, repair) that works for it; the player steals it with DNA from that species'
+  cells (engulfed by a hunter: 1, killed: ~0.35; `DNA_FOR_GENE` 3). The AI nations keep their own gene.
+- **Diplomacy** (player <-> nations, top-bar "Espécies" panel): species are met when a player cell sees one of
+  theirs; relation (-100..100, kills lower it, gifts of 50 nutrients raise it, pacts warm it), peace (no hostility;
+  weak nations accept readily), symbiosis after 45 s of peace and relation 40 (trade +0.4 food/energy/s both ways and
+  each can eat/heal in the other's biofilm), endosymbiosis after 90 s of symbiosis and relation 60 (the partner
+  becomes an organelle: its gene + mitochondria: +50% energy, faster division). Attacking a partner breaks the pact.
+- **Multicellular**: endosymbiosis + 3 genes + 60 cells -> "Evoluir para multicelular": the colony's make-up decides
+  the body (hunters/spitters -> predator diet, photosynthesisers -> gentle, armour -> size), saved with the species
+  (`CellSpecies.evolved`) and previewed as the aquatic larva of the creature generator.
