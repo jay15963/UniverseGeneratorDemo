@@ -13,8 +13,12 @@
 // named and coloured, selected and ordered together; when a colony falls its cells join the nearest one. Stances
 // (automatic, gather, defend, hunt, explore) drive units without orders; workers never fight - they gather and flee.
 // The AI nations colonise, defend their colonies together and raid weaker neighbours with an attack force.
+// Evolution: every rival species carries a gene; the player steals it with DNA from its engulfed / killed cells.
+// Diplomacy (player <-> nations): relation, gifts, peace, symbiosis (shared biofilm + trade) and endosymbiosis (the
+// partner becomes an organelle: its gene and mitochondria for good). Endosymbiosis + 3 genes + 60 cells open the way
+// to the multicellular stage.
 // Wild life: bacteria (prey), diatoms, amoebas.
-import { KINDS, Kind, TRAINABLE } from './look';
+import { KINDS, Kind, TRAINABLE, GeneId, geneOf, DNA_FOR_GENE } from './look';
 import { WorldDef, WORLD, BIO, BIO_N, flowAt } from './world';
 import { mulberry, seedToInt } from '../terrain/noise';
 
@@ -47,7 +51,10 @@ export interface Nation {
   emitters: number[]; motherList: number[]; hx: number; hy: number;
   seedSite: { x: number; y: number } | null; seedAt: number;
   colIdx: number;
+  genes: Set<GeneId>; mito: boolean;
 }
+/** what the player knows of another nation */
+export interface NationInfo { id: number; rel: number; pact: number; pactFor: number; dna: number; power: number; colonies: number; cells: number; alive: boolean }
 /** a colony: a rooted mother cell and the cells it bore (the player's groups) */
 export interface Colony { id: number; nation: number; mother: number; name: string; color: string; stance: number; idx: number; n: number; cx: number; cy: number; counts: number[] }
 export interface ColonyInfo extends Colony { x: number; y: number; queue: { kind: number; p: number }[] }
@@ -60,6 +67,9 @@ export type Cmd =
   | { t: 'train'; kind: Kind; colony?: number }
   | { t: 'cancel'; colony: number; index: number }
   | { t: 'nodeAt'; x: number; y: number; colony?: number }
+  | { t: 'gift'; nation: number }
+  | { t: 'propose'; nation: number; kind: 'peace' | 'symbiosis' | 'endo' | 'war' }
+  | { t: 'evolve' }
   | { t: 'pause'; on: boolean }
   | { t: 'speed'; k: number };
 
@@ -68,6 +78,7 @@ export interface Stats {
   counts: number[]; nodes: number; ncol: number; area: number; kills: number; lost: number; founded: number;
   nationsAlive: number; msg: string | null; won: boolean;
   colonies: ColonyInfo[]; seeds: number;
+  genes: GeneId[]; mito: boolean; canEvolve: boolean; evolved: boolean; nations: NationInfo[];
 }
 
 const HB = 64, HN = WORLD / HB;
@@ -116,7 +127,10 @@ export class Sim {
   r: () => number;
   neutralTarget = { bac: 1300, dia: 240, ame: 10 };
   neutralCount = { bac: 0, dia: 0, ame: 0 };
-  goals = { food: false, divide: false, photo: false, node: false, colony: false, rival: false, big: false };
+  goals = { food: false, divide: false, photo: false, node: false, colony: false, gene: false, pact: false, endo: false, big: false };
+  // the player's diplomacy with every nation
+  rel: Float32Array; pact: Uint8Array; pactAt: Float32Array; met: Uint8Array; dna: Float32Array;
+  evolved = false;
 
   constructor(w: WorldDef) {
     this.w = w;
@@ -142,6 +156,7 @@ export class Sim {
         aggr: 0.25 + r() * 0.75, greed: 0.3 + r() * 0.7, prefs: [r(), r(), r()], nextThink: r() * 2,
         target: -1, targetMother: -1, power: 0, area: 0, kills: 0, lost: 0, born: 0, founded: 0,
         emitters: [], motherList: [], hx: list[0].x, hy: list[0].y, seedSite: null, seedAt: 0, colIdx: 0,
+        genes: new Set(i === 0 ? [] : [geneOf(w.species[i]).id]), mito: false,
       };
       this.nations.push(N);
       list.forEach((h, j) => {
@@ -152,6 +167,9 @@ export class Sim {
         start.forEach((k2, q) => { const a = (q / start.length) * Math.PI * 2, u = this.spawn(k2, i, h.x + Math.cos(a) * 60, h.y + Math.sin(a) * 60); if (u >= 0) this.grp[u] = this.grp[m]; });
       });
     });
+    const NN = this.nations.length;
+    this.rel = new Float32Array(NN); this.pact = new Uint8Array(NN); this.pactAt = new Float32Array(NN); this.met = new Uint8Array(NN); this.dna = new Float32Array(NN);
+    this.nations.forEach((N, i) => { if (i) this.rel[i] = Math.round(20 - N.aggr * 40); });
     for (let i = 0; i < 40; i++) this.spawnMotes(1);
     for (let i = 0; i < this.neutralTarget.bac; i++) this.spawnNeutral(Kind.BACTERIA);
     for (let i = 0; i < this.neutralTarget.dia; i++) this.spawnNeutral(Kind.DIATOM);
@@ -205,6 +223,7 @@ export class Sim {
     for (let j = 0; j < drop; j++) this.addMote(this.x[i] + (this.r() - 0.5) * KINDS[k].r * 2, this.y[i] + (this.r() - 0.5) * KINDS[k].r * 2, 4 + this.r() * 3, -1);
     if (k === Kind.BACTERIA) this.neutralCount.bac--; else if (k === Kind.DIATOM) this.neutralCount.dia--; else if (k === Kind.AMOEBA) this.neutralCount.ame--;
     if (c < 0) return;
+    if (by >= 0 && this.col[by] === 0 && c > 0) { this.dna[c] += 0.35; this.rel[c] = Math.max(-100, this.rel[c] - 2); this.stealCheck(c); }
     const N = this.nations[c];
     N.pop -= KINDS[k].pop; N.counts[k]--; N.lost++;
     if (k === Kind.NODE) { N.nodes--; N.cap -= 6; }
@@ -225,6 +244,13 @@ export class Sim {
     }
   }
   say(m: string) { this.msg = m; this.msgAt = this.time; }
+  /** enough DNA of a species: its gene becomes the player's */
+  stealCheck(n: number) {
+    const P = this.nations[0], g = geneOf(this.w.species[n]);
+    if (this.dna[n] < DNA_FOR_GENE || P.genes.has(g.id)) return;
+    P.genes.add(g.id); this.goals.gene = true;
+    this.say(`Gene roubado de ${this.w.species[n].genus}: ${g.name}! (${g.desc})`);
+  }
   /** a colony lost its mother: its cells join the nearest colony of the nation */
   dissolve(m: number) {
     const id = this.grp[m], C = this.cols.get(id);
@@ -289,12 +315,20 @@ export class Sim {
     return false;
   }
 
-  // relations: every nation is at war with the others; the wild amoebas eat anyone
+  has(n: number, g: GeneId) { return n >= 0 && this.nations[n].genes.has(g); }
+  // relations: nations are at war unless the player made peace / symbiosis with them; wild amoebas eat anyone
   hostile(a: number, b: number): boolean {
     const ca = this.col[a], cb = this.col[b];
     if (ca === cb) return ca === -1 ? (this.kind[a] === Kind.AMOEBA) !== (this.kind[b] === Kind.AMOEBA) : false;
     if (ca < 0 || cb < 0) return this.kind[a] === Kind.AMOEBA || this.kind[b] === Kind.AMOEBA;
+    if ((ca === 0 && this.pact[cb]) || (cb === 0 && this.pact[ca])) return false;
     return true;
+  }
+  /** is this biofilm owner a home for cells of nation c (their own, or a symbiotic partner's) */
+  homeFor(c: number, owner: number) {
+    if (owner === 255) return false;
+    if (owner === c) return true;
+    return (c === 0 && this.pact[owner] === 2) || (owner === 0 && c > 0 && this.pact[c] === 2);
   }
   /** hostile and worth attacking on sight: during the grace period rivals leave the player alone unless provoked */
   aggro(a: number, b: number): boolean {
@@ -383,7 +417,7 @@ export class Sim {
       const c = this.nations[this.col[i]];
       c.emitters.push(i);
       if (!c.alive) continue;
-      const maxR = k === Kind.MOTHER ? 300 : 240;
+      const maxR = (k === Kind.MOTHER ? 300 : 240) * (c.genes.has('film') ? 1.2 : 1);
       this.grow[i] = Math.min(maxR, this.grow[i] + 6);
       const R = this.grow[i], cx = this.x[i] / BIO, cy = this.y[i] / BIO, rc = R / BIO;
       for (let y = Math.max(0, Math.floor(cy - rc)); y <= Math.min(N - 1, Math.ceil(cy + rc)); y++)
@@ -430,12 +464,12 @@ export class Sim {
     for (const m of N.motherList) {
       if (!this.alive[m] || !this.rooted[m]) continue;
       // each colony's own metabolism: a trickle so a nation never locks up
-      N.food += 0.8 * dt; N.energy += 0.8 * dt;
+      N.food += 0.8 * dt; N.energy += 0.8 * dt * (N.mito ? 1.5 : 1);
       const q = this.queues.get(m)?.[0];
       if (!q) continue;
       const K = KINDS[q.kind];
       if (N.pop + K.pop > N.cap) continue;
-      q.t += dt;
+      q.t += dt * (N.genes.has('fast') ? 1.25 : 1) * (N.mito ? 1.15 : 1);
       if (q.t < K.time) continue;
       this.queues.get(m)!.shift();
       const a = this.ang[m] + Math.PI + (this.r() - 0.5) * 1.5;
@@ -553,7 +587,7 @@ export class Sim {
       let best = -1, bm = -1, bd = 2600;
       for (const o of this.nations) {
         if (!o.alive || o.id === N.id || o.power >= N.power * (0.6 + N.aggr * 0.6)) continue;
-        if (o.player && this.time < GRACE) continue;
+        if (o.player && (this.time < GRACE || this.pact[N.id])) continue;
         for (const m of o.motherList) {
           if (!this.alive[m]) continue;
           for (const h of colonies) { const d = Math.hypot(this.x[m] - this.x[h], this.y[m] - this.y[h]); if (d < bd) { bd = d; best = o.id; bm = m; } }
@@ -786,16 +820,16 @@ export class Sim {
     // metabolism: heal on the own biofilm, burn reserve outside it, starve when it runs out
     if (c >= 0) {
       const N = this.nations[c];
-      const home = N.alive && this.bioOwner(x, y) === c;
+      const home = N.alive && this.homeFor(c, this.bioOwner(x, y));
       const settled = (k === Kind.MOTHER && this.rooted[i]) || k === Kind.NODE;
-      if (home) { this.sat[i] = Math.min(k === Kind.SCOUT ? 80 : k === Kind.MOTHER ? 120 : 40, this.sat[i] + 6 * dt); if (this.hp[i] < K.hp && this.time - this.hitAt[i] > 2) this.hp[i] = Math.min(K.hp, this.hp[i] + K.hp * 0.02 * dt); }
-      else if (!settled) { this.sat[i] -= dt; if (this.sat[i] <= 0) { this.sat[i] = 0; this.hp[i] -= Math.max(1.5, K.hp * 0.02) * dt; if (this.hp[i] <= 0) { this.kill(i); return; } } }
+      if (home) { this.sat[i] = Math.min(k === Kind.SCOUT ? 80 : k === Kind.MOTHER ? 120 : 40, this.sat[i] + 6 * dt); if (this.hp[i] < K.hp && this.time - this.hitAt[i] > 2) this.hp[i] = Math.min(K.hp, this.hp[i] + K.hp * (N.genes.has('regen') ? 0.04 : 0.02) * dt); }
+      else if (!settled) { this.sat[i] -= dt * (N.genes.has('reserve') ? 0.62 : 1); if (this.sat[i] <= 0) { this.sat[i] = 0; this.hp[i] -= Math.max(1.5, K.hp * 0.02) * dt; if (this.hp[i] <= 0) { this.kill(i); return; } } }
       if (!N.alive && settled) { this.hp[i] -= 6 * dt; if (this.hp[i] <= 0) { this.kill(i); return; } }
-      if (k === Kind.PHOTO && home) N.energy += (this.inLight(x, y) ? 2.4 : 1.2) * dt;
+      if (k === Kind.PHOTO && home) N.energy += (this.inLight(x, y) ? 2.4 : 1.2) * dt * (N.genes.has('photo') ? 1.4 : 1) * (N.mito ? 1.5 : 1);
       if (k === Kind.NODE) N.food += 0.15 * dt;
     }
     // vents scald what swims too close
-    if (this.tick % 5 === 0) for (const v of this.w.vents) { const d = Math.hypot(v.x - x, v.y - y); if (d < v.r + 16) { this.hp[i] -= 3 * dt * 5; if (this.hp[i] <= 0) { this.kill(i); return; } } }
+    if (this.tick % 5 === 0 && !this.has(c, 'heat')) for (const v of this.w.vents) { const d = Math.hypot(v.x - x, v.y - y); if (d < v.r + 16) { this.hp[i] -= 3 * dt * 5; if (this.hp[i] <= 0) { this.kill(i); return; } } }
     this.cd[i] -= dt;
     const t = this.task[i];
     if (t === T_GATHER) {
@@ -842,20 +876,22 @@ export class Sim {
   }
   strike(i: number, j: number) {
     const k = this.kind[i] as Kind, K = KINDS[k];
-    if (k === Kind.SPITTER) { this.shoot(i, j, K.dmg); return; }
+    const c = this.col[i];
+    if (k === Kind.SPITTER) { this.shoot(i, j, K.dmg * (this.has(c, 'toxin') ? 1.35 : 1)); return; }
     // engulf: a hunter swallows a wounded cell no bigger than itself
     const kj = this.kind[j] as Kind;
-    if ((k === Kind.HUNTER || k === Kind.AMOEBA) && kj !== Kind.MOTHER && kj !== Kind.NODE && KINDS[kj].r <= K.r * 1.05 && this.hp[j] < KINDS[kj].hp * 0.3) {
+    if ((k === Kind.HUNTER || k === Kind.AMOEBA) && kj !== Kind.MOTHER && kj !== Kind.NODE && KINDS[kj].r <= K.r * 1.05 && this.hp[j] < KINDS[kj].hp * (this.has(c, 'jaws') ? 0.4 : 0.3)) {
       this.hp[i] = Math.min(K.hp, this.hp[i] + KINDS[kj].hp * 0.5);
-      if (this.col[i] >= 0) this.nations[this.col[i]].food += 6;
+      if (c >= 0) this.nations[c].food += 6;
+      if (c === 0 && this.col[j] > 0) this.dna[this.col[j]] += 0.65;   // engulfed whole: the genes come with it
       this.kill(j, i);
       if (k === Kind.AMOEBA) { this.cd[i] = 8; this.task[i] = T_IDLE; this.tgt[i] = -1; }
       return;
     }
-    this.damage(j, K.dmg, i);
+    this.damage(j, K.dmg * (k === Kind.HUNTER && this.has(c, 'jaws') ? 1.3 : 1), i);
   }
   damage(j: number, dmg: number, by: number) {
-    const d = Math.max(1, dmg - KINDS[this.kind[j]].armor);
+    const d = Math.max(1, dmg - KINDS[this.kind[j]].armor - (this.has(this.col[j], 'armor') ? 1 : 0));
     this.hp[j] -= d; this.hitAt[j] = this.time; this.hitBy[j] = by;
     if (this.hp[j] <= 0) { this.kill(j, by); if (by >= 0 && this.kind[by] === Kind.AMOEBA) { this.cd[by] = 8; this.task[by] = T_IDLE; this.tgt[by] = -1; } }
   }
@@ -912,7 +948,7 @@ export class Sim {
       const k = this.kind[i] as Kind, K = KINDS[k];
       let dvx = 0, dvy = 0;
       const t = this.task[i];
-      const speed = k === Kind.MOTHER && !this.rooted[i] ? 36 : K.speed;
+      const speed = (k === Kind.MOTHER && !this.rooted[i] ? 36 : K.speed) * (this.has(this.col[i], 'speed') ? 1.15 : 1);
       if (speed > 0 && t !== T_IDLE) {
         const dx = this.gx[i] - this.x[i], dy = this.gy[i] - this.y[i], d = Math.hypot(dx, dy);
         const sp = speed * (t === T_WANDER ? 0.45 : 1) * (this.sat[i] <= 0 ? 0.6 : 1);
@@ -960,6 +996,8 @@ export class Sim {
   }
 
   // --- goals (the tutorial-ish objectives of the player) ------------------------------------------------------------------------
+  cells(n: number) { return this.nations[n].counts.reduce((a, b) => a + b, 0); }
+  canEvolve() { const P = this.nations[0]; return P.alive && P.mito && P.genes.size >= 3 && this.cells(0) >= 60; }
   checkGoals() {
     const P = this.nations[0];
     if (this.tick % 10) return;
@@ -969,10 +1007,33 @@ export class Sim {
     if (!g.node && P.nodes > 0) g.node = true;
     if (!g.colony && P.founded > 0) g.colony = true;
     if (!g.photo) for (let i = 0; i < this.top; i++) if (this.alive[i] && this.col[i] === 0 && this.kind[i] === Kind.PHOTO && this.inLight(this.x[i], this.y[i]) && this.bioOwner(this.x[i], this.y[i]) === 0) { g.photo = true; break; }
-    if (!g.rival && P.kills > 0) g.rival = true;
-    const cells = P.counts.reduce((a, b) => a + b, 0);
-    if (!g.big && cells >= 80) g.big = true;
-    if (!this.won && g.big && g.rival && g.colony) { this.won = true; this.say('A sua espécie domina a poça!'); }
+    if (!g.gene && P.genes.size > 0) g.gene = true;
+    if (!g.pact && this.pact.some(v => v > 0)) g.pact = true;
+    if (!g.endo && P.mito) g.endo = true;
+    if (!g.big && this.cells(0) >= 60) g.big = true;
+    if (this.tick % 40 === 0) this.diplomacy(2);
+  }
+  /** every 2 s: who the player has met, relations drifting, symbiotic trade */
+  diplomacy(dt: number) {
+    const P = this.nations[0];
+    // meeting: a nation is known once one of the player's cells has seen one of its cells (or its colonies are near)
+    for (let i = 0; i < this.top; i++) {
+      if (!this.alive[i] || this.col[i] !== 0 || (i & 3) !== (this.tick >> 2 & 3)) continue;
+      const j = this.nearest(this.x[i], this.y[i], KINDS[this.kind[i]].sight, j2 => this.col[j2] > 0 && !this.met[this.col[j2]]);
+      if (j >= 0) { this.met[this.col[j]] = 1; if (P.alive) this.say(`Nova espécie encontrada: ${this.w.species[this.col[j]].genus} ${this.w.species[this.col[j]].species}`); }
+    }
+    for (const N of this.nations) {
+      if (N.player) continue;
+      const n = N.id;
+      if (!N.alive) { this.pact[n] = 0; continue; }
+      // relations settle slowly; pacts warm them
+      const base = Math.round(20 - N.aggr * 40);
+      this.rel[n] += ((base - this.rel[n]) * 0.01 + (this.pact[n] === 2 ? 1 : this.pact[n] === 1 ? 0.5 : 0)) * dt / 2;
+      this.rel[n] = Math.max(-100, Math.min(100, this.rel[n]));
+      if (this.pact[n] === 2) { P.food += 0.4 * dt; P.energy += 0.4 * dt; N.food += 0.4 * dt; N.energy += 0.4 * dt; }
+      // a bitter partner breaks the pact
+      if (this.pact[n] && this.rel[n] < -40) { this.pact[n] = 0; this.say(`${this.w.species[n].genus} rompeu o pacto com você!`); }
+    }
   }
 
   // --- commands ---------------------------------------------------------------------------------------------------------------------
@@ -997,6 +1058,8 @@ export class Sim {
       }
       case 'attack': {
         if (cmd.target < 0 || !this.alive[cmd.target]) break;
+        const tn = this.col[cmd.target];
+        if (tn > 0 && this.pact[tn]) { this.pact[tn] = 0; this.rel[tn] = Math.max(-100, this.rel[tn] - 50); this.say(`Você atacou ${this.w.species[tn].genus} e rompeu o pacto!`); }
         for (const i of cmd.ids.filter(mine)) { if (!KINDS[this.kind[i]].dmg || this.kind[i] === Kind.MOTHER) continue; this.setTarget(i, cmd.target); this.task[i] = T_ATTACK; this.manual[i] = 1; }
         break;
       }
@@ -1029,6 +1092,46 @@ export class Sim {
         this.say('Uma coletora está indo fixar o nódulo.');
         break;
       }
+      case 'gift': {
+        const n = cmd.nation, N = this.nations[n];
+        if (!N || N.player || !N.alive) break;
+        if (P.food < 50) { this.say('São precisos 50 nutrientes para um presente.'); break; }
+        P.food -= 50; N.food += 50; this.rel[n] = Math.min(100, this.rel[n] + 12);
+        this.say(`${this.w.species[n].genus} recebeu 50 nutrientes (relação ${Math.round(this.rel[n])}).`);
+        break;
+      }
+      case 'propose': {
+        const n = cmd.nation, N = this.nations[n];
+        if (!N || N.player || !N.alive) break;
+        const name = this.w.species[n].genus, r = this.rel[n];
+        if (cmd.kind === 'war') { if (this.pact[n]) { this.pact[n] = 0; this.rel[n] -= 30; this.say(`Você rompeu o pacto com ${name}.`); } break; }
+        if (cmd.kind === 'peace') {
+          if (this.pact[n]) break;
+          // the weak make peace readily, the strong only with good relations
+          const ok = r >= 10 || (N.power < P.power * 0.8 && r >= -20);
+          if (ok) { this.pact[n] = 1; this.pactAt[n] = this.time; if (N.target === 0) this.recall(N); this.say(`${name} aceitou a paz.`); }
+          else this.say(`${name} recusou a paz (relação ${Math.round(r)}). Presentes ajudam.`);
+          break;
+        }
+        if (cmd.kind === 'symbiosis') {
+          if (this.pact[n] !== 1) { this.say('A simbiose começa depois de um tempo de paz.'); break; }
+          if (this.time - this.pactAt[n] < 45 || r < 40) { this.say(`${name} ainda não confia em você (paz há ${Math.max(0, Math.floor(this.time - this.pactAt[n]))} s, relação ${Math.round(r)}; precisa de 45 s e 40).`); break; }
+          this.pact[n] = 2; this.pactAt[n] = this.time;
+          this.say(`Simbiose com ${name}: vocês trocam nutrientes e energia e comem no biofilme um do outro.`);
+          break;
+        }
+        if (cmd.kind === 'endo') {
+          if (this.pact[n] !== 2) break;
+          if (P.mito) { this.say('Sua espécie já tem uma endossimbiose.'); break; }
+          if (this.time - this.pactAt[n] < 90 || r < 60) { this.say(`A endossimbiose precisa de 90 s de simbiose e relação 60 (agora: ${Math.floor(this.time - this.pactAt[n])} s, ${Math.round(r)}).`); break; }
+          const g = geneOf(this.w.species[n]);
+          P.mito = true; P.genes.add(g.id);
+          this.say(`Endossimbiose! ${name} vive agora dentro das suas células como organela: +50% de energia, divisão mais rápida e o gene ${g.name}.`);
+          break;
+        }
+        break;
+      }
+      case 'evolve': if (this.canEvolve()) { this.evolved = true; this.paused = true; } break;
       case 'pause': this.paused = cmd.on; break;
       case 'speed': this.speed = Math.max(1, Math.min(4, Math.round(cmd.k))); break;
     }
@@ -1082,6 +1185,8 @@ export class Sim {
       counts: P.counts.slice(), nodes: P.nodes, ncol: P.mothers, area: P.area, kills: P.kills, lost: P.lost, founded: P.founded,
       nationsAlive: this.nations.filter(n => n.alive).length, msg, won: this.won,
       colonies: this.colonyInfo(), seeds: P.motherList.filter(m => this.alive[m] && !this.rooted[m]).length,
+      genes: [...P.genes], mito: P.mito, canEvolve: this.canEvolve(), evolved: this.evolved,
+      nations: this.nations.filter(n => !n.player && this.met[n.id]).map(n => ({ id: n.id, rel: Math.round(this.rel[n.id]), pact: this.pact[n.id], pactFor: Math.floor(this.time - this.pactAt[n.id]), dna: this.dna[n.id], power: n.power, colonies: n.mothers, cells: this.cells(n.id), alive: n.alive })),
     };
   }
   /** colony table for labels / minimap: x, y, nation, rooted (one row per mother cell) */
