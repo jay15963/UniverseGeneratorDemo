@@ -287,8 +287,10 @@ Four levels (owner's request; `lodOf`):
 - **The player's species lives on a real world of the explorable universe** (owner's rule): the cell editor has a
   "Semente do universo" (dice); `pickHomeworld(seed, mode)` (`homeworld.ts`, run in `homeworld.worker.ts`) walks that
   universe (the explorer's settings, `HOME_UNIVERSE`) in a seeded order - galaxy -> star -> the first Earth-like
-  (earth mode) / alien-life (alien mode) world with open seas, planets before moons - and it is saved with the species
-  (`CellSpecies.universe` / `home`). The same planet carries the lineage through every era, up to the space age.
+  (earth mode) / alien-life (alien mode) world with open seas, planets before moons (never an ocean world) - and it is
+  saved with the species (`CellSpecies.universe` / `home`). The same planet carries the lineage through every era, up
+  to the space age. **The planet is never named or shown in advance** (owner's rule): no name in the editor, the era
+  screen or the HUD ("Mundo natal") - one finds out where one lives by going there.
 - The aquatic era starts it at life stage `AQUATIC_START_STAGE` (only the seas live); the era will push the stage.
 - **Discovery fog** (Civilization style, play mode only - never in Explorar/demo/trailer): `Discovery` (`discovery.ts`)
   is a mask at map resolution (1 cell = 1 map px = 64 tiles), saved per planet in localStorage (run-length, base64).
@@ -296,8 +298,27 @@ Four levels (owner's request; `lodOf`):
   chunks (`SurvivalView` `discovery`, `fogPaint.ts`: world-anchored big pixels, noisy organic edge, Bayer dither).
   Sight is a circle centred on each creature (today the spectator camera at the gameplay zooms, `sight` tiles);
   once seen a place stays discovered. Landing is only allowed on discovered ground.
-- `HomeWorldView` (EraSelect "Ver planeta", `#planeta`): the home planet under the fog, with the waters of origin
-  (a shallow sea point, `findOrigin`) known from the start, previews of the life stage and "Recomeçar".
+- `HomeWorldView` (EraSelect "Descer ao planeta", `#planeta`) opens **straight into the planet's own view**
+  (`SurvivalView` spectator + `aquatic` + `discovery`, same zooms as the spectator mode - never the flat `MapViewer`
+  screen, owner's request) at the waters of origin (a shallow sea point, `findOrigin`), known from the start; small
+  overlay: % discovered, life-stage previews, "Recomeçar". City tools are hidden while `discovery` is on.
+
+## Aquatic zooms (`terrain/seabed.ts`, `Survival/underwater.ts`)
+- Two new zooms in the aquatic era (`SurvivalView` `aquatic`, set by the play mode): **gameplay aquático
+  (submerso)** = the local zooms (>= 1/2) look under the sea; **regional aquático (superfície)** = the far zoom (1/4)
+  is the sea's surface seen from above, swimmers as dark tinted shapes under it; the terrestrial zooms stay as they
+  are (land tiles look normal at every zoom).
+- `PlanetConfig.aquaticView` makes the terrain workers add a **seabed** to every row with sea pixels (`TerrainRow.bed`
+  / `bedAnim`, packed in the chunk texture): floors by deepness q (depth percentiles of that ocean: rippled sand on
+  the shelf, silt, boulders with lit crests / algae / cast shadows, abyssal ooze with living lights), corals on warm
+  shelves, seagrass / cold-water kelp that sway, animated caustic webs in the shallows, the planet's own water
+  colour baked in thicker with depth. Flat 2D pixel art.
+- The submerged view adds the water column (`Underwater.ambience`, weighted by the share of sea in view): slanted
+  sun shafts, marine snow in three parallax layers, bubble streams, a depth vignette; no rain/snow under water
+  (`NatureFx.underwater`); surface lily pads are hidden; swimmers are drawn whole with a shadow on the floor.
+- Crossing local <-> far over the sea plays `Underwater.transition` (0.95 s, chunky pixels): surfacing = bubbles
+  left behind, the wavy foam waterline sweeping down past the eye, droplets thrown up; diving = entry splash ring,
+  the waterline rising, bubbles.
 
 ## Play mode & the cellular era (`src/lib/cell/`, `src/components/Cell/`)
 Owner's rules - keep them:

@@ -76,7 +76,7 @@ function homeOf(universeSeed: string, gal: UniverseGalaxyMetadata, star: Stellar
 }
 
 /** the home world as it looks at a life stage (0..1): the aquatic era starts it with bare land */
-export const homeConfig = (hw: HomeWorld, lifeStage: number): PlanetConfig => ({ ...hw.config, lifeStage, life: { level: 'animal' } });
+export const homeConfig = (hw: HomeWorld, lifeStage: number): PlanetConfig => ({ ...hw.config, lifeStage, life: { level: 'animal' }, aquaticView: true });
 
 /** pickHomeworld in a worker */
 export function findHomeworld(universeSeed: string, mode: 'earth' | 'alien'): Promise<HomeWorld | null> {

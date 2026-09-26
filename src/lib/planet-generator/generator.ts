@@ -49,6 +49,8 @@ export function hasCapability(type: PlanetType, cap: PlanetCapability): boolean 
 }
 
 export interface PlanetConfig {
+  /** play mode (aquatic era): terrain chunks also carry the seabed for the submerged view */
+  aquaticView?: boolean;
   seed: string;
   width: number;
   height: number;
