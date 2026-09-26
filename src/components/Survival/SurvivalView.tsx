@@ -28,6 +28,8 @@ import type { CityBuilding, CityPlan } from '../../lib/city/codes';
 import type { Cinematic, CineApi } from '../Demo/cinema';
 import { ERA_NAMES, type CityMeta } from '../../lib/city/codes';
 import { ERAS } from '../../lib/structure/genome';
+import type { Discovery } from '../../lib/play/discovery';
+import { drawFog } from '../../lib/play/fogPaint';
 
 interface Props {
   session: PlanetSession;
@@ -43,6 +45,8 @@ interface Props {
   cinematic?: Cinematic | null;
   /** loaded but invisible (a later scene of a trailer): terrain streams in, nothing is drawn */
   standby?: boolean;
+  /** play mode: discovery fog over the unknown; `sight` = radius (tiles) revealed around the camera at gameplay zoom */
+  discovery?: { fog: Discovery; sight: number } | null;
 }
 
 /** A drawable image: a GPU texture region (WebGL path) or a canvas (Canvas2D fallback). */
@@ -173,7 +177,7 @@ const PLAYER_K = CITIZEN_K;
 const REACH = 26;
 const SPEED = 74;
 
-export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null, standby = false }: Props) {
+export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null, standby = false, discovery = null }: Props) {
   const cine = cinematic;
   const spectator = spectatorProp || !!cine;
   /** spectator mode can drop in as a citizen of one of its cities (and leave again) */
@@ -1565,6 +1569,14 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       // --- overlay: world effects, markers, text, screen-space weather & night ---
       octx.setTransform(1, 0, 0, 1, 0, 0);
       octx.clearRect(0, 0, DW, DH);
+      // discovery fog: sight reveals a circle around the camera at the gameplay zooms; the unknown stays ink-dark
+      // (drawn over the world and its weather, under the markers and labels)
+      const fogPass = () => {
+        if (!discovery || !g.ready || cine) return;
+        const cellW = WORLD_PX / session.width;
+        if (chunked(lod)) discovery.fog.reveal(g.x / cellW, g.y / cellW, (discovery.sight * TILE) / cellW);
+        drawFog(octx, discovery.fog, DW, DH, S, tx0, ty0, cellW, dpr);
+      };
       if (local && fxc) {
         octx.setTransform(S, 0, 0, S, tx0, ty0);
         octx.imageSmoothingEnabled = false;
@@ -1608,6 +1620,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }
         if (sun > -0.2 && sun < 0.25) { octx.fillStyle = `rgba(255,120,40,${(1 - Math.abs(sun - 0.02) / 0.23) * 0.12})`; octx.fillRect(0, 0, DW, DH); }
         fx.drawScreen(octx, DW, DH, S, fxc, toScreen);
+        fogPass();
         if (spectator && !cine && !avatarRef.current) drawCityLabels(toScreen, dpr, S, false, DW);
         else cityHits.current = [];
       } else if (g.ready && !cine) {
@@ -1620,6 +1633,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           clouds.draw(octx, view, t, fx.wind, cov, Z, 'cloud', 0.9, stormy);
           octx.setTransform(1, 0, 0, 1, 0, 0);
         }
+        fogPass();
         // zoomed-out views: a clear "you are here" marker (drawn at every horizontal wrap of the planet)
         const [px, py] = toScreen(g.x, g.y - g.lift);
         for (let k = -1; k <= 1; k++) {
@@ -1657,6 +1671,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         const scale = 1 / 16 * (MW / 160) * 2;
         const ox = MW / 2 - g.x * scale, oy = MW / 2 - g.y * scale;
         g.chunks.forEach(c => mc.drawImage(c.mini, ox + c.data.cx * CHUNK_PX * scale, oy + c.data.cy * CHUNK_PX * scale, CHUNK_PX * scale, CHUNK_PX * scale));
+        if (discovery) {
+          const cellW = WORLD_PX / session.width, B = 4;
+          mc.fillStyle = '#070a12';
+          for (let yy = 0; yy < MW; yy += B) for (let xx = 0; xx < MW; xx += B) {
+            if (discovery.fog.unknownAt((xx + B / 2 - ox) / scale / cellW, (yy + B / 2 - oy) / scale / cellW) > 0.5) mc.fillRect(xx, yy, B, B);
+          }
+        }
         mc.fillStyle = '#fff'; mc.fillRect(MW / 2 - 2, MW / 2 - 2, 4, 4);
         mc.fillStyle = '#ff5a3a'; mc.fillRect(MW / 2 - 1, MW / 2 - 1, 2, 2);
       }

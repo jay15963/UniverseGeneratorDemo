@@ -1,18 +1,18 @@
 // Play mode: pick the era to start in. Only the cellular era is open for now; the others are shown locked, each with
 // a portrait of the same sample species at that stage (the lineage the player will walk).
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Lock, Play } from 'lucide-react';
+import { ArrowLeft, Lock, Play, Globe2 } from 'lucide-react';
 import { makeGenome, Stage, DEFAULT_PARAMS } from '../../lib/creature/genome';
 import { renderCreature } from '../../lib/creature/render';
 import { drawKind, spriteCanvas } from '../../lib/cell/art';
-import { Kind, loadSpecies, makeSpecies } from '../../lib/cell/look';
+import { Kind, loadSpecies, makeSpecies, universeOf } from '../../lib/cell/look';
 
-interface Props { onBack: () => void; onCell: () => void }
+interface Props { onBack: () => void; onCell: () => void; onHome: () => void }
 
 interface Era { id: string; name: string; group: string; blurb: string; stage: Stage | 'cell'; open?: boolean }
 const ERAS: Era[] = [
   { id: 'cell', name: 'Celular', group: 'Vida', blurb: 'RTS de colônias numa poça primordial: divida, espalhe o biofilme e domine centenas de colônias.', stage: 'cell', open: true },
-  { id: 'aqua', name: 'Aquática', group: 'Vida', blurb: 'O primeiro corpo: cardumes, formações e migrações.', stage: Stage.AQUA },
+  { id: 'aqua', name: 'Aquática', group: 'Vida', blurb: 'RTS no oceano do planeta natal: cardumes, castas, profundezas e a conquista da costa.', stage: Stage.AQUA },
   { id: 'land', name: 'Terrestre', group: 'Vida', blurb: 'Bandos, território, estações e relações entre espécies.', stage: Stage.LAND },
   { id: 'late', name: 'Animal tardio', group: 'Vida', blurb: 'De pé nas duas patas: proto-ferramentas e proto-sociedades.', stage: Stage.AMPHIBIAN },
   { id: 'tribal', name: 'Tribal', group: 'Civilização', blurb: 'A primeira aldeia: a estratégia começa de verdade.', stage: Stage.TRIBAL },
@@ -25,7 +25,7 @@ const ERAS: Era[] = [
   { id: 'space', name: 'Espacial', group: 'Civilização', blurb: '', stage: Stage.SPACE },
 ];
 
-export function EraSelect({ onBack, onCell }: Props) {
+export function EraSelect({ onBack, onCell, onHome }: Props) {
   const species = useMemo(() => loadSpecies() ?? makeSpecies('LINHAGEM'), []);
   const genome = useMemo(() => makeGenome(species.seed, DEFAULT_PARAMS, species.mode), [species]);
   const [pics, setPics] = useState<Record<string, HTMLCanvasElement>>({});
@@ -51,6 +51,17 @@ export function EraSelect({ onBack, onCell }: Props) {
         <h1 className="font-black tracking-[0.2em] text-sm sm:text-base">ESCOLHA A ERA</h1>
         <span className="ml-auto text-[11px] text-neutral-500 hidden sm:block">Da célula à era espacial — uma linhagem só.</span>
       </header>
+      <div className="max-w-6xl mx-auto px-4 sm:px-8 pt-4 sm:pt-8">
+        <button onClick={onHome} className="w-full flex flex-wrap items-center gap-3 text-left rounded-2xl border border-sky-300/30 bg-gradient-to-r from-sky-500/10 via-black to-black px-4 py-3 hover:border-sky-200 transition-colors">
+          <Globe2 className="w-8 h-8 text-sky-300 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[9px] font-mono tracking-[0.25em] text-sky-300/70">PLANETA NATAL · <span className="italic font-serif tracking-normal text-amber-100/80">{species.genus} {species.species}</span></div>
+            <div className="font-black text-lg leading-tight truncate">{species.home && species.home.universeSeed === universeOf(species) ? species.home.bodyName : 'Um mundo oceânico do universo ' + universeOf(species)}</div>
+            <p className="text-[11px] text-neutral-400">O mesmo planeta de verdade em todas as eras. Só as águas de origem são conhecidas — o resto está sob a neblina de descoberta.</p>
+          </div>
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-black bg-sky-300 rounded-lg px-3 py-1.5">Ver planeta</span>
+        </button>
+      </div>
       <div className="max-w-6xl mx-auto p-4 sm:p-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
         {ERAS.map((e, i) => (
           <button key={e.id} disabled={!e.open} onClick={e.open ? onCell : undefined}

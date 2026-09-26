@@ -1,5 +1,6 @@
 // A cell species: its name, colour mode and the appearance sliders the player sets in the cell editor. Everything the
 // art needs is derived from these numbers, so a species always looks the same for the same (seed, look, mode).
+import type { HomeWorld } from '../play/homeworld';
 import { mulberry, seedToInt } from '../terrain/noise';
 import { speciesName } from '../creature/genome';
 import type { ColorMode } from '../creature/genome';
@@ -30,7 +31,12 @@ export interface CellSpecies {
   seed: string; genus: string; species: string; mode: ColorMode; look: CellLook;
   /** set when the cellular era is won: the stolen genes and the body the colony evolved into (diet, size...) */
   evolved?: { genes: string[]; diet: number; size: number; at: number };
+  /** the universe the lineage lives in (its seed) and the home planet drawn from it (the same world in every era) */
+  universe?: string;
+  home?: HomeWorld;
 }
+/** the universe seed of a species (older saves: the species seed) */
+export const universeOf = (sp: CellSpecies) => sp.universe || sp.seed;
 
 export const SHAPES: [CellShape, string][] = [
   ['round', 'Esférica'], ['oval', 'Ovalada'], ['rod', 'Bastonete'], ['egg', 'Gota'], ['star', 'Estrelada'], ['bean', 'Feijão'], ['blob', 'Ameboide'],

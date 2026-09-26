@@ -2,13 +2,14 @@
 // sliders - and sees every unit kind the colony will divide into (they share the species' look, each with its own
 // anatomy). Dice for the name, the appearance and the seed, like the creature generator.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Dices, Play, Microscope, Shuffle, Palette } from 'lucide-react';
+import { ArrowLeft, Dices, Play, Microscope, Shuffle, Palette, Globe2 } from 'lucide-react';
 import {
   CellSpecies, CellLook, LOOK_SLIDERS, SHAPES, PATTERNS, KINDS, Kind, SPECIES_KINDS, randomLook, randomName, randomSeed,
-  makeSpecies, loadSpecies, saveSpecies, cellColours, CellShape, CellPattern,
+  makeSpecies, loadSpecies, saveSpecies, cellColours, CellShape, CellPattern, universeOf,
 } from '../../lib/cell/look';
 import { drawKind, spriteCanvas, CellSprite } from '../../lib/cell/art';
 import type { ColorMode } from '../../lib/creature/genome';
+import { findHomeworld, randomUniverseSeed } from '../../lib/play/homeworld';
 
 interface Props { onBack: () => void; onStart: (sp: CellSpecies) => void }
 
@@ -18,6 +19,20 @@ export function CellEditor({ onBack, onStart }: Props) {
   const [sp, setSp] = useState<CellSpecies>(() => loadSpecies() ?? makeSpecies(randomSeed()));
   const [kind, setKind] = useState<Kind>(Kind.WORKER);
   const setLook = (patch: Partial<CellLook>) => setSp(s => ({ ...s, look: { ...s.look, ...patch } }));
+  // the home planet: drawn from the universe seed (a living ocean world of the chosen world type), found off-thread
+  const uni = universeOf(sp);
+  const homeOk = !!sp.home && sp.home.universeSeed === uni && (sp.home.config.planetType === 'alien-life') === (sp.mode === 'alien');
+  const [homeBusy, setHomeBusy] = useState(false);
+  useEffect(() => {
+    if (homeOk) return;
+    let dead = false;
+    setHomeBusy(true);
+    const id = setTimeout(() => {
+      findHomeworld(uni, sp.mode).then(home => { if (!dead && home) setSp(s => (universeOf(s) === uni && s.mode === sp.mode ? { ...s, home } : s)); })
+        .catch(() => {}).finally(() => { if (!dead) setHomeBusy(false); });
+    }, 350);
+    return () => { dead = true; clearTimeout(id); };
+  }, [uni, sp.mode, homeOk]);
 
   // debounced so dragging a slider stays fluid
   const [live, setLive] = useState(sp);
@@ -102,6 +117,21 @@ export function CellEditor({ onBack, onStart }: Props) {
             <button onClick={() => { const seed = randomSeed(); setSp(s => ({ ...s, look: randomLook(seed) })); }} className="mt-2 w-full flex items-center justify-center gap-2 text-xs font-bold py-2 rounded-lg border border-teal-300/25 text-teal-100 hover:bg-teal-500/10">
               <Shuffle className="w-3.5 h-3.5" /> Aparência aleatória
             </button>
+          </section>
+          <section>
+            <Label>Semente do universo</Label>
+            <div className="flex gap-2">
+              <input value={uni} onChange={e => setSp(s => ({ ...s, universe: e.target.value.toUpperCase().slice(0, 20), home: undefined }))}
+                className="flex-1 min-w-0 bg-white/5 border border-white/10 rounded-lg px-3 py-2 font-mono text-sm tracking-widest focus:outline-none focus:border-sky-400/60" />
+              <button onClick={() => setSp(s => ({ ...s, universe: randomUniverseSeed(), home: undefined }))} title="Outro universo: outra galáxia, outra estrela, outro planeta natal" className="px-3 rounded-lg bg-sky-700/80 hover:bg-sky-600 border border-white/10"><Dices className="w-4 h-4" /></button>
+            </div>
+            <div className="mt-2 rounded-lg border border-sky-300/15 bg-sky-400/[0.04] px-2.5 py-2 text-[11px] leading-snug">
+              <div className="flex items-center gap-1.5 text-sky-200 font-bold"><Globe2 className="w-3.5 h-3.5" /> Planeta natal</div>
+              {homeOk && sp.home ? (
+                <div className="mt-0.5 text-neutral-300"><b className="text-white">{sp.home.bodyName}</b>{sp.home.moon ? ' (lua)' : ''}<br /><span className="text-neutral-500">estrela {sp.home.starName} · galáxia {sp.home.galaxyName}</span></div>
+              ) : <div className="mt-0.5 text-neutral-500">{homeBusy ? 'Procurando um mundo oceânico vivo…' : 'Nenhum mundo com mares neste universo.'}</div>}
+              <p className="mt-1 text-[10px] text-neutral-500">O mesmo planeta, de verdade, do universo explorável — da era aquática à espacial.</p>
+            </div>
           </section>
           <section>
             <Label>Tipo de mundo</Label>

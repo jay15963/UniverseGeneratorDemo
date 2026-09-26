@@ -283,6 +283,22 @@ Four levels (owner's request; `lodOf`):
   Vegetal + / Qualquer vida. Clicking a world jumps to its system (`jumpToSystem`) and focuses the planet.
   No real/known bodies (Earth, Milky Way) - the owner asked for procedural worlds only.
 
+## Home planet & discovery fog (`src/lib/play/`, `src/components/Play/`)
+- **The player's species lives on a real world of the explorable universe** (owner's rule): the cell editor has a
+  "Semente do universo" (dice); `pickHomeworld(seed, mode)` (`homeworld.ts`, run in `homeworld.worker.ts`) walks that
+  universe (the explorer's settings, `HOME_UNIVERSE`) in a seeded order - galaxy -> star -> the first Earth-like
+  (earth mode) / alien-life (alien mode) world with open seas, planets before moons - and it is saved with the species
+  (`CellSpecies.universe` / `home`). The same planet carries the lineage through every era, up to the space age.
+- The aquatic era starts it at life stage `AQUATIC_START_STAGE` (only the seas live); the era will push the stage.
+- **Discovery fog** (Civilization style, play mode only - never in Explorar/demo/trailer): `Discovery` (`discovery.ts`)
+  is a mask at map resolution (1 cell = 1 map px = 64 tiles), saved per planet in localStorage (run-length, base64).
+  Unknown places are ink-dark on the world map / globe (`MapViewer` `fog`), the regional blocks and the gameplay
+  chunks (`SurvivalView` `discovery`, `fogPaint.ts`: world-anchored big pixels, noisy organic edge, Bayer dither).
+  Sight is a circle centred on each creature (today the spectator camera at the gameplay zooms, `sight` tiles);
+  once seen a place stays discovered. Landing is only allowed on discovered ground.
+- `HomeWorldView` (EraSelect "Ver planeta", `#planeta`): the home planet under the fog, with the waters of origin
+  (a shallow sea point, `findOrigin`) known from the start, previews of the life stage and "Recomeçar".
+
 ## Play mode & the cellular era (`src/lib/cell/`, `src/components/Cell/`)
 Owner's rules - keep them:
 - Menu: **"Jogar"** opens the era selection (`EraSelect`; only the cellular era is open, the others are shown locked
