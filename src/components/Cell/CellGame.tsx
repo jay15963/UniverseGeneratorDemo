@@ -1,14 +1,14 @@
 // The cellular era (play mode): a colony RTS in a microscopic pool. Loading (world, sprite atlas on a worker pool,
 // simulation worker), then the engine (engine.ts) draws the pool and the HUD below drives it: resources, the nation's
-// cells and groups (top right), the division bar of the active colony, selection and stances (delegation), objectives,
+// colonies and their cells (top right), the division bar of the chosen colony, selection and stances (delegation), objectives,
 // minimap.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Pause, Play, FastForward, Home, Target, HelpCircle, X, CheckCircle2, Circle, Sprout, Zap, Users, Hexagon, Trophy, Skull, CircleDot, Plus, Trash2, Layers } from 'lucide-react';
+import { ArrowLeft, Pause, Play, FastForward, Home, Target, HelpCircle, X, CheckCircle2, Circle, Sprout, Zap, Users, Hexagon, Trophy, Skull, CircleDot, ChevronDown } from 'lucide-react';
 import { CellSpecies, KINDS, Kind, TRAINABLE, ROLE } from '../../lib/cell/look';
 import { makeWorld, WorldDef } from '../../lib/cell/world';
 import { buildAtlas, atlasJobs, Atlas, LAYER } from '../../lib/cell/atlas';
-import { STANCES, GRACE, COLONY_GAP } from '../../lib/cell/sim';
-import { CellEngine, HudState, GROUP_COLORS } from './engine';
+import { STANCES, GRACE, COLONY_GAP, NODE_GAP } from '../../lib/cell/sim';
+import { CellEngine, HudState } from './engine';
 
 interface Props { species: CellSpecies; onExit: () => void; onRestart: () => void }
 
@@ -16,7 +16,7 @@ const GOALS: [string, string][] = [
   ['food', 'Acumule 200 nutrientes'],
   ['divide', 'Divida a célula-mãe para criar uma célula'],
   ['photo', 'Leve uma fotossintética a um feixe de luz dentro do biofilme'],
-  ['node', 'Transforme uma coletora em nódulo de biofilme (N)'],
+  ['node', 'Fixe um nódulo de biofilme (botão Nódulo na barra de divisão)'],
   ['colony', 'Funde uma nova colônia (divida uma célula-mãe e leve-a a um espaço livre)'],
   ['rival', 'Destrua uma colônia rival (a célula-mãe dela)'],
   ['big', 'Chegue a 80 células'],
@@ -30,12 +30,15 @@ const STANCE_HINT = [
 ];
 /** extra lines of the division tooltips */
 const TIP_NOTE: Partial<Record<Kind, string>> = {
-  [Kind.WORKER]: 'Só a coletora cria biofilme: selecione coletoras e aperte N para transformá-las em nódulo na borda do território. Cada nódulo expande o território e dá +6 de população.',
+  [Kind.WORKER]: 'Não luta: foge dos inimigos e só coleta. É a coletora que cria biofilme: use o botão Nódulo e a coletora mais próxima da colônia vai até o ponto e se transforma.',
+  [Kind.NODE]: `Entra no modo de posicionamento: clique na borda do seu biofilme. Não pode ficar a menos de ${NODE_GAP} de outro nódulo ou colônia, nem de inimigos - os alcances aparecem no mapa. Expande o território e dá +6 de população.`,
   [Kind.PHOTO]: 'Fica parada no biofilme gerando energia. Sob um feixe de luz, gera o dobro.',
   [Kind.MOTHER]: `Nasce solta: selecione e clique com o botão direito num espaço livre a ${COLONY_GAP}+ de outras células-mãe (fora de biofilme estrangeiro). Ao parar, ela se fixa e vira uma nova colônia (+8 de população).`,
   [Kind.SCOUT]: 'Rápida e com reserva maior: ótima para achar nutrientes, luz e espaços livres.',
 };
 const ORDER: Kind[] = [Kind.MOTHER, Kind.NODE, Kind.WORKER, Kind.PHOTO, Kind.SCOUT, Kind.HUNTER, Kind.SPITTER, Kind.ARMOR];
+/** the division bar: the node sits next to the worker that becomes it */
+const BAR: Kind[] = [Kind.WORKER, Kind.NODE, Kind.SCOUT, Kind.PHOTO, Kind.HUNTER, Kind.SPITTER, Kind.ARMOR, Kind.MOTHER];
 
 export function CellGame({ species, onExit, onRestart }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -51,7 +54,6 @@ export function CellGame({ species, onExit, onRestart }: Props) {
   const [wonSeen, setWonSeen] = useState(false);
   const [atlas, setAtlas] = useState<Atlas | null>(null);
   const [tip, setTip] = useState<{ k: Kind; x: number } | null>(null);
-  const [form, setForm] = useState<{ name: string; color: string } | null>(null);
   const worldSeed = useMemo(() => Math.random().toString(36).slice(2, 8), []);
 
   useEffect(() => {
@@ -110,11 +112,9 @@ export function CellGame({ species, onExit, onRestart }: Props) {
   const selTotal = sel ? sel.counts.reduce((a, b) => a + b, 0) : 0;
   const lost = st && !st.alive;
   const won = st?.won && !wonSeen;
-  const mothers = st?.mothers ?? [];
-  const active = mothers.find(m => m.id === hud?.active);
-  const activeIdx = active ? mothers.filter(m => m.rooted).indexOf(active) + 1 : 0;
+  const colonies = hud?.colonies ?? [];
+  const active = colonies.find(c => c.id === hud?.active) ?? colonies[0];
   const queue = active?.queue ?? [];
-  const openForm = () => { const n = (hud?.groups.length ?? 0) + 1; setForm({ name: `Grupo ${n}`, color: GROUP_COLORS[(n - 1) % GROUP_COLORS.length] }); };
 
   return (
     <div className="fixed inset-0 bg-[#031016] text-white font-sans overflow-hidden select-none">
@@ -146,7 +146,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
             <Res icon={<Sprout className="w-4 h-4 text-yellow-300" />} v={Math.floor(st.food)} title="Nutrientes (as coletoras trazem para o biofilme)" />
             <Res icon={<Zap className="w-4 h-4 text-cyan-300" />} v={Math.floor(st.energy)} title="Energia (fotossintéticas e as células-mãe produzem)" />
             <Res icon={<Users className="w-4 h-4 text-emerald-300" />} v={`${st.pop}/${st.cap}`} title="População / limite: +8 por colônia, +6 por nódulo" warn={st.pop >= st.cap} />
-            <Res icon={<CircleDot className="w-4 h-4 text-amber-200" />} v={st.colonies} title="Colônias (células-mãe fixadas)" />
+            <Res icon={<CircleDot className="w-4 h-4 text-amber-200" />} v={st.ncol} title="Colônias (células-mãe fixadas)" />
             <Res icon={<Hexagon className="w-4 h-4 text-violet-300" />} v={st.nodes} title="Nódulos de biofilme" />
             <span className="text-neutral-400 text-xs w-10 text-right" title="Tempo de jogo">{mm(st.time)}</span>
             <div className="flex gap-0.5 ml-1">
@@ -180,57 +180,36 @@ export function CellGame({ species, onExit, onRestart }: Props) {
         </div>
       )}
 
-      {/* the nation: cells by kind + groups (top right) */}
+      {/* the colonies (top right): each colony is a group of cells - its counts by kind, click to select */}
       {phase === 'play' && st && hud && (
-        <div className="absolute top-14 right-2 z-20 w-[238px] max-h-[calc(100vh-330px)] overflow-y-auto no-scrollbar rounded-xl bg-black/65 border border-white/10 text-xs">
+        <div className="absolute top-14 right-2 z-20 w-[246px] max-h-[calc(100vh-330px)] overflow-y-auto no-scrollbar rounded-xl bg-black/65 border border-white/10 text-xs">
           <div className="px-3 pt-2 pb-1 flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-            <span>Células</span><span className="font-mono normal-case tracking-normal">{st.counts.reduce((a, b) => a + b, 0)}</span>
+            <span>Colônias</span><span className="font-mono normal-case tracking-normal">{st.counts.reduce((a, b) => a + b, 0)} células</span>
           </div>
-          <div className="px-1.5 pb-1.5 grid grid-cols-2 gap-1">
-            {ORDER.map(k => (
-              <button key={k} onClick={e => eng?.selectAllKind(k, e.shiftKey)} disabled={!st.counts[k]}
-                title={`Selecionar todas: ${KINDS[k].name}`}
-                className={`flex items-center gap-1.5 px-1.5 py-1 rounded-lg border text-left ${st.counts[k] ? 'border-white/10 bg-white/[0.04] hover:bg-teal-400/15 hover:border-teal-300/40' : 'border-transparent opacity-35'}`}>
-                <span className="w-6 h-5 flex items-center justify-center shrink-0">{thumbs[k] && <img src={thumbs[k]} className="max-h-5 max-w-6" style={{ imageRendering: 'pixelated' }} />}</span>
-                <span className="flex-1 min-w-0 truncate text-[11px] text-neutral-200">{KINDS[k].name.replace(' de biofilme', '')}</span>
-                <span className="font-mono text-[11px] text-teal-200">{st.counts[k]}</span>
-              </button>
-            ))}
-          </div>
-          <div className="px-3 pt-1 pb-1 flex items-center justify-between border-t border-white/5 text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-            <span className="flex items-center gap-1"><Layers className="w-3 h-3" /> Grupos</span>
-            {selTotal > 0 && !form && <button onClick={openForm} className="normal-case tracking-normal text-[11px] font-bold text-teal-300 hover:text-teal-100">+ Novo (G)</button>}
-          </div>
-          {form && (
-            <div className="mx-2 mb-2 p-2 rounded-lg bg-white/5 border border-white/10 space-y-1.5">
-              <input autoFocus value={form.name} onChange={e => setForm({ ...form, name: e.target.value.slice(0, 24) })}
-                onKeyDown={e => { if (e.key === 'Enter') { eng?.createGroup(form.name, form.color); setForm(null); } if (e.key === 'Escape') setForm(null); }}
-                className="w-full bg-black/40 border border-white/10 rounded-md px-2 py-1 text-xs focus:outline-none focus:border-teal-300/60" />
-              <div className="flex gap-1">
-                {GROUP_COLORS.map(c => <button key={c} onClick={() => setForm({ ...form, color: c })} className={`w-5 h-5 rounded-full border-2 ${form.color === c ? 'border-white' : 'border-transparent'}`} style={{ background: c }} />)}
-              </div>
-              <div className="flex gap-1">
-                <button onClick={() => { eng?.createGroup(form.name, form.color); setForm(null); }} className="flex-1 py-1 rounded-md font-bold text-black bg-teal-300 hover:bg-teal-200">Criar com {selTotal} células</button>
-                <button onClick={() => setForm(null)} className="px-2 rounded-md bg-white/10 hover:bg-white/15"><X className="w-3.5 h-3.5" /></button>
-              </div>
-            </div>
-          )}
-          <div className="px-1.5 pb-2 space-y-1">
-            {hud.groups.length === 0 && !form && <p className="px-1.5 text-[10px] text-neutral-500 leading-snug">Selecione células e crie um grupo (G ou Ctrl+1..9) para dar ordens e comportamentos a todas de uma vez.</p>}
-            {hud.groups.map(g => (
-              <div key={g.id} className={`group flex items-center gap-1.5 px-1.5 py-1 rounded-lg border ${sel?.group === g.id ? 'border-white/40 bg-white/10' : 'border-white/5 bg-white/[0.03] hover:bg-white/[0.07]'}`}>
-                <button onClick={e => eng?.selectGroup(g.id, e.shiftKey, e.detail >= 2)} title="Clique: selecionar · duplo clique: ir até o grupo" className="flex-1 min-w-0 flex items-center gap-1.5 text-left">
-                  <span className="w-3 h-3 rounded-full shrink-0" style={{ background: g.color, boxShadow: `0 0 8px ${g.color}` }} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[11px] font-bold text-neutral-100">{g.name}</span>
-                    <span className="block text-[9px] text-neutral-500">{g.n} células · {STANCES[g.stance] ?? ''}</span>
+          <div className="px-1.5 pb-2 space-y-1.5">
+            {colonies.map(c => (
+              <div key={c.id} className={`rounded-lg border ${sel?.colony === c.id ? 'border-white/40 bg-white/10' : active?.id === c.id ? 'border-white/15 bg-white/[0.05]' : 'border-white/5 bg-white/[0.03]'}`}>
+                <button onClick={e => eng?.selectColony(c.id, e.shiftKey, e.detail >= 2)} title="Clique: selecionar a colônia · duplo clique: ir até ela"
+                  className="w-full flex items-center gap-1.5 px-2 pt-1.5 text-left">
+                  <span className="w-3 h-3 rounded-full shrink-0" style={{ background: c.color, boxShadow: `0 0 8px ${c.color}` }} />
+                  <span className="flex-1 min-w-0">
+                    <span className="block truncate text-[11px] font-bold text-neutral-100">{c.name}</span>
+                    <span className="block text-[9px] text-neutral-500">{c.n} células · {STANCES[c.stance] ?? ''}</span>
                   </span>
-                  {g.key > 0 && <span className="font-mono text-[10px] px-1 rounded bg-white/10 text-neutral-300">{g.key}</span>}
+                  {c.idx <= 9 && <span className="font-mono text-[10px] px-1 rounded bg-white/10 text-neutral-300" title={`Tecla ${colonies.indexOf(c) + 1}`}>{colonies.indexOf(c) + 1}</span>}
                 </button>
-                {selTotal > 0 && sel?.group !== g.id && <button onClick={() => eng?.addToGroup(g.id)} title="Adicionar a seleção a este grupo" className="p-0.5 rounded hover:bg-white/10 text-neutral-400 hover:text-white"><Plus className="w-3.5 h-3.5" /></button>}
-                <button onClick={() => eng?.deleteGroup(g.id)} title="Desfazer o grupo" className="p-0.5 rounded hover:bg-white/10 text-neutral-500 hover:text-red-300"><Trash2 className="w-3.5 h-3.5" /></button>
+                <div className="flex flex-wrap gap-1 px-1.5 pb-1.5 pt-1">
+                  {ORDER.filter(k => c.counts[k]).map(k => (
+                    <button key={k} onClick={e => eng?.selectColony(c.id, e.shiftKey, false, k)} title={`Selecionar: ${KINDS[k].name} da ${c.name}`}
+                      className="flex items-center gap-1 px-1 py-0.5 rounded-md bg-black/30 border border-white/10 hover:bg-teal-400/15 hover:border-teal-300/40">
+                      {thumbs[k] && <img src={thumbs[k]} className="h-4 max-w-5" style={{ imageRendering: 'pixelated' }} />}
+                      <span className="font-mono text-[10px] text-teal-100">{c.counts[k]}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             ))}
+            {st.seeds > 0 && <div className="px-2 py-1 rounded-lg bg-amber-400/10 border border-amber-300/20 text-[10px] text-amber-100">{st.seeds} célula-mãe solta procurando espaço para uma nova colônia</div>}
           </div>
         </div>
       )}
@@ -272,15 +251,26 @@ export function CellGame({ species, onExit, onRestart }: Props) {
             </div>
           )}
           <div className="relative flex gap-1 p-1.5 rounded-xl bg-black/70 border border-white/10" onMouseLeave={() => setTip(null)}>
-            <div className="hidden lg:flex flex-col justify-center px-2 text-[10px] leading-tight text-neutral-400 w-20">Dividir<br /><b className="text-teal-200">{activeIdx ? `Colônia ${activeIdx}` : 'célula-mãe'}</b>{mothers.filter(m => m.rooted).length > 1 && <span className="text-[9px] text-neutral-500 mt-0.5">selecione outra para trocar</span>}</div>
-            {TRAINABLE.map(k => {
-              const K = KINDS[k], ok = st.food >= K.food && st.energy >= K.energy && st.alive && !!active?.rooted;
+            <div className="flex flex-col justify-center px-1.5 w-[124px]">
+              <span className="text-[9px] uppercase tracking-[0.15em] text-neutral-500 mb-0.5">Colônia</span>
+              <div className="relative">
+                <select value={active?.id ?? ''} onChange={e => eng?.setColony(+e.target.value)} title="Qual colônia divide (clicar numa célula-mãe também escolhe)"
+                  className="w-full appearance-none bg-white/5 border border-white/15 rounded-md pl-5 pr-5 py-1 text-[11px] font-bold text-neutral-100 focus:outline-none focus:border-teal-300/60">
+                  {colonies.map(c => <option key={c.id} value={c.id} className="bg-neutral-900">{c.name}</option>)}
+                </select>
+                {active && <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full" style={{ background: active.color }} />}
+                <ChevronDown className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-neutral-400" />
+              </div>
+            </div>
+            {[...BAR, ...TRAINABLE.filter(k => !BAR.includes(k))].map(k => {
+              const K = KINDS[k], placing = k === Kind.NODE && hud?.placing;
+              const ok = st.food >= K.food && st.energy >= K.energy && st.alive && !!active && (k !== Kind.NODE || st.counts[Kind.WORKER] > 0);
               return (
                 <button key={k} onClick={() => eng?.train(k)} disabled={!ok}
                   onMouseEnter={e => { const r = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(), b = e.currentTarget.getBoundingClientRect(); setTip({ k, x: b.left - r.left + b.width / 2 }); }}
-                  className={`group relative w-[58px] sm:w-[66px] rounded-lg border px-1 pt-1 pb-0.5 flex flex-col items-center ${ok ? 'border-white/10 bg-white/5 hover:bg-teal-400/15 hover:border-teal-300/50' : 'border-white/5 bg-white/[0.02] opacity-50'} ${k === Kind.MOTHER ? 'ml-1' : ''}`}>
+                  className={`group relative w-[56px] sm:w-[62px] rounded-lg border px-1 pt-1 pb-0.5 flex flex-col items-center ${placing ? 'border-violet-300 bg-violet-400/30' : ok ? (k === Kind.NODE ? 'border-violet-300/25 bg-white/5 hover:bg-violet-400/20 hover:border-violet-300/60' : 'border-white/10 bg-white/5 hover:bg-teal-400/15 hover:border-teal-300/50') : 'border-white/5 bg-white/[0.02] opacity-50'} ${k === Kind.MOTHER ? 'ml-1' : ''}`}>
                   <div className="h-8 w-full flex items-center justify-center">{thumbs[k] && <img src={thumbs[k]} className="max-h-8 max-w-full" style={{ imageRendering: 'pixelated' }} />}</div>
-                  <div className="text-[10px] font-bold truncate w-full text-center">{k === Kind.MOTHER ? 'Colônia' : K.name}</div>
+                  <div className="text-[10px] font-bold truncate w-full text-center">{k === Kind.MOTHER ? 'Colônia' : k === Kind.NODE ? 'Nódulo' : K.name}</div>
                   <div className="text-[9px] font-mono text-neutral-400"><span className="text-yellow-300">{K.food}</span>{K.energy ? <> · <span className="text-cyan-300">{K.energy}</span></> : null}</div>
                 </button>
               );
@@ -295,7 +285,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
           {selTotal === 0 ? (
             <div className="text-neutral-400 leading-relaxed">
               {hud?.hover ? <div className="text-neutral-100 font-bold mb-1">{hud.hover}</div> : null}
-              Arraste para selecionar células. Botão direito: mover / atacar / coletar. No painel acima, clique num tipo para selecionar todas.
+              Arraste para selecionar células. Botão direito: mover / atacar / coletar. No painel de colônias, clique numa colônia ou num tipo de célula dela para selecionar.
             </div>
           ) : (
             <>
@@ -306,7 +296,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
                   </button>
                 ) : null)}
               </div>
-              {sel.group >= 0 && <div className="mb-1 text-[10px] text-neutral-400">Grupo: <b style={{ color: hud!.groups.find(g => g.id === sel.group)?.color }}>{hud!.groups.find(g => g.id === sel.group)?.name}</b></div>}
+              {sel.colony >= 0 && <div className="mb-1 text-[10px] text-neutral-400">Colônia inteira: <b style={{ color: colonies.find(c => c.id === sel.colony)?.color }}>{colonies.find(c => c.id === sel.colony)?.name}</b> (o comportamento vale para as células que ela gerar)</div>}
               <div className="text-[10px] uppercase tracking-[0.15em] text-neutral-500 mb-1">Comportamento (delegação)</div>
               <div className="grid grid-cols-3 gap-1 mb-1">
                 {STANCES.map((s, i) => (
@@ -315,18 +305,10 @@ export function CellGame({ species, onExit, onRestart }: Props) {
               </div>
               <p className="text-[10px] text-neutral-500 leading-snug min-h-[26px]">{STANCE_HINT[sel.stance >= 0 && sel.stance < 5 ? sel.stance : 0]}</p>
               {sel.seeds > 0 && <p className="mt-1 text-[10px] text-amber-200 leading-snug bg-amber-400/10 rounded-md px-2 py-1">Célula-mãe solta: clique com o botão direito num espaço livre (a {COLONY_GAP}+ de outras células-mãe) para fundar a colônia.</p>}
-              {sel.workers > 0 && (
-                <button onClick={() => eng?.startPlacing()} className={`mt-1 w-full py-1.5 rounded-md font-bold text-[11px] ${hud?.placing ? 'bg-violet-400 text-black' : 'bg-violet-500/20 border border-violet-300/40 text-violet-100 hover:bg-violet-500/30'}`}>
-                  {hud?.placing ? 'Clique no mapa (borda do biofilme)…' : `Virar nódulo de biofilme (N) · ${KINDS[Kind.NODE].food}/${KINDS[Kind.NODE].energy}`}
-                </button>
-              )}
-              {sel.group < 0 && !form && <button onClick={openForm} className="mt-1 w-full py-1.5 rounded-md font-bold text-[11px] bg-white/5 border border-white/10 hover:bg-white/10">Criar grupo com a seleção (G)</button>}
             </>
           )}
         </div>
       )}
-
-      <Hotkeys onGroup={() => { if (selTotal > 0) openForm(); }} />
 
       {/* help */}
       {phase === 'play' && help && (
@@ -343,13 +325,13 @@ export function CellGame({ species, onExit, onRestart }: Props) {
             <ul className="space-y-1.5 text-[13px] leading-snug">
               <li>🟡 <b>Nutrientes</b>: as coletoras colhem e levam ao biofilme. ⚡ <b>Energia</b>: fotossintéticas (o dobro sob os feixes de luz).</li>
               <li>🧫 <b>Dividir</b>: os botões embaixo criam células a partir da célula-mãe. O botão <b>Colônia</b> cria uma nova célula-mãe para fundar outra colônia num espaço livre.</li>
-              <li>🟣 <b>Biofilme</b> é o seu território: dentro dele as células se curam e comem; fora, morrem de fome. <b>A coletora vira nódulo</b> (N): expande o território e dá +6 de população.</li>
-              <li>🎯 <b>Grupos</b>: selecione células e aperte G (ou Ctrl+1..9) para criar um grupo com nome e cor. Dê ordens e comportamentos (Defender, Caçar…) ao grupo inteiro.</li>
+              <li>🟣 <b>Biofilme</b> é o seu território: dentro dele as células se curam e comem; fora, morrem de fome. O botão <b>Nódulo</b> manda uma coletora virar nódulo: expande o território e dá +6 de população.</li>
+              <li>🎯 <b>Colônias</b>: cada colônia é um grupo com cor e nome, com as células que ela gerou. Selecione uma colônia (painel à direita ou 1..9) e dê ordens e comportamentos (Defender, Caçar…) a ela inteira. Coletoras nunca lutam: fogem.</li>
             </ul>
             <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-neutral-400 font-mono">
               <span>Arrastar: selecionar</span><span>Botão direito: ordem</span>
               <span>Duplo clique: todas do tipo</span><span>WASD / setas: câmera</span>
-              <span>1..9: selecionar grupo</span><span>Roda: zoom</span>
+              <span>1..9: selecionar colônia</span><span>N: nódulo</span>
               <span>Espaço: pausa</span><span>H: célula-mãe</span>
             </div>
             <button onClick={() => setHelp(false)} className="mt-4 w-full py-2.5 rounded-xl font-bold text-black bg-gradient-to-r from-teal-300 to-emerald-300">Começar</button>
@@ -376,21 +358,6 @@ export function CellGame({ species, onExit, onRestart }: Props) {
       )}
     </div>
   );
-}
-
-/** G opens the new-group form (the engine owns the other keys) */
-function Hotkeys({ onGroup }: { onGroup: () => void }) {
-  const ref = useRef(onGroup);
-  ref.current = onGroup;
-  useEffect(() => {
-    const f = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-      if (e.key.toLowerCase() === 'g' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); ref.current(); }
-    };
-    window.addEventListener('keydown', f);
-    return () => window.removeEventListener('keydown', f);
-  }, []);
-  return null;
 }
 
 function Res({ icon, v, title, warn }: { icon: React.ReactNode; v: React.ReactNode; title: string; warn?: boolean }) {
