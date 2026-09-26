@@ -24,6 +24,8 @@ const CORAL: RGB[][] = [
   [[70, 50, 120], [120, 90, 180], [178, 150, 230]],
   [[40, 110, 110], [70, 170, 160], [140, 220, 200]],
 ];
+/** the world above the water, seen from below: a multiplier (the view tints rows without water the same way) */
+export const ABOVE: RGB = [26 / 255, 44 / 255, 64 / 255];
 const KELP: RGB[] = [[40, 38, 14], [70, 64, 22], [104, 92, 34], [138, 124, 52]];
 const lerp = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 const pick = (r: RGB[], v: number) => r[Math.max(0, Math.min(r.length - 1, Math.round(v)))];
@@ -50,7 +52,8 @@ export function seabedRow(st: BedStyle, buf: Uint8ClampedArray, W: number, pts: 
   const roots: number[] = [];   // [bufIndex, wx, wy, len, kind(0 grass / 1 kelp), q]
   for (let p = 0; p < n; p++) {
     const k = pts[p * 6], wx = pts[p * 6 + 1], wy = pts[p * 6 + 2], q = pts[p * 6 + 3] / 1000, temp = pts[p * 6 + 4] / 1000;
-    const rock = st.rock[pts[p * 6 + 5]] ?? st.rock[0];
+    const inland = Math.floor(pts[p * 6 + 5] / 100);          // 1 river, 2 swamp
+    const rock = st.rock[pts[p * 6 + 5] % 100] ?? st.rock[0];
     const r0 = rand2(wx, wy, s + 700);
     const pa = vnoise(wx / 23, wy / 23, s + 701), pb = vnoise(wx / 7, wy / 7, s + 702);
     const qm = q + (pa - 0.5) * 0.12;                               // organic borders between the floors
@@ -60,7 +63,23 @@ export function seabedRow(st: BedStyle, buf: Uint8ClampedArray, W: number, pts: 
     const out = vnoise(wx / 31, wy / 31, s + 703) * 0.7 + pb * 0.3;
     const thr = 0.72 - qm * 0.1;
     let shadow = false;
-    if (out > thr) {
+    if (inland === 1) {
+      // riverbed: rounded pebbles in the current, sand in between
+      // round pebbles on a jittered 5 px grid, lit from the north-west
+      let peb = -1, lit = 0;
+      for (let oy = -1; oy <= 1 && peb < 0; oy++) for (let ox = -1; ox <= 1; ox++) {
+        const gx = Math.floor(wx / 5) + ox, gy = Math.floor(wy / 5) + oy, h = rand2(gx, gy, s + 730);
+        if (h < 0.25) continue;
+        const cx = gx * 5 + 2.5 + (rand2(gy, gx, s + 731) - 0.5) * 2, cy = gy * 5 + 2.5 + (h - 0.5) * 2;
+        const r = 1.4 + h * 1.4, dx = wx + 0.5 - cx, dy = wy + 0.5 - cy;
+        if (dx * dx + dy * dy < r * r) { peb = h; lit = -(dx + dy) / r; break; }
+      }
+      c = peb >= 0 ? pick(rock, 2.2 + peb * 2 + lit * 1.2) : pick(st.sand, 1.6 + pb * 1.5);
+    } else if (inland === 2) {
+      // swamp bottom: dark silt with sunken leaves
+      c = pick(st.mud, 1.5 + pb * 1.8);
+      if (r0 > 0.97) c = pick(st.grass, 1);
+    } else if (out > thr) {
       // a boulder: lit crest towards the sun (north-west), dark flank, crisp dark rim
       const hi = out - outAt(wx - 3, wy - 3), rim = out - thr < 0.02;
       c = pick(rock, 2.6 + hi * 38 + (out - thr) * 8 + (pb - 0.5) * 0.9 + (r0 - 0.5) * 0.7 - (rim ? 2 : 0));
@@ -123,6 +142,13 @@ export function seabedRow(st: BedStyle, buf: Uint8ClampedArray, W: number, pts: 
       }
     }
   };
+  // everything above the water (land, cliffs, waterfalls) is only a dark shape seen from below
+  for (let i = 0; i < isBed.length; i++) {
+    if (isBed[i]) continue;
+    const k = i * 4;
+    if (!bed[k + 3]) continue;
+    bed[k] = bed[k] * ABOVE[0]; bed[k + 1] = bed[k + 1] * ABOVE[1]; bed[k + 2] = bed[k + 2] * ABOVE[2];
+  }
   const still = new Uint8ClampedArray(bed);
   blades(still, 0);
   if (!shallow) return { bed: still };
