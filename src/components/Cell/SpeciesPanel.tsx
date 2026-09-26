@@ -18,6 +18,7 @@ export function SpeciesPanel({ st, species, eng, thumb, onClose }: {
     [st.mito, 'Endossimbiose (uma espécie em simbiose vira sua organela)'],
     [st.genes.length >= 3, `3 genes (${st.genes.length}/3)`],
     [cells >= 60, `60 células (${cells}/60)`],
+    [st.techs.includes('com4'), 'Pesquisa Multicelularidade (árvore de evolução)'],
   ];
   const known = [...st.nations].sort((a, b) => b.pact - a.pact || b.rel - a.rel);
   return (
@@ -52,7 +53,7 @@ export function SpeciesPanel({ st, species, eng, thumb, onClose }: {
       {/* diplomacy */}
       <div className="px-3 pt-3 pb-3">
         <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500 mb-1">Espécies conhecidas ({known.length})</div>
-        {!known.length && <p className="text-[11px] text-neutral-500">Explore a poça (flageladas!) para encontrar outras espécies.</p>}
+        {!known.length && <p className="text-[11px] text-neutral-500">Nenhuma ainda: a poça parece vazia, mas as outras espécies estão na névoa. Explore (flageladas!) para descobri-las.</p>}
         <div className="space-y-1.5">
           {known.map(n => {
             const sp = species[n.id], g = geneOf(sp), c = teamColour(sp), own = st.genes.includes(g.id);

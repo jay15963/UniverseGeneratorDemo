@@ -7,6 +7,7 @@ import type { Atlas } from './atlas';
 import { LAYER } from './atlas';
 import type { WorldDef } from './world';
 import { WORLD, BIO_N } from './world';
+import { VIS_N } from './sim';
 
 export const INST = 17;            // floats per sprite instance
 const MAX_INST = 24000;
@@ -153,11 +154,13 @@ void main() {
   if (s < 0.14) discard;
   int own = int(texture(u_own, uv).r * 255.0 + 0.5);
   if (own == 255) discard;
-  vec3 c = texelFetch(u_pal, ivec2(own, 0), 0).rgb;
-  // contested borders: another owner right next door
-  float cell = u_bio / 384.0;
+  vec4 pc = texelFetch(u_pal, ivec2(own, 0), 0);
+  if (pc.a < 0.5) discard;              // a species not discovered yet: its territory stays hidden
+  vec3 c = pc.rgb;
+  // contested borders: another (known) owner right next door
   int o1 = int(texture(u_own, (j + vec2(22.0, 0)) / u_bio).r * 255.0 + 0.5), o2 = int(texture(u_own, (j + vec2(0, 22.0)) / u_bio).r * 255.0 + 0.5);
-  bool border = (o1 != own && o1 != 255) || (o2 != own && o2 != 255);
+  bool k1 = o1 != 255 && texelFetch(u_pal, ivec2(o1, 0), 0).a > 0.5, k2 = o2 != 255 && texelFetch(u_pal, ivec2(o2, 0), 0).a > 0.5;
+  bool border = (o1 != own && k1) || (o2 != own && k2);
   float rim = 1.0 - smoothstep(0.14, 0.3, s);
   float bubbles = step(0.82, vn(w / 7.0 + u_time * 0.05)) * 0.5 + step(0.9, h21(floor(w / 3.0))) * 0.3;
   float mott = fbm(w / 40.0 + u_time * 0.02);
@@ -166,6 +169,21 @@ void main() {
   if (rim > 0.0) { col = mix(col, c * 1.25 + 0.08, rim); a = mix(a, 0.6, rim); }
   if (border) { col = c * 0.35; a = 0.7; }
   o = vec4(quant(clamp(col, 0.0, 1.0), gl_FragCoord.xy, 20.0), a);
+}`;
+
+// fog of war: a light, dithered darkening where the player's cells see nothing
+const FS_FOG = `#version 300 es
+precision highp float;
+uniform vec2 u_cam; uniform float u_zoom; uniform vec2 u_fb; uniform sampler2D u_vis; uniform float u_world;
+out vec4 o;
+${NOISE}
+void main() {
+  vec2 f = vec2(gl_FragCoord.x, u_fb.y - gl_FragCoord.y);
+  vec2 w = u_cam + (f - u_fb * 0.5) / u_zoom;
+  float v = texture(u_vis, w / u_world).r;
+  float d = floor((1.0 - v) * 4.0 + bayer4(gl_FragCoord.xy) * 0.999) / 4.0;
+  if (d <= 0.0) discard;
+  o = vec4(0.0, 0.02, 0.04, d * 0.34);
 }`;
 
 // bokeh above the camera
@@ -218,9 +236,9 @@ export interface Batch { data: Float32Array; count: number; depth: number }
 
 export class CellGL {
   gl: WebGL2RenderingContext;
-  sprite: Prog; bg: Prog; mid: Prog; bio: Prog; fg: Prog; blit: Prog;
+  sprite: Prog; bg: Prog; mid: Prog; bio: Prog; fg: Prog; blit: Prog; fog: Prog;
   quad: WebGLBuffer; inst: WebGLBuffer; vaoFull: WebGLVertexArrayObject; vaoSprite: WebGLVertexArrayObject;
-  atlas: WebGLTexture; own: WebGLTexture; str: WebGLTexture; pal: WebGLTexture;
+  atlas: WebGLTexture; own: WebGLTexture; str: WebGLTexture; pal: WebGLTexture; vis: WebGLTexture; palData: Uint8Array;
   fbo: WebGLFramebuffer; fbTex: WebGLTexture; fbW = 0; fbH = 0; outW = 0; outH = 0;
   world: WorldDef;
   water: [number, number, number]; deep: [number, number, number];
@@ -237,6 +255,7 @@ export class CellGL {
     this.bio = compile(gl, VS_FULL, FS_BIO);
     this.fg = compile(gl, VS_FULL, FS_FG);
     this.blit = compile(gl, VS_FULL, FS_BLIT);
+    this.fog = compile(gl, VS_FULL, FS_FOG);
     this.quad = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5]), gl.STATIC_DRAW);
@@ -275,8 +294,11 @@ export class CellGL {
     this.own = tex2d(BIO_N, BIO_N, gl.RED, gl.R8, gl.NEAREST, new Uint8Array(BIO_N * BIO_N).fill(255));
     this.str = tex2d(BIO_N, BIO_N, gl.RED, gl.R8, gl.LINEAR, new Uint8Array(BIO_N * BIO_N));
     const pal = new Uint8Array(256 * 4);
-    palette.forEach((c, i) => { pal[i * 4] = c[0]; pal[i * 4 + 1] = c[1]; pal[i * 4 + 2] = c[2]; pal[i * 4 + 3] = 255; });
+    // alpha = discovered (the player's own species always)
+    palette.forEach((c, i) => { pal[i * 4] = c[0]; pal[i * 4 + 1] = c[1]; pal[i * 4 + 2] = c[2]; pal[i * 4 + 3] = i === 0 ? 255 : 0; });
+    this.palData = pal;
     this.pal = tex2d(256, 1, gl.RGBA, gl.RGBA8, gl.NEAREST, pal);
+    this.vis = tex2d(VIS_N, VIS_N, gl.RED, gl.R8, gl.LINEAR, new Uint8Array(VIS_N * VIS_N));
     this.fbo = gl.createFramebuffer()!;
     this.fbTex = gl.createTexture()!;
   }
@@ -286,6 +308,17 @@ export class CellGL {
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.bindTexture(gl.TEXTURE_2D, this.own); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, BIO_N, BIO_N, gl.RED, gl.UNSIGNED_BYTE, own);
     gl.bindTexture(gl.TEXTURE_2D, this.str); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, BIO_N, BIO_N, gl.RED, gl.UNSIGNED_BYTE, str);
+  }
+
+  /** fog of war (1 = seen) and the discovered species (their biofilm shows) */
+  setVis(vis: Uint8Array, met: Uint8Array) {
+    const gl = this.gl, v = new Uint8Array(vis.length);
+    for (let i = 0; i < vis.length; i++) v[i] = vis[i] ? 255 : 0;
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.bindTexture(gl.TEXTURE_2D, this.vis); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, VIS_N, VIS_N, gl.RED, gl.UNSIGNED_BYTE, v);
+    let changed = false;
+    for (let i = 1; i < met.length && i < 256; i++) { const a = met[i] ? 255 : 0; if (this.palData[i * 4 + 3] !== a) { this.palData[i * 4 + 3] = a; changed = true; } }
+    if (changed) { gl.bindTexture(gl.TEXTURE_2D, this.pal); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, this.palData); }
   }
 
   /** sizes the canvas (device px) and the low-res framebuffer (px device pixels per art pixel) */
@@ -312,7 +345,7 @@ export class CellGL {
   }
   private full() { const gl = this.gl; gl.bindVertexArray(this.vaoFull); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); }
 
-  draw(v: View, t: number, deep: Batch, batches: Batch[], showBio: boolean) {
+  draw(v: View, t: number, deep: Batch, batches: Batch[], showBio: boolean, fog = true) {
     const gl = this.gl, W = this.world;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.viewport(0, 0, this.fbW, this.fbH);
@@ -349,6 +382,13 @@ export class CellGL {
       this.full();
     }
     for (const b of batches) this.sprites(v, t, b);
+    if (fog) {
+      this.common(this.fog, v, t);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.vis);
+      gl.uniform1i(this.fog.u.u_vis, 1); gl.uniform1f(this.fog.u.u_world, WORLD);
+      gl.activeTexture(gl.TEXTURE0);
+      this.full();
+    }
     // bokeh above
     this.common(this.fg, v, t);
     this.full();
