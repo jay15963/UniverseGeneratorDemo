@@ -4,7 +4,7 @@
 import { CellGL, INST, View, Batch } from '../../lib/cell/gl';
 import type { Atlas, AtlasEntry } from '../../lib/cell/atlas';
 import { WorldDef, WORLD, BIO, BIO_N } from '../../lib/cell/world';
-import { KINDS, Kind, CellSpecies, teamColour } from '../../lib/cell/look';
+import { KINDS, Kind, CellSpecies, teamColour, titanType, TITANS } from '../../lib/cell/look';
 import { STRIDE, Cmd, Stats, NEUTRAL_SET, ColonyInfo, NODE_GAP, VIS, VIS_N, structGap } from '../../lib/cell/sim';
 
 interface Frame { ents: Float32Array; n: number; t: number }
@@ -40,6 +40,7 @@ export class CellEngine {
   mouse = { x: 0, y: 0, in: false };
   pings: { x: number; y: number; t: number; c: string }[] = [];
   fx: { x: number; y: number; vx: number; vy: number; t: number; life: number; c: [number, number, number]; e: AtlasEntry }[] = [];
+  rings: { x: number; y: number; r: number; type: number; t: number }[] = [];
   hover: number = -1;
   lastClick = { i: -1, t: 0 };
   lastKey = { n: 0, t: 0 };
@@ -85,7 +86,7 @@ export class CellEngine {
   }
 
   // --- data from the simulation ---------------------------------------------------------------------------------------------
-  onFrame(m: { ents: Float32Array; n: number; motes: Float32Array; nm: number; shots: Float32Array; np: number; deaths: number[]; paused: boolean; speed: number;
+  onFrame(m: { ents: Float32Array; n: number; motes: Float32Array; nm: number; shots: Float32Array; np: number; deaths: number[]; fx?: number[]; paused: boolean; speed: number;
     bioOwn?: Uint8Array; bioStr?: Uint8Array; colonies?: Float32Array; stats?: Stats; goals?: Record<string, boolean>; vis?: Uint8Array; met?: Uint8Array }) {
     this.prev = this.cur;
     this.cur = { ents: m.ents, n: m.n, t: performance.now() };
@@ -106,6 +107,7 @@ export class CellEngine {
       if (!this.cols.some(c => c.id === this.activeCol)) this.activeCol = this.cols[0]?.id ?? -1;
       this.hud();
     }
+    if (m.fx) for (let i = 0; i < m.fx.length; i += 4) this.rings.push({ x: m.fx[i], y: m.fx[i + 1], r: m.fx[i + 2], type: m.fx[i + 3], t: 0 });
     for (let i = 0; i < m.deaths.length; i += 4) {
       const set = m.deaths[i + 2];
       if (set > 0 && set < NEUTRAL_SET && !this.seen(m.deaths[i], m.deaths[i + 1])) continue;   // deaths in the fog stay unseen
@@ -119,12 +121,15 @@ export class CellEngine {
     const cx = Math.floor(x / VIS), cy = Math.floor(y / VIS);
     return cx >= 0 && cy >= 0 && cx < VIS_N && cy < VIS_N && this.vis[cy * VIS_N + cx] > 0;
   }
-  hidden(col: number, x: number, y: number) { return col > 0 && !this.seen(x, y); }
+  /** fog of war hides other nations' cells - never a titan (they are always visible) */
+  hidden(col: number, x: number, y: number, k = -1) { return col > 0 && k !== Kind.TITAN && !this.seen(x, y); }
+  /** a titan's body plan from its sprite set (species titans follow the species seed, wild ones their variant) */
+  titanOf(set: number) { return set < NEUTRAL_SET ? titanType(this.world.species[set]) : set - NEUTRAL_SET - 7; }
   burst(x: number, y: number, set: number, kind: number) {
     if (Math.hypot(x - this.view.x, y - this.view.y) > 2400) return;
     const sp = set < NEUTRAL_SET ? this.world.species[set] : null;
     const c: [number, number, number] = sp ? teamColour(sp) : [200, 220, 190];
-    const n = kind === Kind.MOTHER ? 26 : kind === Kind.NODE ? 14 : kind === Kind.BACTERIA ? 3 : 8;
+    const n = kind === Kind.TITAN ? 60 : kind === Kind.MOTHER ? 26 : kind === Kind.NODE ? 14 : kind === Kind.BACTERIA ? 3 : 8;
     const sz = KINDS[kind].r;
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, v = 20 + Math.random() * 60 * (sz / 8);
@@ -201,6 +206,10 @@ export class CellEngine {
     if (!f || i < 0 || i >= f.n) return null;
     const o = i * STRIDE, set = Math.floor(f.ents[o + 3] / 16), k = f.ents[o + 3] % 16, col = f.ents[o + 4];
     const K = KINDS[k];
+    if (k === Kind.TITAN) {
+      const T = TITANS[this.titanOf(set)], who = col < 0 ? 'selvagem' : col === 0 ? 'sua espécie' : this.met[col] ? `${this.world.species[set].genus} ${this.world.species[set].species}` : 'espécie desconhecida';
+      return `Titã ${T.name} (${T.power}) · ${who}`;
+    }
     if (col < 0) return K.name;
     const sp = this.world.species[set];
     return col === 0 ? `${K.name} · sua espécie` : `${K.name} · ${sp.genus} ${sp.species}`;
@@ -224,7 +233,7 @@ export class CellEngine {
       const o = i * STRIDE; if (f.ents[o + 7] < 0) continue;
       const k = f.ents[o + 3] % 16, col = f.ents[o + 4];
       if (filter && !filter(col, k)) continue;
-      if (this.hidden(col, this.rx[i], this.ry[i])) continue;
+      if (this.hidden(col, this.rx[i], this.ry[i], k)) continue;
       const d = Math.hypot(this.rx[i] - wx, this.ry[i] - wy) - KINDS[k].r;
       if (d < slack && d < bd) { bd = d; best = i; }
     }
@@ -484,12 +493,12 @@ export class CellEngine {
       this.rx[i] = x; this.ry[i] = y; this.ra[i] = ang;
       if (Math.abs(x - v.x) > hw || Math.abs(y - v.y) > hh || n >= 19990) continue;
       const col = f.ents[o + 4], flags = f.ents[o + 6];
-      if (this.hidden(col, x, y)) continue;   // fog of war: other nations' cells only where the player sees
+      if (this.hidden(col, x, y, k)) continue;   // fog of war: other nations' cells only where the player sees
       const e = this.atlas.bySprite[f.ents[o + 3]];
       if (!e) continue;
       if (dots) {
         const gc = col === 0 && this.cols.length > 1 && f.ents[o + 8] >= 0 ? this.colRgb.get(f.ents[o + 8]) : undefined;
-        const c = gc ?? (col >= 0 ? this.palette[col] : [150, 170, 160]);
+        const c = gc ?? (col >= 0 ? this.palette[col] : k === Kind.TITAN ? [251, 146, 60] : [150, 170, 160]);
         const d = KINDS[k].r * (col === 0 ? 3 : 2.4);
         const oo = n * INST;
         this.put(a, n++, x, y, 0, -1, e, 0, 0, c[0] / 255, c[1] / 255, c[2] / 255, 1, col < 0 ? 0.6 : 1);
@@ -498,6 +507,7 @@ export class CellEngine {
       }
       let tr = 0, tg = 0, tb = 0, amt = 0;
       if (flags & 2) { tr = 1; tg = 1; tb = 1; amt = 0.55; }
+      else if (flags & 2048) { tr = 1; tg = 0.9; tb = 0.35; amt = 0.25 + 0.25 * Math.sin(t * 30 + i); }   // paralysed by a hydra
       else if (flags & 512) { tr = 0.62; tg = 0.52; tb = 0.36; amt = 0.55; }                      // cyst: a brown dormant shell
       else if (flags & 1024) { tr = 0.7; tg = 0.15; tb = 0.85; amt = 0.3 + 0.2 * Math.sin(t * 5 + i); }   // infected: pulsing violet
       else if (flags & 4) { tr = 0.25; tg = 0.2; tb = 0.18; amt = 0.25 + 0.15 * Math.sin(t * 6 + i); }
@@ -571,7 +581,7 @@ export class CellEngine {
       if (z >= 0.46) for (let i = 0; i < f.n; i++) {
         const o = i * STRIDE; if (f.ents[o + 7] < 0 || this.sel.has(i)) continue;
         const hp = f.ents[o + 5];
-        if (hp >= 0.999 || f.ents[o + 4] < 0 || this.hidden(f.ents[o + 4], this.rx[i], this.ry[i])) continue;
+        if (hp >= 0.999 || f.ents[o + 4] < 0 || f.ents[o + 3] % 16 === Kind.TITAN || this.hidden(f.ents[o + 4], this.rx[i], this.ry[i])) continue;
         const [sx, sy] = this.toScreen(this.rx[i], this.ry[i]);
         if (sx < -20 || sy < -20 || sx > this.w + 20 || sy > this.h + 20) continue;
         const r = KINDS[f.ents[o + 3] % 16].r * k + 3;
@@ -623,6 +633,39 @@ export class CellEngine {
         c.fillText(label, bx + 17, by + bh / 2 + 4);
         this.badges.push({ x: bx, y: by, w: tw, h: bh, id: g.id });
       }
+    }
+    // titans: always a health bar and a name tag; the rotifer's vortex swirls in front of it
+    if (f) for (let i = 0; i < f.n; i++) {
+      const o = i * STRIDE; if (f.ents[o + 7] < 0 || f.ents[o + 3] % 16 !== Kind.TITAN) continue;
+      const [sx, sy] = this.toScreen(this.rx[i], this.ry[i]);
+      if (sx < -160 || sy < -160 || sx > this.w + 160 || sy > this.h + 160) continue;
+      const col = f.ents[o + 4], set = Math.floor(f.ents[o + 3] / 16), T = this.titanOf(set), r = KINDS[Kind.TITAN].r * k;
+      const css = col < 0 ? '#fb923c' : col === 0 ? '#86efac' : this.paletteCss[col];
+      if (T === 0 && z >= DOT_ZOOM) {
+        const a = this.ra[i], mx = sx + Math.cos(a) * r * 1.3, my = sy + Math.sin(a) * r * 1.3;
+        c.strokeStyle = 'rgba(190,240,230,0.28)'; c.lineWidth = 1.5;
+        for (let q = 0; q < 3; q++) {
+          const rr = (60 + q * 45) * k, s0 = t * 2.2 + q * 2.1;
+          c.beginPath(); c.arc(mx, my, rr, s0, s0 + 1.6); c.stroke();
+        }
+      }
+      const e = this.atlas.bySprite[f.ents[o + 3]], half = e ? Math.max(e.w, e.h) / 2 * k : r * 1.6;
+      const bw = Math.max(34, r * 2.4), by = sy - Math.max(half, 18) - 4;
+      c.fillStyle = 'rgba(0,0,0,0.65)'; c.fillRect(sx - bw / 2 - 1, by - 1, bw + 2, 5);
+      c.fillStyle = col === 0 ? '#4ade80' : col < 0 ? '#fb923c' : '#f87171';
+      c.fillRect(sx - bw / 2, by, bw * Math.max(0, Math.min(1, f.ents[o + 5])), 3);
+      c.font = '700 10px ui-sans-serif, system-ui'; c.textAlign = 'center'; c.fillStyle = css;
+      c.fillText(`${col < 0 ? 'Titã selvagem' : 'Titã'} · ${TITANS[T].name}`, sx, by - 4);
+    }
+    // titan powers: the hydra's sting (a ring of stinging threads), the copepod's landing (a shock ring)
+    this.rings = this.rings.filter(q => (q.t += dt) < 0.7);
+    for (const q of this.rings) {
+      const [sx, sy] = this.toScreen(q.x, q.y), u = q.t / 0.7, R = q.r * k * (q.type === 0 ? 0.4 + u * 0.6 : 0.3 + u * 0.9);
+      c.globalAlpha = 1 - u;
+      c.strokeStyle = q.type === 0 ? '#a5f3fc' : '#fde68a'; c.lineWidth = q.type === 0 ? 2 : 3;
+      c.beginPath(); c.arc(sx, sy, R, 0, Math.PI * 2); c.stroke();
+      if (q.type === 0) for (let j = 0; j < 14; j++) { const a = (j / 14) * Math.PI * 2; c.beginPath(); c.moveTo(sx + Math.cos(a) * R * 0.55, sy + Math.sin(a) * R * 0.55); c.lineTo(sx + Math.cos(a) * R, sy + Math.sin(a) * R); c.stroke(); }
+      c.globalAlpha = 1;
     }
     // pool events (areas) and toxin clouds
     const st = this.stats;
@@ -757,6 +800,15 @@ export class CellEngine {
       c.fillStyle = nat === 0 ? '#ffffff' : this.paletteCss[nat];
       const r = nat === 0 ? 3 : 2;
       c.fillRect(this.colonies[o] * s - r / 2, this.colonies[o + 1] * s - r / 2, r, r);
+    }
+    // titans, always shown (wild ones orange)
+    const tf = this.cur;
+    if (tf) for (let i = 0; i < tf.n; i++) {
+      const o = i * STRIDE; if (tf.ents[o + 7] < 0 || tf.ents[o + 3] % 16 !== Kind.TITAN) continue;
+      const col = tf.ents[o + 4];
+      c.fillStyle = col < 0 ? '#fb923c' : col === 0 ? '#ffffff' : this.paletteCss[col];
+      c.strokeStyle = '#000'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(this.rx[i] * s, this.ry[i] * s - 4); c.lineTo(this.rx[i] * s + 4, this.ry[i] * s); c.lineTo(this.rx[i] * s, this.ry[i] * s + 4); c.lineTo(this.rx[i] * s - 4, this.ry[i] * s); c.closePath(); c.fill(); c.stroke();
     }
     // pool events
     if (this.stats) for (const e of this.stats.events) {

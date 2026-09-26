@@ -4,7 +4,7 @@
 // minimap.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Pause, Play, FastForward, Home, Target, HelpCircle, X, CheckCircle2, Circle, Sprout, Zap, Users, Hexagon, Trophy, Skull, CircleDot, ChevronDown, Dna, FlaskConical, Lock, Shield, Wind } from 'lucide-react';
-import { CellSpecies, KINDS, Kind, TRAINABLE, ROLE, saveSpecies, SPECIES_KINDS, LOCKED, TECHS } from '../../lib/cell/look';
+import { CellSpecies, KINDS, Kind, TRAINABLE, ROLE, saveSpecies, SPECIES_KINDS, LOCKED, TECHS, TITANS, titanType } from '../../lib/cell/look';
 import { makeGenome, Stage, DEFAULT_PARAMS } from '../../lib/creature/genome';
 import { renderCreature } from '../../lib/creature/render';
 import { SpeciesPanel } from './SpeciesPanel';
@@ -43,9 +43,9 @@ const TIP_NOTE: Partial<Record<Kind, string>> = {
   [Kind.MOTHER]: `Nasce solta: selecione e clique com o botão direito num espaço livre a ${COLONY_GAP}+ de outras células-mãe (fora de biofilme estrangeiro). Ao parar, ela se fixa e vira uma nova colônia (+8 de população).`,
   [Kind.SCOUT]: 'Rápida e com reserva maior: ótima para achar nutrientes, luz e espaços livres.',
 };
-const ORDER: Kind[] = [Kind.MOTHER, Kind.NODE, Kind.WORKER, Kind.PHOTO, Kind.SENTINEL, Kind.SCOUT, Kind.HUNTER, Kind.SPITTER, Kind.ARMOR];
+const ORDER: Kind[] = [Kind.MOTHER, Kind.NODE, Kind.WORKER, Kind.PHOTO, Kind.SENTINEL, Kind.SCOUT, Kind.HUNTER, Kind.SPITTER, Kind.ARMOR, Kind.TITAN];
 /** the division bar: the node sits next to the worker that becomes it */
-const BAR: Kind[] = [Kind.WORKER, Kind.NODE, Kind.PHOTO, Kind.SENTINEL, Kind.SCOUT, Kind.HUNTER, Kind.SPITTER, Kind.ARMOR, Kind.MOTHER];
+const BAR: Kind[] = [Kind.WORKER, Kind.NODE, Kind.PHOTO, Kind.SENTINEL, Kind.SCOUT, Kind.HUNTER, Kind.SPITTER, Kind.ARMOR, Kind.TITAN, Kind.MOTHER];
 const PLACE_KINDS: Kind[] = [Kind.NODE, Kind.PHOTO, Kind.SENTINEL];
 const fmt = (v: number) => (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(1));
 
@@ -83,6 +83,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
         setAtlas(at); setWorld(world);
         const eng = new CellEngine(canvasRef.current!, overlayRef.current!, miniRef.current!, world, at, sim, s => setHud(s));
         engineRef.current = eng;
+        if (import.meta.env.DEV) (window as unknown as { __cell?: CellEngine }).__cell = eng;   // browser tests
         sim.onmessage = (e: MessageEvent) => { if (e.data.t === 'frame') eng.onFrame(e.data); };
         eng.start();
         setPhase('play');
@@ -153,6 +154,9 @@ export function CellGame({ species, onExit, onRestart }: Props) {
   const colonies = hud?.colonies ?? [];
   const active = colonies.find(c => c.id === hud?.active) ?? colonies[0];
   const queue = active?.queue ?? [];
+  const myTitan = TITANS[titanType(species)];
+  const titanLim = st ? (st.techs.includes('tit3') ? 3 : st.techs.includes('tit2') ? 2 : st.techs.includes('tit1') ? 1 : 0) : 0;
+  const titanUsed = st ? st.counts[Kind.TITAN] + colonies.reduce((a, c) => a + c.queue.filter(q => q.kind === Kind.TITAN).length, 0) : 0;
 
   return (
     <div className="fixed inset-0 bg-[#031016] text-white font-sans overflow-hidden select-none">
@@ -313,6 +317,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
                 </div>
               </div>
               <p className="mt-2 text-neutral-200 leading-snug">{KINDS[tip.k].blurb}</p>
+              {tip.k === Kind.TITAN && <p className="mt-1.5 text-violet-100 leading-snug bg-violet-400/10 border border-violet-300/25 rounded-md px-2 py-1">O titã da sua espécie é um <b>{myTitan.name}</b> — poder: <b>{myTitan.power}</b>. {myTitan.desc} Titãs vivos: {titanUsed}/{titanLim} (Gigantismo aumenta o limite). Sempre visível para todos.</p>}
               {TIP_NOTE[tip.k] && <p className="mt-1.5 text-amber-100/90 leading-snug bg-amber-400/10 border border-amber-300/20 rounded-md px-2 py-1">{TIP_NOTE[tip.k]}</p>}
               <div className="mt-2 grid grid-cols-3 gap-1 text-[10px] font-mono">
                 <span className="text-yellow-300">🟡 {KINDS[tip.k].food}</span><span className="text-cyan-300">⚡ {KINDS[tip.k].energy}</span><span className="text-neutral-300">⏱ {KINDS[tip.k].time}s</span>
@@ -349,14 +354,14 @@ export function CellGame({ species, onExit, onRestart }: Props) {
               const K = KINDS[k], placing = hud?.placing === k, place = PLACE_KINDS.includes(k);
               const lock = LOCKED[k] && !st.techs.includes(LOCKED[k]!) ? TECHS.find(t => t.id === LOCKED[k])! : null;
               const disc = st.techs.includes('com3') && k !== Kind.NODE ? 0.85 : 1, fc = Math.round(K.food * disc), ec = Math.round(K.energy * disc);
-              const ok = !lock && st.food >= fc && st.energy >= ec && st.alive && !!active && (k !== Kind.NODE || st.counts[Kind.WORKER] > 0);
+              const ok = !lock && st.food >= fc && st.energy >= ec && st.alive && !!active && (k !== Kind.NODE || st.counts[Kind.WORKER] > 0) && (k !== Kind.TITAN || titanUsed < titanLim);
               return (
                 <button key={k} onClick={() => eng?.train(k)} disabled={!ok}
                   onMouseEnter={e => { const r = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(), b = e.currentTarget.getBoundingClientRect(); setTip({ k, x: b.left - r.left + b.width / 2 }); }}
                   className={`group relative w-[56px] sm:w-[62px] rounded-lg border px-1 pt-1 pb-0.5 flex flex-col items-center ${placing ? 'border-violet-300 bg-violet-400/30' : ok ? (place ? 'border-violet-300/25 bg-white/5 hover:bg-violet-400/20 hover:border-violet-300/60' : 'border-white/10 bg-white/5 hover:bg-teal-400/15 hover:border-teal-300/50') : 'border-white/5 bg-white/[0.02] opacity-50'} ${k === Kind.MOTHER ? 'ml-1' : ''}`}>
                   <div className="h-8 w-full flex items-center justify-center">{thumbs[k] && <img src={thumbs[k]} className="max-h-8 max-w-full" style={{ imageRendering: 'pixelated' }} />}</div>
                   {lock && <Lock className="absolute top-1 right-1 w-3 h-3 text-neutral-300" />}
-                  <div className="text-[10px] font-bold truncate w-full text-center">{k === Kind.MOTHER ? 'Colônia' : k === Kind.NODE ? 'Nódulo' : K.name}</div>
+                  <div className="text-[10px] font-bold truncate w-full text-center">{k === Kind.MOTHER ? 'Colônia' : k === Kind.NODE ? 'Nódulo' : k === Kind.TITAN ? `Titã ${lock ? '' : `${titanUsed}/${titanLim}`}` : K.name}</div>
                   {lock ? <div className="text-[8.5px] text-red-200/80 truncate w-full text-center">{lock.name}</div>
                     : <div className="text-[9px] font-mono text-neutral-400"><span className="text-yellow-300">{fc}</span>{ec ? <> · <span className="text-cyan-300">{ec}</span></> : null}</div>}
                 </button>
