@@ -19,7 +19,7 @@ const K = 1;
 const ROW = DIRS.indexOf('SE');
 
 const animFor = (g: Genome, stage: Stage): Anim => {
-  if (stage <= Stage.AQUA_GIANT) return 'swim';
+  if (stage <= Stage.AQUA_LEVIATHAN) return 'swim';
   if (stage === Stage.LAND && (g.wings !== 'none' || g.locomotion === 'flyer' || g.locomotion === 'dragon')) return 'fly';
   return 'walk';
 };
@@ -36,7 +36,7 @@ export class CreatureMontage {
     for (let i = 0; i < GALLERY_N; i++) {
       const stage = MIX[i % MIX.length];
       const p: CreatureParams = {
-        gravity: 0.1 + r() * 0.7, temperature: r(), water: stage <= Stage.AQUA_GIANT ? 0.8 + r() * 0.2 : r(), atmosphere: 0.2 + r() * 0.7,
+        gravity: 0.1 + r() * 0.7, temperature: r(), water: stage <= Stage.AQUA_LEVIATHAN ? 0.8 + r() * 0.2 : r(), atmosphere: 0.2 + r() * 0.7,
         star: 0.3 + r() * 0.5, diet: r(), exotic: r() * 0.9, size: r(),
       };
       const mode: ColorMode = r() < 0.5 ? 'alien' : 'earth';
@@ -61,7 +61,7 @@ export class CreatureMontage {
   dispose() { this.store.dispose(); }
 
   private backdrop(ctx: CanvasRenderingContext2D, w: number, h: number, stage: Stage, t: number, hue: number) {
-    const sea = stage <= Stage.AQUA_GIANT, cell = stage === Stage.CELL;
+    const sea = stage <= Stage.AQUA_LEVIATHAN, cell = stage === Stage.CELL;
     const g = ctx.createLinearGradient(0, 0, 0, h);
     if (cell) { g.addColorStop(0, '#0b2a26'); g.addColorStop(1, '#03110f'); }
     else if (sea) { g.addColorStop(0, '#0d4a6e'); g.addColorStop(0.55, '#062840'); g.addColorStop(1, '#020c16'); }

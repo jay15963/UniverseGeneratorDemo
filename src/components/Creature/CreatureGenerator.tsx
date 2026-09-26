@@ -30,11 +30,14 @@ const COVER_OPTS: [Covering | 'auto', string][] = [['auto', 'Automático'], ['fu
 const LEG_OPTS: [LegType | 'auto', string][] = [['auto', 'Automático'], ['digitigrade', 'Digitígradas'], ['plantigrade', 'Plantígradas'], ['unguligrade', 'Com cascos'], ['column', 'Colunares'], ['avian', 'De ave'], ['insectoid', 'Articuladas'], ['sprawl', 'Esparramadas'], ['tentacle', 'Tentáculos'], ['stubby', 'Curtas']];
 const GROUP_COL: Record<string, string> = { 'Célula': 'text-teal-300', 'Oceano': 'text-sky-300', 'Terra': 'text-lime-300', 'Civilização': 'text-amber-300' };
 
-/** timeline: 13 steps; steps 2-4 fork into the giant branch */
-const STEPS: [Stage, Stage | null][] = [
-  [Stage.CELL, null], [Stage.AQUA_LARVA, null], [Stage.AQUA, Stage.AQUA_GIANT], [Stage.AMPHIBIAN, Stage.AMPHIBIAN_GIANT], [Stage.LAND, Stage.LAND_GIANT],
-  [Stage.TRIBAL, null], [Stage.MEDIEVAL, null], [Stage.RENAISSANCE, null], [Stage.INDUSTRIAL, null], [Stage.MODERN, null], [Stage.CONTEMPORARY, null], [Stage.FUTURIST, null], [Stage.SPACE, null],
+/** timeline: 13 steps; steps 2-4 fork into the giant branch, the aquatic and land steps also have a leviathan */
+const STEPS: [Stage, Stage | null, Stage | null][] = [
+  [Stage.CELL, null, null], [Stage.AQUA_LARVA, null, null], [Stage.AQUA, Stage.AQUA_GIANT, Stage.AQUA_LEVIATHAN], [Stage.AMPHIBIAN, Stage.AMPHIBIAN_GIANT, null], [Stage.LAND, Stage.LAND_GIANT, Stage.LAND_LEVIATHAN],
+  [Stage.TRIBAL, null, null], [Stage.MEDIEVAL, null, null], [Stage.RENAISSANCE, null, null], [Stage.INDUSTRIAL, null, null], [Stage.MODERN, null, null], [Stage.CONTEMPORARY, null, null], [Stage.FUTURIST, null, null], [Stage.SPACE, null, null],
 ];
+type Cat = 'normal' | 'giant' | 'leviathan';
+const CATS: [Cat, string, string][] = [['normal', 'Normal', 'A linha principal da espécie'], ['giant', 'Gigante', 'Ramo gigante: aquática gigante → anfíbia gigante → terrestre gigante'], ['leviathan', 'Leviatã', 'A categoria ápice (fauna de topo): leviatã aquático dos abismos e leviatã terrestre, como os dinossauros']];
+const ALL_STAGES: Stage[] = [...STEPS.map(s => s[0]), ...STEPS.filter(s => s[1] !== null).map(s => s[1]!), ...STEPS.filter(s => s[2] !== null).map(s => s[2]!)];
 const nameOf = (s: Stage) => STAGES.find(x => x.id === s)!;
 
 function applyOverrides(g: Genome, loco: Locomotion | 'auto', cover: Covering | 'auto', legs: LegType | 'auto'): Genome {
@@ -79,7 +82,7 @@ export function CreatureGenerator({ onBack, pick }: Props) {
   const [mode, setMode] = useState<ColorMode>(pick?.mode ?? 'earth');
   const [step, setStep] = useState(pick ? 5 : 4);
   const [animSel, setAnimSel] = useState<Anim | null>(null);
-  const [giant, setGiant] = useState(false);
+  const [cat, setCat] = useState<Cat>('normal');
   const [dir, setDir] = useState<Dir8>('E');
   const [citizen, setCitizen] = useState(0);
   const [loco, setLoco] = useState<Locomotion | 'auto'>('auto');
@@ -89,7 +92,7 @@ export function CreatureGenerator({ onBack, pick }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(3);
-  const stage: Stage = pick ? Stage.TRIBAL : giant && STEPS[step][1] !== null ? STEPS[step][1]! : STEPS[step][0];
+  const stage: Stage = pick ? Stage.TRIBAL : cat === 'leviathan' && STEPS[step][2] !== null ? STEPS[step][2]! : cat !== 'normal' && STEPS[step][1] !== null ? STEPS[step][1]! : STEPS[step][0];
 
   // debounced parameters so dragging a slider stays fluid
   const [live, setLive] = useState({ seed, params, loco, cover, legs, mutation, mode });
@@ -148,7 +151,7 @@ export function CreatureGenerator({ onBack, pick }: Props) {
   const [thumbs, setThumbs] = useState<Record<number, HTMLCanvasElement>>({});
   useEffect(() => {
     let cancelled = false;
-    const todo: Stage[] = [...STEPS.map(s => s[0]), ...STEPS.filter(s => s[1] !== null).map(s => s[1]!)];
+    const todo: Stage[] = ALL_STAGES;
     const next: Record<number, HTMLCanvasElement> = {};
     let i = 0;
     const step2 = () => {
@@ -199,7 +202,7 @@ export function CreatureGenerator({ onBack, pick }: Props) {
       let y = 0;
       for (const sh of sheets) { o.drawImage(toCanvas(sh.data, sh.cw * sh.frames, sh.ch * DIRS.length), 0, y); y += sh.ch * DIRS.length; }
     } else {
-      const list = [...STEPS.map(s => s[0]), ...STEPS.filter(s => s[1] !== null).map(s => s[1]!)];
+      const list = ALL_STAGES;
       const sps = list.map(s => renderCreature(genome, s, 'E', citizen));
       const cw = Math.max(...sps.map(s => s.w)) + 8, chh = Math.max(...sps.map(s => s.h)) + 16;
       const cols = 8;
@@ -318,18 +321,24 @@ export function CreatureGenerator({ onBack, pick }: Props) {
             </div>
             <div className="flex items-center gap-3">
               <input type="range" min={0} max={STEPS.length - 1} step={1} value={step} onChange={e => setStep(+e.target.value)} className="flex-1 accent-amber-300" />
-              <button onClick={() => setGiant(v => !v)} title="Ramo gigante: aquática gigante → anfíbia gigante → terrestre gigante"
-                className={`flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1.5 rounded-lg border ${giant ? 'bg-sky-400/20 border-sky-300/60 text-sky-100' : 'border-white/10 text-neutral-400 hover:text-white'}`}>
-                <GitBranch className="w-3.5 h-3.5" /> Ramo gigante
-              </button>
+              <div className="flex items-center gap-0.5 p-0.5 rounded-lg border border-white/10">
+                <GitBranch className="w-3.5 h-3.5 mx-1 text-neutral-500" />
+                {CATS.map(([c, label, hint]) => (
+                  <button key={c} onClick={() => setCat(c)} title={hint}
+                    className={`text-[11px] font-bold px-2 py-1 rounded-md ${cat === c ? (c === 'leviathan' ? 'bg-violet-400/25 text-violet-100' : c === 'giant' ? 'bg-sky-400/20 text-sky-100' : 'bg-white/10 text-white') : 'text-neutral-400 hover:text-white'}`}>{label}</button>
+                ))}
+              </div>
             </div>
             <div className="grid mt-2 gap-1" style={{ gridTemplateColumns: `repeat(${STEPS.length}, minmax(0, 1fr))` }}>
-              {STEPS.map(([main, alt], i) => (
+              {STEPS.map(([main, alt, lev], i) => (
                 <div key={i} className="flex flex-col gap-1">
-                  {alt !== null
-                    ? <ThumbBtn canvas={thumbs[alt]} active={stage === alt} label={nameOf(alt).name} onClick={() => { setStep(i); setGiant(true); }} tone="sky" />
+                  {lev !== null
+                    ? <ThumbBtn canvas={thumbs[lev]} active={stage === lev} label={nameOf(lev).name} onClick={() => { setStep(i); setCat('leviathan'); }} tone="violet" />
                     : <div className="hidden md:block flex-1" />}
-                  <ThumbBtn canvas={thumbs[main]} active={stage === main} label={nameOf(main).name} onClick={() => { setStep(i); setGiant(false); }} />
+                  {alt !== null
+                    ? <ThumbBtn canvas={thumbs[alt]} active={stage === alt} label={nameOf(alt).name} onClick={() => { setStep(i); setCat('giant'); }} tone="sky" />
+                    : <div className="hidden md:block flex-1" />}
+                  <ThumbBtn canvas={thumbs[main]} active={stage === main} label={nameOf(main).name} onClick={() => { setStep(i); setCat('normal'); }} />
                 </div>
               ))}
             </div>
@@ -400,12 +409,12 @@ function Pick({ label, value, opts, onChange }: { label: string; value: string; 
     </div>
   );
 }
-function ThumbBtn({ canvas, active, label, onClick, tone = 'amber' }: { canvas?: HTMLCanvasElement; active: boolean; label: string; onClick: () => void; tone?: 'amber' | 'sky' }) {
-  const on = tone === 'sky' ? 'border-sky-300/70 bg-sky-300/10' : 'border-amber-300/70 bg-amber-300/10';
+function ThumbBtn({ canvas, active, label, onClick, tone = 'amber' }: { canvas?: HTMLCanvasElement; active: boolean; label: string; onClick: () => void; tone?: 'amber' | 'sky' | 'violet' }) {
+  const on = tone === 'sky' ? 'border-sky-300/70 bg-sky-300/10' : tone === 'violet' ? 'border-violet-300/70 bg-violet-300/10' : 'border-amber-300/70 bg-amber-300/10';
   return (
     <button onClick={onClick} title={label} className={`group flex flex-col items-center rounded-lg p-1 border transition-colors ${active ? on : 'border-transparent hover:border-white/10'}`}>
       <Thumb canvas={canvas ?? null} />
-      <span className={`hidden md:block text-[9px] leading-tight text-center mt-1 ${active ? (tone === 'sky' ? 'text-sky-200' : 'text-amber-200') : 'text-neutral-500 group-hover:text-neutral-300'}`}>{label}</span>
+      <span className={`hidden md:block text-[9px] leading-tight text-center mt-1 ${active ? (tone === 'sky' ? 'text-sky-200' : tone === 'violet' ? 'text-violet-200' : 'text-amber-200') : 'text-neutral-500 group-hover:text-neutral-300'}`}>{label}</span>
     </button>
   );
 }

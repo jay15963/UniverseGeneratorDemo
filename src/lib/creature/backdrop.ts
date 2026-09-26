@@ -72,6 +72,17 @@ export function drawBackdrop(ctx: Ctx, W: number, H: number, stage: Stage, g: Ge
     return;
   }
 
+  if (stage === Stage.AQUA_LEVIATHAN) {
+    // the abyss: black water, a hydrothermal field glowing far below, drifting glow and marine snow
+    bands(ctx, W, 0, H, hsl(0.64, 0.6, 0.07), hsl(0.68, 0.6, 0.015), 10);
+    const vx = W * 0.25;
+    for (let r = 60; r > 0; r -= 6) { ctx.fillStyle = css(hsl(0.06, 0.9, 0.35), 0.02 + (60 - r) / 60 * 0.06); ctx.beginPath(); ctx.ellipse(vx, H, r * 2.2, r, 0, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = css(hsl(0.05, 0.2, 0.08)); ctx.fillRect(0, H - 8, W, 8);
+    for (let i = 0; i < 4; i++) { const x = vx - 30 + i * 22, h = 14 + (i % 2) * 10; ctx.fillStyle = css(hsl(0.06, 0.25, 0.12)); ctx.fillRect(x, H - 8 - h, 6, h); ctx.fillStyle = css(hsl(0.07, 0.95, 0.5), 0.6 + 0.3 * Math.sin(t * 3 + i)); ctx.fillRect(x + 2, H - 9 - h, 2, 2); }
+    for (let i = 0; i < 110; i++) { const x = (rnd() * W + Math.sin(t * 0.4 + i) * 2 + W) % W, y = (rnd() * H + t * (1.5 + rnd() * 2)) % H; ctx.fillStyle = `rgba(190,210,255,${0.1 + rnd() * 0.25})`; ctx.fillRect(x | 0, y | 0, 1, 1); }
+    for (let i = 0; i < 26; i++) { const x = rnd() * W, y = rnd() * H * 0.85; ctx.fillStyle = css(hsl(g.glowHue, 0.9, 0.65), 0.25 + 0.35 * Math.sin(t * 1.7 + i * 1.3)); ctx.fillRect(x | 0, y | 0, 1, 1); }
+    return;
+  }
   if (stage === Stage.AQUA_GIANT) {
     bands(ctx, W, 0, H, hsl(0.6, 0.55, 0.13), hsl(0.64, 0.6, 0.03), 8);
     for (let i = 0; i < 90; i++) { // marine snow

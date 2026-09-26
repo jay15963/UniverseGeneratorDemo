@@ -1,6 +1,7 @@
 import seedrandom from 'seedrandom';
 import { createNoise2D, createNoise3D } from 'simplex-noise';
 import { Delaunay } from 'd3-delaunay';
+import { lifeStageOf, vegAmount, coastDistance, depthQuantiles, shoreFauna, landFauna } from './lifeStage';
 
 export enum PlanetType {
   EARTH_LIKE = 'earth-like',
@@ -95,6 +96,8 @@ export interface PlanetConfig {
   emberActivity: number;
   /** what lives there (set by the system generator; absent = decided by the planet type alone) */
   life?: LifeInfo;
+  /** evolution of life 0..1 (bare land -> coastal plants -> green world); absent = from the life level (see lifeStage.ts) */
+  lifeStage?: number;
 }
 
 /** none < microbial < plants (vegetation only, no animals) < animal < intelligent (a civilisation in `era` 0..7) */
@@ -201,6 +204,8 @@ export class PlanetGenerator {
   spices: Float32Array;      // 0-1: spice density  
   resources: Float32Array;   // 0-1: environmental resource density
   fauna: Float32Array;       // 0-1: fauna density
+  coast: Float32Array;       // map px to the nearest water (sea or river) - how far the plants have reached
+  depthQ: [number, number] = [0.3, 0.55];   // depth-ratio percentiles: coastal | open sea | abyss
   
   plates: Plate[];
   
@@ -226,6 +231,7 @@ export class PlanetGenerator {
     this.spices = new Float32Array(size);
     this.resources = new Float32Array(size);
     this.fauna = new Float32Array(size);
+    this.coast = new Float32Array(size);
     this.plates = [];
   }
 
@@ -274,6 +280,7 @@ export class PlanetGenerator {
       await yieldThread();
       this.generateRivers();
       
+      this.computeLifeFields();
       if (onProgress) onProgress(0.70, 'Generating Biomes...');
       await yieldThread();
       this.generateBiomes();
@@ -300,6 +307,7 @@ export class PlanetGenerator {
       if (onProgress) onProgress(0.70, 'Generating Ocean Currents...');
       await yieldThread();
       this.generateRivers();
+      this.computeLifeFields();
       
       if (hasCapability(pt, PlanetCapability.FAUNA)) {
         if (onProgress) onProgress(0.90, 'Populating Ocean Fauna...');
@@ -1127,16 +1135,13 @@ export class PlanetGenerator {
             let faunaScore = 0;
             if (elev <= seaLevel) {
                 // Aquatic
-                const depth = 1.0 - (elev / seaLevel);
-                if (depth < 0.3) faunaScore = 0.12 + depth * 0.3;
-                else if (depth < 0.55) faunaScore = 0.30 + (depth - 0.3) * 0.6;
-                else {
-                    faunaScore = 0.50 + (depth - 0.55) * 0.6;
-                    if (temp < 0.25) faunaScore += 0.15; // Ice leviathans
-                    if (depth > 0.8) faunaScore += 0.2; // Abyssal
-                }
+                // bands from the planet's own depth percentiles: every ocean has reefs, an open sea and an abyss
+                const depth = 1.0 - (elev / seaLevel), [q0, q1] = this.depthQ;
                 const fNoise = this.fbm(nx + 6.1, ny + 9.4, 3, 0.5, 2.0, 50.0);
-                faunaScore += (fNoise - 0.5) * 0.1;
+                if (depth < q0) faunaScore = 0.1 + (depth / Math.max(1e-4, q0)) * 0.18;                      // reefs: small & normal life
+                else if (depth < q1) faunaScore = 0.32 + ((depth - q0) / Math.max(1e-4, q1 - q0)) * 0.3;      // open sea: the big ones
+                else faunaScore = 0.74 + Math.min(1, (depth - q1) / Math.max(1e-4, 1 - q1)) * 0.2 + (temp < 0.25 ? 0.05 : 0); // abyss: leviathans
+                faunaScore += (fNoise - 0.5) * 0.06;
             } else {
                 // Terrestrial
                 const landHeight = (elev - seaLevel) / (1 - seaLevel);
@@ -1148,6 +1153,9 @@ export class PlanetGenerator {
                 
                 if (landHeight > 0.7) faunaScore *= 0.5; // Altitude penalty
                 faunaScore += (this.fbm(nx + 6.1, ny + 9.4, 3, 0.5, 2.0, 50.0) - 0.5) * 0.15;
+                // only what the plants have reached: shores first (amphibians), then the land animals
+                const vs = lifeStageOf(this.config), veg = this.vegAt(index, x, y);
+                faunaScore *= this.coast[index] <= 12 && shoreFauna(vs) ? Math.max(landFauna(vs), 0.5) * veg : landFauna(vs) * veg;
             }
             this.fauna[index] = Math.max(0, Math.min(1.0, faunaScore));
         } else {
@@ -1155,6 +1163,32 @@ export class PlanetGenerator {
         }
       }
     }
+  }
+
+  /** distance to water (for the vegetation front) and the ocean's depth bands (every sea gets an abyss) */
+  private computeLifeFields() {
+    const { width: W, height: H, seaLevel } = this.config;
+    this.coast = coastDistance(this.elevation, this.waterAccumulation, W, H, seaLevel);
+    this.depthQ = depthQuantiles(this.elevation, seaLevel);
+  }
+  /** bare land of a world the plants have not reached: dark basalt, ochre dust and grey scree; frost in the cold */
+  private barrenColour(index: number, x: number, y: number): [number, number, number] {
+    const nx = x / this.config.width, ny = y / this.config.height;
+    const n = this.fbm(nx + 7.7, ny + 3.1, 4, 0.5, 2.0, 60.0), n2 = this.fbm(nx + 1.9, ny + 8.2, 3, 0.5, 2.0, 220.0);
+    const temp = this.temperature[index], mf = Math.min(1, (this.elevation[index] - this.config.seaLevel) / (1 - this.config.seaLevel));
+    let r = 96 + n * 70, g = 84 + n * 52, b = 72 + n * 34;                 // basalt -> ochre
+    if (n2 > 0.6) { const t = Math.min(1, (n2 - 0.6) * 3); r = r * (1 - t) + 150 * t; g = g * (1 - t) + 146 * t; b = b * (1 - t) + 138 * t; }   // grey scree
+    if (temp - mf * 0.6 < 0.15) { r = 232; g = 236; b = 244; }             // frost and snow stay white
+    const [dx, dy] = this.getSlope(index, x, y);
+    const shade = Math.max(0.45, Math.min(1.45, 1 + (dx + dy) * 40));
+    return [Math.min(255, r * shade), Math.min(255, g * shade), Math.min(255, b * shade)];
+  }
+  /** vegetation cover 0..1 of a land pixel at the planet's life stage */
+  vegAt(index: number, x: number, y: number): number {
+    const v = lifeStageOf(this.config);
+    if (v >= 0.9) return 1;
+    const nx = x / this.config.width, ny = y / this.config.height;
+    return vegAmount(v, this.coast[index], this.moisture[index], this.fbm(nx + 21.3, ny + 4.7, 3, 0.5, 2.0, 30.0));
   }
 
   private generateGasGiant() {
@@ -2048,6 +2082,8 @@ export class PlanetGenerator {
   renderToBuffer(layer: LayerType): Uint8ClampedArray {
     const { width, height, seaLevel } = this.config;
     const data = new Uint8ClampedArray(width * height * 4);
+    const pt = this.config.planetType;
+    const barrenOn = (pt === PlanetType.EARTH_LIKE || pt === PlanetType.ALIEN_LIFE || pt === PlanetType.SWAMP_WORLD) && lifeStageOf(this.config) < 0.9;
     
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -2134,6 +2170,15 @@ export class PlanetGenerator {
         } else if (layer === LayerType.BIOME || layer === LayerType.FINAL) {
           const rgb = this.renderPlanetSurface(index, x, y);
           r = rgb[0]; g = rgb[1]; b = rgb[2];
+          // a young living world: bare rock and dust where the plants have not reached yet
+          if (barrenOn && this.elevation[index] > seaLevel && this.waterAccumulation[index] <= 2) {
+            const veg = this.vegAt(index, x, y);
+            if (veg < 1) {
+              const [br, bg, bb] = this.barrenColour(index, x, y);
+              const k = 1 - veg;
+              r = Math.round(r * (1 - k) + br * k); g = Math.round(g * (1 - k) + bg * k); b = Math.round(b * (1 - k) + bb * k);
+            }
+          }
         } else if (layer === LayerType.MOVEMENT) {
           const cost = this.movementCosts[index];
           

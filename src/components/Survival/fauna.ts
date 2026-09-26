@@ -7,8 +7,10 @@ import { Stage } from '../../lib/creature/genome';
 import { mulberry, seedToInt } from '../../lib/terrain/noise';
 import { TILE, CHUNK, LIFT } from '../../lib/terrain/types';
 import { NatureFx } from './natureFx';
+import { shoreFauna, landFauna, landLeviathans } from '../../lib/planet-generator/lifeStage';
 
-export interface TileQ { water: boolean; deep: boolean; blocking: boolean; level: number; biome: number; color: [number, number, number] }
+/** zone: bits 0-1 SeaZone of water (1 reefs/coast, 2 open sea, 3 abyss), bit 2 = the plants have reached this land */
+export interface TileQ { water: boolean; deep: boolean; blocking: boolean; level: number; biome: number; color: [number, number, number]; zone: number }
 export interface World {
   tile(wx: number, wy: number): TileQ | null;
   canStep(fx: number, fy: number, tx: number, ty: number): boolean;
@@ -31,7 +33,8 @@ export class Fauna {
   readonly all: Animal[] = [];
   private seed: number;
 
-  constructor(readonly species: Species[], private store: SpriteStore, seed: string) {
+  /** the planet's life stage: which land fauna exists yet (sea life is always there) */
+  constructor(readonly species: Species[], private store: SpriteStore, seed: string, private vita = 1) {
     this.idx = faunaIndex(species);
     this.seed = seedToInt(seed + ':spawn');
   }
@@ -48,11 +51,17 @@ export class Fauna {
       const q = world.tile(wx, wy);
       if (!q || q.blocking && !q.water) return;
       let pool: Species[] | undefined;
-      if (q.water) pool = q.deep && rnd() < 0.35 && this.idx.deepWater.length ? this.idx.deepWater : this.idx.water;
-      else {
-        // shore dwellers next to water, everyone else by biome
+      if (q.water) {
+        // by depth band: reefs keep the small and normal swimmers, the open sea the big ones, the abyss its leviathans
+        const z = q.zone & 3, I = this.idx;
+        pool = z === 3 ? (rnd() < 0.3 && I.abyss.length ? I.abyss : I.open.length ? I.open : I.coast)
+          : z === 2 ? (rnd() < 0.55 && I.open.length ? I.open : I.coast) : I.coast;
+      } else {
+        // no plants, no land animals: amphibians follow the green coasts first, the rest come later
+        const green = (q.zone & 4) !== 0;
         const nearWater = [[TILE * 2, 0], [-TILE * 2, 0], [0, TILE * 2], [0, -TILE * 2]].some(([dx, dy]) => world.tile(wx + dx, wy + dy)?.water);
-        pool = nearWater && rnd() < 0.6 ? this.idx.shoreByBiome.get(q.biome) : this.idx.byBiome.get(q.biome);
+        if (nearWater && shoreFauna(this.vita) && (green || this.vita >= 0.3) && rnd() < 0.6) pool = this.idx.shoreByBiome.get(q.biome);
+        else if (green && rnd() < landFauna(this.vita)) pool = landLeviathans(this.vita) && rnd() < 0.08 ? this.idx.levByBiome.get(q.biome) : this.idx.byBiome.get(q.biome);
       }
       if (!pool || !pool.length) return;
       const sp = pool[Math.floor(rnd() * pool.length)];
@@ -176,7 +185,10 @@ export class Fauna {
     if (flying) { a.x = nx; a.y = ny; return false; }
     const q = world.tile(nx, ny);
     const water = a.sp.habitat === 'water';
-    const ok = q && (water ? q.water && (a.sp.stage !== Stage.AQUA_GIANT || q.deep) : (!q.water || (a.sp.habitat === 'shore' && !q.deep)) && !q.blocking && world.canStep(a.x, a.y, nx, ny));
+    const z = q ? q.zone & 3 : 0, zone = a.sp.zone;
+    // swimmers keep to their band: reef life stays off the abyss, giants off the reefs, leviathans in the abyss and the open sea
+    const inBand = zone === 'abyss' ? z >= 2 : zone === 'open' ? z >= 2 || q?.deep : a.sp.stage === Stage.AQUA_LARVA ? z === 1 : z !== 3;
+    const ok = q && (water ? q.water && inBand : (!q.water || (a.sp.habitat === 'shore' && !q.deep)) && !q.blocking && world.canStep(a.x, a.y, nx, ny));
     if (!ok) { a.tx = a.x - dx * 0.5; a.ty = a.y - dy * 0.5; return true; }
     a.x = nx; a.y = ny;
     if (q) a.level = q.level;
