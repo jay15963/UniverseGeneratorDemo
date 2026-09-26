@@ -11,9 +11,10 @@
 // and each species picks its own shade, so two species of the same world rarely look alike.
 // Vivid, arbitrary hues only happen in Alien-like mode.
 import { mulberry, seedToInt } from '../terrain/noise';
+import { leviathanName } from './leviathan';
 
 export enum Stage {
-  CELL, AQUA_LARVA, AQUA, AQUA_GIANT, AMPHIBIAN, AMPHIBIAN_GIANT, LAND, LAND_GIANT,
+  CELL, AQUA_LARVA, AQUA, AQUA_GIANT, AQUA_LEVIATHAN, AMPHIBIAN, AMPHIBIAN_GIANT, LAND, LAND_GIANT, LAND_LEVIATHAN,
   TRIBAL, MEDIEVAL, RENAISSANCE, INDUSTRIAL, MODERN, CONTEMPORARY, FUTURIST, SPACE,
 }
 export type StageGroup = 'Célula' | 'Oceano' | 'Terra' | 'Civilização';
@@ -22,10 +23,12 @@ export const STAGES: { id: Stage; name: string; group: StageGroup; scale: string
   { id: Stage.AQUA_LARVA, name: 'Aquática inicial', group: 'Oceano', scale: '≈ 2 cm' },
   { id: Stage.AQUA, name: 'Aquática', group: 'Oceano', scale: '≈ 60 cm' },
   { id: Stage.AQUA_GIANT, name: 'Aquática gigante', group: 'Oceano', scale: '≈ 14 m', giant: true },
+  { id: Stage.AQUA_LEVIATHAN, name: 'Leviatã aquático', group: 'Oceano', scale: '≈ 60 m', giant: true },
   { id: Stage.AMPHIBIAN, name: 'Anfíbia', group: 'Terra', scale: '≈ 1,5 m' },
   { id: Stage.AMPHIBIAN_GIANT, name: 'Anfíbia gigante', group: 'Terra', scale: '≈ 9 m', giant: true },
   { id: Stage.LAND, name: 'Terrestre', group: 'Terra', scale: '≈ 2 m' },
   { id: Stage.LAND_GIANT, name: 'Terrestre gigante', group: 'Terra', scale: '≈ 12 m', giant: true },
+  { id: Stage.LAND_LEVIATHAN, name: 'Leviatã terrestre', group: 'Terra', scale: '≈ 35 m', giant: true },
   { id: Stage.TRIBAL, name: 'Tribal', group: 'Civilização', scale: '≈ 1,8 m', years: 'pré-história' },
   { id: Stage.MEDIEVAL, name: 'Medieval', group: 'Civilização', scale: '≈ 1,8 m', years: '500–1400' },
   { id: Stage.RENAISSANCE, name: 'Clássica', group: 'Civilização', scale: '≈ 1,8 m', years: '≈ 1500' },
@@ -37,6 +40,9 @@ export const STAGES: { id: Stage; name: string; group: StageGroup; scale: string
 ];
 export const isCiv = (s: Stage) => s >= Stage.TRIBAL;
 export const isGiant = (s: Stage) => s === Stage.AQUA_GIANT || s === Stage.AMPHIBIAN_GIANT || s === Stage.LAND_GIANT;
+export const isLeviathan = (s: Stage) => s === Stage.AQUA_LEVIATHAN || s === Stage.LAND_LEVIATHAN;
+/** sea stages (larva .. leviathan) */
+export const isSea = (s: Stage) => s >= Stage.AQUA_LARVA && s <= Stage.AQUA_LEVIATHAN;
 
 export type ColorMode = 'earth' | 'alien';
 export interface CreatureParams {
@@ -338,11 +344,12 @@ export function describe(g: Genome, stage: Stage): { title: string; lines: [stri
     lines.push(['Forma', { round: 'Esférica', oval: 'Ovalada', rod: 'Bastonete', star: 'Estrelada', spiral: 'Espiral' }[g.cell.shape]]);
     lines.push(['Locomoção', g.cell.flagella ? `${g.cell.flagella} flagelo${g.cell.flagella > 1 ? 's' : ''}` : g.cell.cilia ? 'Cílios' : 'Deriva']);
     lines.push(['Nutrição', p.diet > 0.5 ? 'Fagocitose (predadora)' : 'Fotossíntese / filtração']);
-  } else if (stage <= Stage.AQUA_GIANT) {
-    lines.push(['Plano corporal', AQUA_PT[g.aquaForm]]);
+  } else if (stage <= Stage.AQUA_LEVIATHAN) {
+    lines.push(['Plano corporal', stage === Stage.AQUA_LEVIATHAN ? leviathanName(g, stage) : AQUA_PT[g.aquaForm]]);
     lines.push(['Dieta', diet]);
     lines.push(['Olhos', `${g.eyes}`]);
   } else {
+    if (stage === Stage.LAND_LEVIATHAN) lines.push(['Plano corporal', leviathanName(g, stage)]);
     lines.push(['Locomoção', stage === Stage.AMPHIBIAN || stage === Stage.AMPHIBIAN_GIANT ? 'Rastejante anfíbio' : civ ? (g.locomotion === 'serpent' ? 'Ereto sobre a cauda' : g.locomotion === 'centauroid' ? 'Centauroide' : 'Bípede ereto') : LOCO_PT[g.locomotion]]);
     if (!civ && stage !== Stage.AMPHIBIAN && stage !== Stage.AMPHIBIAN_GIANT && g.locomotion !== 'serpent') lines.push(['Pernas', LEG_PT[g.legType]]);
     lines.push(['Cobertura', stage === Stage.AMPHIBIAN || stage === Stage.AMPHIBIAN_GIANT ? 'Pele úmida' : COVER_PT[g.covering]]);
@@ -361,6 +368,8 @@ export function describe(g: Genome, stage: Stage): { title: string; lines: [stri
     [Stage.AQUA_LARVA]: `Larva translúcida que se esconde entre partículas em suspensão, já com ${g.eyes === 1 ? 'um único olho' : `${g.eyes} olhos`}.`,
     [Stage.AQUA]: `${AQUA_PT[g.aquaForm]} ${diet.toLowerCase()} de padrão ${PATTERN_PT[g.pattern]}, patrulhando os mares rasos.`,
     [Stage.AQUA_GIANT]: `O ramo colossal da linhagem: o maior ${AQUA_PT[g.aquaForm].toLowerCase()} dos abismos${g.glow > 0.25 ? ', coberto de pontos que brilham no escuro' : ''}.`,
+    [Stage.AQUA_LEVIATHAN]: `Um leviatã: ${leviathanName(g, stage)} dos abismos, a fauna ápice dos oceanos, que só sobe ao mar aberto para caçar${g.glow > 0.12 ? ', riscado de luzes frias' : ''}.`,
+    [Stage.LAND_LEVIATHAN]: `Um leviatã terrestre: ${leviathanName(g, stage)}, a fauna ápice da terra firme, tão grande que o chão treme por onde passa.`,
     [Stage.AMPHIBIAN]: `As nadadeiras viraram patas: o primeiro ${g.name.genus} a arrastar-se para fora da água.`,
     [Stage.AMPHIBIAN_GIANT]: `Descendente dos colossos marinhos, um anfíbio blindado do tamanho de um barco que domina os estuários.`,
     [Stage.LAND]: `${LOCO_PT[g.locomotion]} de ${COVER_PT[g.covering].toLowerCase()}, ${mood} adaptado a ${habitat}.`,

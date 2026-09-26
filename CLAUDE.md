@@ -25,6 +25,11 @@ These were set by the project owner — keep them:
   muzzle, slight smile), omnivores are the plain middle ground.
 - **Lineage**: cell → larva → aquatic → amphibian → land → 8 civilisation eras, with a **giant branch**
   (aquatic giant → amphibian giant → land giant). Colours, pattern and eyes carry through the stages.
+- **Leviathan category** (owner's rule: *not* the giant form - a category of its own, beside Normal and Gigante in the
+  generator): the apex fauna, a body plan of its own drawn with the species' colours/pattern/eyes (`leviathan.ts`,
+  `Stage.AQUA_LEVIATHAN` / `Stage.LAND_LEVIATHAN`). Sea (from the aquatic form): abyssal serpent, kraken, armoured
+  placoderm, filter whale, colossal sea scorpion, abyssal manta, colossal medusa. Land, like the dinosaurs: sauropod,
+  tyrant, armoured horned tank, hexapod behemoth, colossal serpent.
 - **Civilisations keep the species' anatomy**; only clothes and small personal objects change per era. Clothes are
   **civilian** — no armour, weapons, uniforms or work/profession gear (no knights, soldiers or astronauts). Each era has
   several options per slot and a citizen index picks the combination.
@@ -34,7 +39,15 @@ These were set by the project owner — keep them:
 - Animations: idle, walk, run, fly (fliers; landed = wings folded), swim. Fliers take off, fly and land in-game; swimmers
   surface for ~5 s (random) and dive again with splashes/ripples tinted by the planet's own water colour.
 - Living planets carry **200+ species** (`src/lib/fauna/species.ts`), animal stages only (no civilisations yet), spawned
-  per chunk by biome/water. Landing with the character opens the creature screen; the player plays their species'
+  per chunk by biome/water. **Sea fauna follows depth** (percentile bands of each ocean, `lifeStage.ts`): reefs / coast
+  keep the larvae and normal swimmers, the open sea the giants, the abyss the leviathans (which also roam the open sea);
+  every sea has at least two leviathan species, every animal land at least one land leviathan.
+- **Planet life stage** (`planetConfig.lifeStage`, else from the rolled life level; editor slider "Evolução da vida"):
+  0-0.3 only the seas live (bare, dry, rocky land, no land fauna); 0.3-0.6 plants creep along coasts and rivers and
+  amphibians appear on those shores; 0.6-0.9 vegetation spreads inland and land fauna appears (land leviathans from
+  0.8); 0.9+ fully green. Applies everywhere (map, globe, terrain chunks, features, fauna) via the coast-distance field
+  (`coast`, reference px of a 2048 map) and `depthQ`, both carried with the planet fields. The aquatic era will push it
+  with its oxygen. Landing with the character opens the creature screen; the player plays their species'
   tribal era.
 - Everything is a deterministic function of `(seed, params, mode)`; random numbers are drawn up-front in a fixed order so
   sliders morph the same species instead of reshuffling it.

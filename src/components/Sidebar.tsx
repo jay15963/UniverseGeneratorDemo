@@ -1,6 +1,7 @@
 import React from 'react';
 import { Settings, RefreshCw, Layers, Map as MapIcon } from 'lucide-react';
 import { PlanetConfig, PlanetType, LayerType, hasCapability, PlanetCapability } from '../lib/planet-generator/generator';
+import { lifeStageOf, LIFE_STAGE_PT } from '../lib/planet-generator/lifeStage';
 
 // Layer availability per planet type category
 const ALL_LAYERS = Object.values(LayerType);
@@ -163,6 +164,14 @@ export function Sidebar({ config, setConfig, layer, setLayer, isGenerating, hand
           {!isGas && (
             <Slider label="Planet Size" value={config.planetSize} min={0.1} max={3} step={0.1}
               onChange={(v) => set({ planetSize: v })} suffix="x" />
+          )}
+
+          {(pt === PlanetType.EARTH_LIKE || pt === PlanetType.ALIEN_LIFE || pt === PlanetType.SWAMP_WORLD) && (
+            <div title="Idade da vida no planeta: terra árida (só os mares vivem) → vegetação na costa e anfíbios → a vegetação avança e surge a fauna terrestre → planeta verde">
+              <Slider label="Evolução da vida" value={lifeStageOf(config)} min={0} max={1} step={0.01}
+                onChange={(v) => set({ lifeStage: v })} suffix="%" />
+              <div className="-mt-1 mb-1 text-[10px] text-emerald-300/80">{LIFE_STAGE_PT(lifeStageOf(config))}</div>
+            </div>
           )}
 
           {/* === Type-Specific Sliders === */}

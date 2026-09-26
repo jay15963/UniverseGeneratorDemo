@@ -37,7 +37,7 @@ export function patternFn(g: Genome): ((x: number, y: number, u: number, v: numb
 }
 
 export function makeKit(g: Genome, stage: Stage): Kit {
-  const sea = stage >= Stage.AQUA_LARVA && stage <= Stage.AQUA_GIANT;
+  const sea = stage >= Stage.AQUA_LARVA && stage <= Stage.AQUA_LEVIATHAN;
   const col = sea ? seaColours(g) : { primary: g.primary, secondary: g.secondary, belly: g.belly, accent: g.accent };
   const amph = stage === Stage.AMPHIBIAN || stage === Stage.AMPHIBIAN_GIANT;
   const P = R(col.primary), Sd = R(col.secondary), B = R(col.belly, 0.8), A = R(col.accent);
@@ -47,7 +47,7 @@ export function makeKit(g: Genome, stage: Stage): Kit {
       : ({ scales: 'scales', feathers: 'feathers', fur: 'fur', skin: 'skin', chitin: 'chitin', plates: 'plates' } as const)[g.covering];
   const fuzz = cover === 'fur' ? 1.1 : cover === 'feathers' ? 0.5 : 0;
   const spec = cover === 'chitin' ? 0.8 : cover === 'skin' ? (amph ? 0.55 : 0.3) : cover === 'scales' ? 0.25 : 0;
-  const body = K(P, cover, { alt: Sd, pattern: pat, belly: g.counterShade ? B : undefined, fuzz, spec, texScale: stage === Stage.LAND_GIANT || stage === Stage.AQUA_GIANT || stage === Stage.AMPHIBIAN_GIANT ? 1.4 : 1 });
+  const body = K(P, cover, { alt: Sd, pattern: pat, belly: g.counterShade ? B : undefined, fuzz, spec, texScale: stage === Stage.LAND_LEVIATHAN || stage === Stage.AQUA_LEVIATHAN ? 1.8 : stage === Stage.LAND_GIANT || stage === Stage.AQUA_GIANT || stage === Stage.AMPHIBIAN_GIANT ? 1.4 : 1 });
   const hornR = rampRGB(g.params.temperature > 0.6 ? [214, 196, 160] : [226, 214, 190]);
   const eyeR = ramp(g.eye.h, g.eye.s, g.eye.l);
   const scl: RGB[] = g.fierce > 0.85 && g.mode === 'alien' ? ramp(0.02, 0.6, 0.3) : ramp(0.12, 0.1, 0.86, 0.6);

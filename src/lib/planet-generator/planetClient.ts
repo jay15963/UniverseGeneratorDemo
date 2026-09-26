@@ -132,7 +132,7 @@ export const SPRITE_TEX_W = 256;
 export const SPRITE_TEX_H = 128;
 
 export function textureKey(config: PlanetConfig, width = SPRITE_TEX_W) {
-  return `${config.seed}|${config.planetType}|${width}`;
+  return `${config.seed}|${config.planetType}|${width}|${config.lifeStage ?? ""}`;
 }
 
 export function peekPlanetTexture(config: PlanetConfig) {
