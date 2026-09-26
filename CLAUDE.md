@@ -298,14 +298,19 @@ Owner's rules - keep them:
   starve) to free space and roots where it stops - `COLONY_GAP` (450) from any other mother, never inside a foreign
   biofilm - so a destroyed colony's room can be taken. Rooted: biofilm, its own division queue, +8 population. The
   division bar works on the selected colony (else the capital). The AI colonises the same way.
-- **Groups** (Hearts of Iron style): select cells -> G / "Criar grupo" (name + colour) or Ctrl+1..9 (quick); 1..9
-  selects a group (twice: jump to it). Members get a ring in the group colour at normal zoom; in the regional view
-  their dots take the group colour and a badge (colour + name + count) sits on the group's centre - click it to
-  select. Stances set on a whole group become the group's. The AI keeps a guard and an attack group per nation
-  (attack groups on the march show as red badges).
-- **HUD**: top-right panel with every kind of the nation (icon, name, count - click selects all of that kind, shift
-  adds) and the groups list; instant styled tooltips on the division buttons (the Coletora one explains that it is the
-  worker that becomes the biofilm node which expands territory and room).
+- **Colonies are the groups** (Hearts of Iron style, owner's rule - there are no hand-made groups): every cell belongs
+  to the colony whose mother bore it (`grp`), each colony has a name ("Colônia N") and a colour (`COLONY_COLORS`);
+  when a colony falls its cells join the nearest one. 1..9 / the top-right card select a colony (or one kind of it);
+  with 2+ colonies their cells get a ring in the colony colour at normal zoom and coloured dots + a clickable badge
+  (colour, name, size) in the regional view. A stance set on a whole colony becomes the colony's (new cells take it).
+  The AI keeps its attack force apart with a per-cell `role`.
+- **HUD**: top-right card = the colonies, each with its cells counted by kind (icon + number; click a chip to select
+  that kind of that colony). The division bar has a **colony dropdown** (clicking a mother cell picks it) and a
+  **"Nódulo" button**: it enters place mode showing the keep-out range (`NODE_GAP`, 200) of every node and colony of
+  every nation (own violet, foreign red); on click the nearest free worker of that colony swims there and settles.
+  Instant styled tooltips on every division button.
+- **Workers never fight** (0 damage): they flee from anything dangerous (even on a direct order, except when going to
+  settle a node) and go back to gathering.
 - **Scale**: thousands of cells, ~65 nations and a few hundred colonies after some minutes. The RTS runs in
   `sim.worker.ts` (`sim.ts`, 20 Hz, typed arrays, spatial hash); the view (`Cell/engine.ts`) interpolates snapshots
   and draws everything instanced (engine FPS shown like the demo).
@@ -314,7 +319,7 @@ Owner's rules - keep them:
   +8 per colony, +6 per node); **biofilm = territory and supply**: inside, cells heal and eat; outside they burn a reserve
   and starve (units without direct orders go home when hungry); workers settle into nodes at the biofilm's edge.
   Combat: melee, toxin at range, armour, hunters engulf wounded smaller cells, deaths drop motes, vents scald.
-  **Delegation**: stances Automático / Coletar / Defender / Caçar / Explorar + control groups ("tecidos", Ctrl+1..9).
+  **Delegation**: stances Automático / Coletar / Defender / Caçar / Explorar applied to cells or whole colonies.
   Rival AI: economy -> nodes -> new colonies -> armies that raid weaker neighbours; the player gets a **1-minute
   grace** (`GRACE`, owner's request) before raids or aggro. Objectives panel; victory = 80 cells + a founded colony + a
   destroyed rival colony.

@@ -76,7 +76,7 @@ export function makeWorld(seed: string, player: CellSpecies): WorldDef {
     const list = [sp];
     all.push(sp);
     // a few nations start with a second (rarely a third) mother cell nearby
-    const extra = r() < 0.06 ? 2 : r() < 0.27 ? 1 : 0;
+    const extra = r() < 0.05 ? 2 : r() < 0.2 ? 1 : 0;
     for (let e = 0, t = 0; e < extra && t < 30; t++) {
       const a = r() * Math.PI * 2, d = 480 + r() * 180, x = sp.x + Math.cos(a) * d, y = sp.y + Math.sin(a) * d;
       if (!free(x, y) || all.some(h => Math.hypot(h.x - x, h.y - y) < 460)) continue;
