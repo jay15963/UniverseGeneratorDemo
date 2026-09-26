@@ -5,13 +5,14 @@ import { CellGL, INST, View, Batch } from '../../lib/cell/gl';
 import type { Atlas, AtlasEntry } from '../../lib/cell/atlas';
 import { WorldDef, WORLD, BIO, BIO_N } from '../../lib/cell/world';
 import { KINDS, Kind, CellSpecies, teamColour } from '../../lib/cell/look';
-import { STRIDE, Cmd, Stats, NEUTRAL_SET, ColonyInfo, NODE_GAP } from '../../lib/cell/sim';
+import { STRIDE, Cmd, Stats, NEUTRAL_SET, ColonyInfo, NODE_GAP, VIS, VIS_N, structGap } from '../../lib/cell/sim';
 
 interface Frame { ents: Float32Array; n: number; t: number }
 export interface Selection { ids: number[]; counts: number[]; stance: number; workers: number; colony: number; seeds: number }
 export interface HudState {
   stats: Stats | null; goals: Record<string, boolean>; sel: Selection; paused: boolean; speed: number;
-  placing: boolean; hover: string | null; fps: number; colonies: ColonyInfo[]; zoom: number; active: number;
+  /** placement mode: the kind being placed (node, photosynthesiser, sentinel) or -1; cloud: aiming a toxin cloud */
+  placing: number; cloud: boolean; hover: string | null; fps: number; colonies: ColonyInfo[]; zoom: number; active: number;
 }
 const hexRgb = (h: string): [number, number, number] => { const v = parseInt(h.slice(1), 16); return [(v >> 16) & 255, (v >> 8) & 255, v & 255]; };
 const ZOOMS = [0.1, 0.13, 0.17, 0.22, 0.28, 0.36, 0.46, 0.6, 0.78, 1, 2];
@@ -32,7 +33,8 @@ export class CellEngine {
   keys = new Set<string>();
   stats: Stats | null = null; goals: Record<string, boolean> = {};
   paused = false; speed = 1;
-  placing = false;
+  placing = -1; cloudMode = false;
+  vis = new Uint8Array(VIS_N * VIS_N); met = new Uint8Array(256);
   drag: { x0: number; y0: number; x1: number; y1: number; add: boolean } | null = null;
   pan: { x: number; y: number; cx: number; cy: number } | null = null;
   mouse = { x: 0, y: 0, in: false };
@@ -84,13 +86,18 @@ export class CellEngine {
 
   // --- data from the simulation ---------------------------------------------------------------------------------------------
   onFrame(m: { ents: Float32Array; n: number; motes: Float32Array; nm: number; shots: Float32Array; np: number; deaths: number[]; paused: boolean; speed: number;
-    bioOwn?: Uint8Array; bioStr?: Uint8Array; colonies?: Float32Array; stats?: Stats; goals?: Record<string, boolean> }) {
+    bioOwn?: Uint8Array; bioStr?: Uint8Array; colonies?: Float32Array; stats?: Stats; goals?: Record<string, boolean>; vis?: Uint8Array; met?: Uint8Array }) {
     this.prev = this.cur;
     this.cur = { ents: m.ents, n: m.n, t: performance.now() };
     this.motes = m.motes; this.nm = m.nm; this.shots = m.shots; this.np = m.np;
     this.paused = m.paused; this.speed = m.speed;
     if (m.bioOwn && m.bioStr) { this.gl.setBio(m.bioOwn, m.bioStr); this.bioOwn = m.bioOwn; this.miniDirty = true; }
     if (m.colonies) this.colonies = m.colonies;
+    if (m.vis && m.met) {
+      const newly = m.met.some((v, i) => v !== this.met[i]);
+      this.vis = m.vis; this.met = m.met; this.gl.setVis(m.vis, m.met);
+      if (newly) this.miniDirty = true;
+    }
     if (m.stats) {
       this.stats = m.stats; this.goals = m.goals ?? {};
       this.cols = m.stats.colonies;
@@ -99,10 +106,20 @@ export class CellEngine {
       if (!this.cols.some(c => c.id === this.activeCol)) this.activeCol = this.cols[0]?.id ?? -1;
       this.hud();
     }
-    for (let i = 0; i < m.deaths.length; i += 4) this.burst(m.deaths[i], m.deaths[i + 1], m.deaths[i + 2], m.deaths[i + 3]);
+    for (let i = 0; i < m.deaths.length; i += 4) {
+      const set = m.deaths[i + 2];
+      if (set > 0 && set < NEUTRAL_SET && !this.seen(m.deaths[i], m.deaths[i + 1])) continue;   // deaths in the fog stay unseen
+      this.burst(m.deaths[i], m.deaths[i + 1], set, m.deaths[i + 3]);
+    }
     // forget selected cells that died
     for (const [id, g] of this.sel) if (id >= m.n || m.ents[id * STRIDE + 7] !== g) this.sel.delete(id);
   }
+  /** is this spot in the player's sight (fog of war only hides other nations' cells) */
+  seen(x: number, y: number) {
+    const cx = Math.floor(x / VIS), cy = Math.floor(y / VIS);
+    return cx >= 0 && cy >= 0 && cx < VIS_N && cy < VIS_N && this.vis[cy * VIS_N + cx] > 0;
+  }
+  hidden(col: number, x: number, y: number) { return col > 0 && !this.seen(x, y); }
   burst(x: number, y: number, set: number, kind: number) {
     if (Math.hypot(x - this.view.x, y - this.view.y) > 2400) return;
     const sp = set < NEUTRAL_SET ? this.world.species[set] : null;
@@ -122,13 +139,16 @@ export class CellEngine {
   /** the colony the division bar works on (its dropdown; clicking a mother cell picks hers) */
   setColony(id: number) { this.activeCol = id; this.hud(); }
   train(k: Kind) {
-    if (k === Kind.NODE) { this.placing = !this.placing; this.hud(); return; }
+    if (k === Kind.NODE || k === Kind.PHOTO || k === Kind.SENTINEL) { this.placing = this.placing === k ? -1 : k; this.cloudMode = false; this.hud(); return; }
     this.cmd({ t: 'train', kind: k, colony: this.activeCol >= 0 ? this.activeCol : undefined });
   }
   cancel(i: number) { if (this.activeCol >= 0) this.cmd({ t: 'cancel', colony: this.activeCol, index: i }); }
   togglePause() { this.cmd({ t: 'pause', on: !this.paused }); }
   setSpeed(k: number) { this.cmd({ t: 'speed', k }); }
-  startPlacing() { this.placing = true; this.hud(); }
+  startPlacing() { this.placing = Kind.NODE; this.cloudMode = false; this.hud(); }
+  /** abilities of the selection */
+  cyst() { this.cmd({ t: 'cyst', ids: this.selIds() }); }
+  aimCloud() { this.cloudMode = !this.cloudMode; this.placing = -1; this.hud(); }
   focus(x: number, y: number) { this.view.x = x; this.view.y = y; }
   focusHome() { const c = this.cols.find(q => q.id === this.activeCol) ?? this.cols[0]; if (c) this.focus(c.x, c.y); }
   /** keep only the cells of one kind in the selection */
@@ -156,7 +176,7 @@ export class CellEngine {
   }
 
   selection(): Selection {
-    const counts = new Array(8).fill(0), f = this.cur;
+    const counts = new Array(16).fill(0), f = this.cur;
     let stance = -1, workers = 0, colony = -2, seeds = 0;
     if (f) for (const id of this.sel.keys()) {
       const o = id * STRIDE, k = f.ents[o + 3] % 16;
@@ -174,7 +194,7 @@ export class CellEngine {
     return { ids: this.selIds(), counts, stance, workers, colony, seeds };
   }
   hud() {
-    this.onHud({ stats: this.stats, goals: this.goals, sel: this.selection(), paused: this.paused, speed: this.speed, placing: this.placing, hover: this.hoverText(), fps: this.fps, colonies: this.cols, zoom: this.view.zoom, active: this.activeCol });
+    this.onHud({ stats: this.stats, goals: this.goals, sel: this.selection(), paused: this.paused, speed: this.speed, placing: this.placing, cloud: this.cloudMode, hover: this.hoverText(), fps: this.fps, colonies: this.cols, zoom: this.view.zoom, active: this.activeCol });
   }
   hoverText(): string | null {
     const f = this.cur, i = this.hover;
@@ -204,6 +224,7 @@ export class CellEngine {
       const o = i * STRIDE; if (f.ents[o + 7] < 0) continue;
       const k = f.ents[o + 3] % 16, col = f.ents[o + 4];
       if (filter && !filter(col, k)) continue;
+      if (this.hidden(col, this.rx[i], this.ry[i])) continue;
       const d = Math.hypot(this.rx[i] - wx, this.ry[i] - wy) - KINDS[k].r;
       if (d < slack && d < bd) { bd = d; best = i; }
     }
@@ -221,9 +242,11 @@ export class CellEngine {
       el.setPointerCapture(e.pointerId);
       const x = e.offsetX, y = e.offsetY;
       if (e.button === 1 || (e.button === 0 && e.altKey)) { this.pan = { x, y, cx: this.view.x, cy: this.view.y }; return; }
-      if (e.button === 2) { if (this.placing) { this.placing = false; this.hud(); return; } this.order(x, y); return; }
+      if (e.button === 2) { if (this.placing >= 0 || this.cloudMode) { this.placing = -1; this.cloudMode = false; this.hud(); return; } this.order(x, y); return; }
       if (e.button === 0) {
-        if (this.placing) { this.placeNode(x, y); return; }
+        if (this.placing === Kind.NODE) { this.placeNode(x, y); return; }
+        if (this.placing >= 0) { this.placeStruct(x, y, e.shiftKey); return; }
+        if (this.cloudMode) { this.castCloud(x, y); return; }
         const b = this.badges.find(q => x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h);
         if (b) { this.selectColony(b.id, e.shiftKey); return; }
         this.drag = { x0: x, y0: y, x1: x, y1: y, add: e.shiftKey };
@@ -255,9 +278,13 @@ export class CellEngine {
       const k = e.key.toLowerCase();
       this.keys.add(k);
       if (k === ' ') { e.preventDefault(); this.togglePause(); }
-      else if (k === 'escape') { if (this.placing) this.placing = false; else this.sel.clear(); this.hud(); }
+      else if (k === 'escape') { if (this.placing >= 0 || this.cloudMode) { this.placing = -1; this.cloudMode = false; } else this.sel.clear(); this.hud(); }
       else if (k === 'h') this.selectMother();
       else if (k === 'n' || k === 'b') this.startPlacing();
+      else if (k === 'f') this.train(Kind.PHOTO);
+      else if (k === 't') this.train(Kind.SENTINEL);
+      else if (k === 'c') this.cyst();
+      else if (k === 'x') this.aimCloud();
       else if (/^[1-9]$/.test(k)) {
         // 1..9: the colonies in order (twice quickly: jump there)
         const n = +k, c = this.cols[n - 1];
@@ -333,7 +360,35 @@ export class CellEngine {
     // the nearest worker of the active colony swims there and settles (the simulation picks it)
     this.cmd({ t: 'nodeAt', x: wx, y: wy, colony: this.activeCol >= 0 ? this.activeCol : undefined });
     this.pings.push({ x: wx, y: wy, t: 0, c: '#a78bfa' });
-    this.placing = false; this.hud();
+    this.placing = -1; this.hud();
+  }
+  /** a photosynthesiser / sentinel: the colony divides it and it swims to the spot (shift keeps the mode on) */
+  placeStruct(sx: number, sy: number, keep: boolean) {
+    const [wx, wy] = this.toWorld(sx, sy), k = this.placing as Kind;
+    this.cmd({ t: 'place', kind: k, x: wx, y: wy, colony: this.activeCol >= 0 ? this.activeCol : undefined });
+    this.pings.push({ x: wx, y: wy, t: 0, c: k === Kind.SENTINEL ? '#fca5a5' : '#86efac' });
+    if (!keep) this.placing = -1;
+    this.hud();
+  }
+  castCloud(sx: number, sy: number) {
+    const [wx, wy] = this.toWorld(sx, sy);
+    this.cmd({ t: 'cloud', ids: this.selIds(), x: wx, y: wy });
+    this.pings.push({ x: wx, y: wy, t: 0, c: '#bef264' });
+    this.cloudMode = false; this.hud();
+  }
+  /** mirror of the simulation's placeOk (inside the own biofilm, clear of rocks and other structures) */
+  structOk(k: Kind, wx: number, wy: number) {
+    const f = this.cur;
+    if (!f || !this.bioOwn) return false;
+    const bx = Math.floor(wx / BIO), by = Math.floor(wy / BIO);
+    if (bx < 0 || by < 0 || bx >= BIO_N || by >= BIO_N || this.bioOwn[by * BIO_N + bx] !== 0) return false;
+    for (const r of this.world.rocks) if ((r.x - wx) ** 2 + (r.y - wy) ** 2 < (r.r + 14) ** 2) return false;
+    for (let i = 0; i < f.n; i++) {
+      const o = i * STRIDE; if (f.ents[o + 7] < 0) continue;
+      const g = structGap(k, f.ents[o + 3] % 16);
+      if (g > 0 && (this.rx[i] - wx) ** 2 + (this.ry[i] - wy) ** 2 < g * g) return false;
+    }
+    return true;
   }
   /** can a node go here? touches the own biofilm, NODE_GAP from every node / colony (any nation) */
   nodeOk(wx: number, wy: number) {
@@ -429,6 +484,7 @@ export class CellEngine {
       this.rx[i] = x; this.ry[i] = y; this.ra[i] = ang;
       if (Math.abs(x - v.x) > hw || Math.abs(y - v.y) > hh || n >= 19990) continue;
       const col = f.ents[o + 4], flags = f.ents[o + 6];
+      if (this.hidden(col, x, y)) continue;   // fog of war: other nations' cells only where the player sees
       const e = this.atlas.bySprite[f.ents[o + 3]];
       if (!e) continue;
       if (dots) {
@@ -442,6 +498,8 @@ export class CellEngine {
       }
       let tr = 0, tg = 0, tb = 0, amt = 0;
       if (flags & 2) { tr = 1; tg = 1; tb = 1; amt = 0.55; }
+      else if (flags & 512) { tr = 0.62; tg = 0.52; tb = 0.36; amt = 0.55; }                      // cyst: a brown dormant shell
+      else if (flags & 1024) { tr = 0.7; tg = 0.15; tb = 0.85; amt = 0.3 + 0.2 * Math.sin(t * 5 + i); }   // infected: pulsing violet
       else if (flags & 4) { tr = 0.25; tg = 0.2; tb = 0.18; amt = 0.25 + 0.15 * Math.sin(t * 6 + i); }
       const fps = k === Kind.NODE || k === Kind.MOTHER ? 4 : k === Kind.DIATOM ? 1 : 8;
       this.put(a, n++, x, y, ang, 1, e, (i * 0.37) % 1, fps, tr, tg, tb, amt, 1);
@@ -456,7 +514,11 @@ export class CellEngine {
         this.put(mb, nm++, x, y, 0, 1, e, (i * 0.13) % 1, 3, 0, 0, 0, 0, 1);
       }
       const te = this.atlas.entries.get('toxin')!;
-      for (let i = 0; i < this.np && nm < 8990; i++) this.put(mb, nm++, this.shots[i * 3], this.shots[i * 3 + 1], this.shots[i * 3 + 2], 1, te, 0, 0, 0, 0, 0, 0, 1);
+      for (let i = 0; i < this.np && nm < 8990; i++) {
+        const x = this.shots[i * 3], y = this.shots[i * 3 + 1];
+        if (!this.seen(x, y)) continue;
+        this.put(mb, nm++, x, y, this.shots[i * 3 + 2], 1, te, 0, 0, 0, 0, 0, 0, 1);
+      }
     }
     // death sparks
     const fb = this.buf.fx;
@@ -509,7 +571,7 @@ export class CellEngine {
       if (z >= 0.46) for (let i = 0; i < f.n; i++) {
         const o = i * STRIDE; if (f.ents[o + 7] < 0 || this.sel.has(i)) continue;
         const hp = f.ents[o + 5];
-        if (hp >= 0.999 || f.ents[o + 4] < 0) continue;
+        if (hp >= 0.999 || f.ents[o + 4] < 0 || this.hidden(f.ents[o + 4], this.rx[i], this.ry[i])) continue;
         const [sx, sy] = this.toScreen(this.rx[i], this.ry[i]);
         if (sx < -20 || sy < -20 || sx > this.w + 20 || sy > this.h + 20) continue;
         const r = KINDS[f.ents[o + 3] % 16].r * k + 3;
@@ -530,7 +592,7 @@ export class CellEngine {
       const shown: [number, number, number][] = [];
       for (let i = 0; i < this.colonies.length / 4; i++) {
         const o = i * 4, nat = this.colonies[o + 2];
-        if (!this.colonies[o + 3]) continue;
+        if (!this.colonies[o + 3] || (nat > 0 && !this.met[nat])) continue;
         const [sx, sy] = this.toScreen(this.colonies[o], this.colonies[o + 1]);
         if (sx < -80 || sy < -20 || sx > this.w + 80 || sy > this.h + 20) continue;
         if (shown.some(q => q[2] === nat && Math.hypot(q[0] - sx, q[1] - sy) < (nat === 0 ? 90 : 260))) continue;
@@ -562,6 +624,26 @@ export class CellEngine {
         this.badges.push({ x: bx, y: by, w: tw, h: bh, id: g.id });
       }
     }
+    // pool events (areas) and toxin clouds
+    const st = this.stats;
+    if (st) {
+      for (const e of st.events) {
+        if (!e.r) continue;
+        const [sx, sy] = this.toScreen(e.x, e.y), R = e.r * k;
+        if (sx < -R || sy < -R || sx > this.w + R || sy > this.h + R) continue;
+        const col = EVENT_COL[e.kind];
+        c.strokeStyle = col; c.lineWidth = 2; c.setLineDash([10, 6]); c.globalAlpha = 0.55 + 0.25 * Math.sin(t * 3);
+        c.beginPath(); c.arc(sx, sy, R, 0, Math.PI * 2); c.stroke(); c.setLineDash([]); c.globalAlpha = 1;
+        c.font = '700 12px ui-sans-serif, system-ui'; c.textAlign = 'center'; c.fillStyle = col;
+        c.fillText(e.name, sx, sy - R - 6);
+      }
+      for (const q of st.clouds) {
+        const [sx, sy] = this.toScreen(q.x, q.y), R = q.r * k;
+        const g = c.createRadialGradient(sx, sy, 0, sx, sy, R);
+        g.addColorStop(0, q.nation === 0 ? 'rgba(190,242,100,0.45)' : 'rgba(244,114,182,0.45)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = g; c.beginPath(); c.arc(sx, sy, R, 0, Math.PI * 2); c.fill();
+      }
+    }
     // order pings
     this.pings = this.pings.filter(q => (q.t += dt) < 0.6);
     for (const q of this.pings) {
@@ -570,7 +652,14 @@ export class CellEngine {
       c.beginPath(); c.arc(sx, sy, r, 0, Math.PI * 2); c.stroke(); c.globalAlpha = 1;
     }
     // node placement: every biofilm's keep-out range (own violet, foreign red) and the ghost
-    if (this.placing && f) {
+    if (this.placing >= 0 && this.placing !== Kind.NODE && f) this.drawPlaceStruct(c, f, k);
+    if (this.cloudMode && this.mouse.in) {
+      c.strokeStyle = 'rgba(190,242,100,0.8)'; c.fillStyle = 'rgba(190,242,100,0.15)'; c.lineWidth = 1.5; c.setLineDash([5, 4]);
+      c.beginPath(); c.arc(this.mouse.x, this.mouse.y, 70 * k, 0, Math.PI * 2); c.fill(); c.stroke(); c.setLineDash([]);
+      c.font = '600 11px ui-sans-serif, system-ui'; c.textAlign = 'center'; c.fillStyle = '#d9f99d';
+      c.fillText('Clique: nuvem de toxina (a secretora selecionada mais próxima, até 420)', this.mouse.x, this.mouse.y - 70 * k - 8);
+    }
+    if (this.placing === Kind.NODE && f) {
       const R = NODE_GAP * k;
       for (let i = 0; i < f.n; i++) {
         const o = i * STRIDE; if (f.ents[o + 7] < 0) continue;
@@ -603,6 +692,33 @@ export class CellEngine {
     }
     void t;
   }
+  /** photosynthesiser / sentinel placement: keep-out ranges of the same kind, the ghost and (sentinels) the firing range */
+  drawPlaceStruct(c: CanvasRenderingContext2D, f: Frame, k: number) {
+    const kind = this.placing as Kind;
+    c.lineWidth = 1; c.setLineDash([4, 4]);
+    for (let i = 0; i < f.n; i++) {
+      const o = i * STRIDE; if (f.ents[o + 7] < 0 || f.ents[o + 4] !== 0) continue;
+      const kd = f.ents[o + 3] % 16, gap = structGap(kind, kd) * k;
+      if (!gap) continue;
+      const [sx, sy] = this.toScreen(this.rx[i], this.ry[i]);
+      if (sx < -gap || sy < -gap || sx > this.w + gap || sy > this.h + gap) continue;
+      c.strokeStyle = 'rgba(248,113,113,0.55)';
+      c.beginPath(); c.arc(sx, sy, gap, 0, Math.PI * 2); c.stroke();
+      if (kd === Kind.SENTINEL) { c.strokeStyle = 'rgba(252,165,165,0.25)'; c.beginPath(); c.arc(sx, sy, KINDS[Kind.SENTINEL].range * k, 0, Math.PI * 2); c.stroke(); }
+    }
+    c.setLineDash([]);
+    if (!this.mouse.in) return;
+    const [wx, wy] = this.toWorld(this.mouse.x, this.mouse.y), ok = this.structOk(kind, wx, wy);
+    const col = ok ? '74,222,128' : '248,113,113';
+    if (kind === Kind.SENTINEL) {
+      c.strokeStyle = `rgba(${col},0.5)`; c.fillStyle = `rgba(${col},0.06)`; c.lineWidth = 1.5;
+      c.beginPath(); c.arc(this.mouse.x, this.mouse.y, KINDS[Kind.SENTINEL].range * k, 0, Math.PI * 2); c.fill(); c.stroke();
+    }
+    c.fillStyle = `rgba(${col},0.5)`;
+    c.beginPath(); c.arc(this.mouse.x, this.mouse.y, Math.max(5, KINDS[kind].r * 1.4 * k), 0, Math.PI * 2); c.fill();
+    c.font = '600 11px ui-sans-serif, system-ui'; c.textAlign = 'center'; c.fillStyle = ok ? '#bbf7d0' : '#fecaca';
+    c.fillText(ok ? `Clique para colocar a ${KINDS[kind].name} (Shift: várias)` : 'Precisa ficar dentro do seu biofilme e longe de outras estruturas', this.mouse.x, this.mouse.y - Math.max(14, 14 * k) - 6);
+  }
   hpBar(c: CanvasRenderingContext2D, x: number, y: number, w: number, hp: number, col?: string) {
     c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(x - w / 2 - 1, y - 1, w + 2, 4);
     c.fillStyle = col ?? (hp > 0.6 ? '#4ade80' : hp > 0.3 ? '#facc15' : '#f87171');
@@ -615,7 +731,7 @@ export class CellEngine {
     const own = this.bioOwn;
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
       const i = (y * N + x) * 4, o = own ? own[(y * 2) * BIO_N + x * 2] : 255;
-      if (o !== 255) { const p = this.palette[o]; img.data[i] = p[0] * 0.8; img.data[i + 1] = p[1] * 0.8; img.data[i + 2] = p[2] * 0.8; }
+      if (o !== 255 && (o === 0 || this.met[o])) { const p = this.palette[o]; img.data[i] = p[0] * 0.8; img.data[i + 1] = p[1] * 0.8; img.data[i + 2] = p[2] * 0.8; }
       else { img.data[i] = 10; img.data[i + 1] = 30; img.data[i + 2] = 38; }
       img.data[i + 3] = 255;
     }
@@ -637,9 +753,16 @@ export class CellEngine {
     // colonies
     for (let i = 0; i < this.colonies.length / 4; i++) {
       const o = i * 4, nat = this.colonies[o + 2];
+      if (nat > 0 && !this.met[nat]) continue;
       c.fillStyle = nat === 0 ? '#ffffff' : this.paletteCss[nat];
       const r = nat === 0 ? 3 : 2;
       c.fillRect(this.colonies[o] * s - r / 2, this.colonies[o + 1] * s - r / 2, r, r);
+    }
+    // pool events
+    if (this.stats) for (const e of this.stats.events) {
+      if (!e.r) continue;
+      c.strokeStyle = EVENT_COL[e.kind]; c.lineWidth = 1.5;
+      c.beginPath(); c.arc(e.x * s, e.y * s, Math.max(3, e.r * s), 0, Math.PI * 2); c.stroke();
     }
     // selected cells
     const f = this.cur;
@@ -657,6 +780,8 @@ export class CellEngine {
     this.gl.dispose();
   }
 }
+
+const EVENT_COL: Record<string, string> = { bloom: '#fde047', toxic: '#a3e635', current: '#7dd3fc', heat: '#fb923c', plague: '#e879f9' };
 
 function hashf(x: number, y: number) {
   let h = (x | 0) * 374761393 + (y | 0) * 668265263;

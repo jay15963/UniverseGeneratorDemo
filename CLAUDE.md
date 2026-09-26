@@ -331,6 +331,28 @@ Owner's rules - keep them:
   weak nations accept readily), symbiosis after 45 s of peace and relation 40 (trade +0.4 food/energy/s both ways and
   each can eat/heal in the other's biofilm), endosymbiosis after 90 s of symbiosis and relation 60 (the partner
   becomes an organelle: its gene + mitochondria: +50% energy, faster division). Attacking a partner breaks the pact.
-- **Multicellular**: endosymbiosis + 3 genes + 60 cells -> "Evoluir para multicelular": the colony's make-up decides
+- **Multicellular**: endosymbiosis + 3 genes + 60 cells + the Multicelularidade research -> "Evoluir para multicelular": the colony's make-up decides
   the body (hunters/spitters -> predator diet, photosynthesisers -> gentle, armour -> size), saved with the species
   (`CellSpecies.evolved`) and previewed as the aquatic larva of the creature generator.
+- **Fog of war** (`sim.ts` `updateVision`, `VIS` 64 px grid sent as `vis`): only other nations' cells are hidden outside
+  the player's sight; nutrients and wildlife (and the future titans) are always visible. The fog is a light dithered
+  darkening (`gl.ts` fog pass). A species' name, colour and whole territory appear only once one of its cells has been
+  seen (`met`: palette alpha in the biofilm shader, minimap, labels, species panel), so the pool looks empty at first;
+  a discovery gives +3 DNA.
+- **Energy is the upkeep**: every cell burns `KINDS[k].upkeep` energy per second (never nutrients); at zero energy the
+  cells start dying. The HUD shows stock / cap, +income -upkeep and the net per second. Stocks have caps (colonies,
+  nodes and photosynthesisers raise them).
+- **Photosynthesisers and Sentinels are placed structures** (`PLACED`, keys F / T): picked on the map inside the own
+  biofilm (`place` cmd, `structGap` keep-outs), the colony divides them and they swim there and root. The Sentinel is
+  a guard tower shooting farther than the Secretora. The AI places photos when its energy balance is thin and
+  sentinels around its photos / nodes / mothers (`aiSpot`).
+- **Evolution tree** (`look.ts` `TECHS`, 5 branches, panel "Evolução") paid with DNA (engulfed / killed cells, amoebas
+  and diatoms are rich, discoveries) + energy; each stolen gene makes DNA costs cheaper. Unlocks (Encouraçada,
+  Sentinela, Secretora), abilities (Cisto - still, armoured, no upkeep; Nuvem de toxina from secretoras) and
+  Multicelularidade (needed to evolve). The AI researches too.
+- **Pool events** (`startEvent`, every ~2-4 min): algal bloom, toxic tide, current shift, vent heat wave and the
+  **viral plague** (20 s incubation, spreads to neighbours, bursts; structures pull through; Imunidade antiviral).
+- **Active AI diplomacy**: AI species offer peace / symbiosis and demand tributes (Aceitar / Recusar cards, 30 s;
+  ignoring = refusing; a refused tribute sends them to war), make and break pacts among themselves and gang up on a
+  player grown far stronger than everyone (coalition).
+- Next round (agreed with the owner): **titans** (giant, always-visible organisms) get a round of their own.

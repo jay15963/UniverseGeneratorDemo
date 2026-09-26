@@ -155,7 +155,7 @@ function glowDots(rig: Rig, c: Ctx) {
 }
 
 // --- kinds -------------------------------------------------------------------------------------------------------------
-const KIND_R: Record<number, number> = { [Kind.WORKER]: 1, [Kind.SCOUT]: 0.82, [Kind.HUNTER]: 1.25, [Kind.PHOTO]: 1.05, [Kind.ARMOR]: 1.3, [Kind.SPITTER]: 1.1, [Kind.MOTHER]: 2.3, [Kind.NODE]: 1.35 };
+const KIND_R: Record<number, number> = { [Kind.WORKER]: 1, [Kind.SCOUT]: 0.82, [Kind.HUNTER]: 1.25, [Kind.PHOTO]: 1.05, [Kind.ARMOR]: 1.3, [Kind.SPITTER]: 1.1, [Kind.MOTHER]: 2.3, [Kind.NODE]: 1.35, [Kind.SENTINEL]: 1.45 };
 export const baseRadius = (look: CellLook) => 7 + look.size * 5;
 
 function buildKind(rig: Rig, sp: CellSpecies, kind: Kind, ph: number) {
@@ -166,6 +166,7 @@ function buildKind(rig: Rig, sp: CellSpecies, kind: Kind, ph: number) {
   if (kind === Kind.ARMOR) { over.membrane = Math.min(1, L.membrane + 0.4); over.wobble = L.wobble * 0.4; }
   if (kind === Kind.MOTHER) { over.elongation = L.elongation * 0.35; }
   if (kind === Kind.NODE) { over.elongation = 0; over.shape = 'star'; }
+  if (kind === Kind.SENTINEL) { over.elongation = L.elongation * 0.2; over.membrane = Math.min(1, L.membrane + 0.3); over.eyespot = Math.max(0.8, L.eyespot); }
   const c = makeCtx(sp, R, ph, over);
   const look = c.look;
   const nCilia = look.cilia > 0.02 ? Math.round(10 + look.cilia * 26) : 0, ciliaLen = 1.4 + look.ciliaLength * 2.6;
@@ -173,7 +174,7 @@ function buildKind(rig: Rig, sp: CellSpecies, kind: Kind, ph: number) {
 
   // behind the body
   if (kind === Kind.SCOUT) flagella(rig, c, Math.max(1, Math.round(look.flagella)) + 1, flagLen * 1.35);
-  else if (kind !== Kind.NODE && kind !== Kind.MOTHER) flagella(rig, c, Math.round(look.flagella), flagLen);
+  else if (kind !== Kind.NODE && kind !== Kind.MOTHER && kind !== Kind.SENTINEL) flagella(rig, c, Math.round(look.flagella), flagLen);
   if (kind === Kind.MOTHER) {
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * TAU + c.rr[6], [x, y] = rimPt(c, a, 0.9);
@@ -190,7 +191,14 @@ function buildKind(rig: Rig, sp: CellSpecies, kind: Kind, ph: number) {
   if (nCilia && kind !== Kind.ARMOR) cilia(rig, c, kind === Kind.MOTHER ? Math.max(40, nCilia) : nCilia, ciliaLen);
   if (kind === Kind.WORKER) cilia(rig, c, 7, 1.6 + look.ciliaLength * 1.4, -0.7, 0.7);
   if (kind === Kind.MOTHER && !nCilia) cilia(rig, c, 40, 1.8);
-  if (look.spikes > 0.03 && kind !== Kind.NODE) spikes(rig, c, Math.round(3 + look.spikes * 8), 1 + look.spikes * 3);
+  if (kind === Kind.SENTINEL) {
+    // a crown of long guard spines and a spine launcher pointing forward (it recoils on the loop)
+    spikes(rig, c, 12, R * 0.55);
+    const rec = Math.max(0, Math.sin(ph)) * R * 0.12, [lx, ly] = rimPt(c, 0, 0.85);
+    rig.c(lx - rec, ly, lx + R * 0.95 - rec, ly, R * 0.3, R * 0.17, c.mem, { g: 1 });
+    rig.c(lx + R * 0.5 - rec, ly, lx + R * 0.95 - rec, ly, R * 0.1, R * 0.08, c.memDark);
+    rig.p([lx + R * 0.9 - rec, ly - R * 0.11, lx + R * 1.35 - rec, ly, lx + R * 0.9 - rec, ly + R * 0.11], c.pale);
+  } else if (look.spikes > 0.03 && kind !== Kind.NODE) spikes(rig, c, Math.round(3 + look.spikes * 8), 1 + look.spikes * 3);
   if (kind === Kind.HUNTER) {
     // pseudopods: lobes of the membrane reaching forward, melted into the body
     for (let i = 0; i < 3; i++) {

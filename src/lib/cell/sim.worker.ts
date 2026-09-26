@@ -30,7 +30,7 @@ ctx.onmessage = (ev: MessageEvent<In>) => {
   else if (m.t === 'stop') { clearTimeout(timer); sim = null; close(); }
 };
 
-let lastBio = -1, lastCol = -1, lastStats = -1;
+let lastBio = -1, lastCol = -1, lastStats = -1, lastVis = -1;
 function send() {
   const s = sim!;
   const now = performance.now() / 1000;
@@ -41,6 +41,12 @@ function send() {
     s.bioDirty = false; lastBio = now;
     const own = s.bOwn.slice(), str = s.bStr.slice();
     out.bioOwn = own; out.bioStr = str; tr.push(own.buffer, str.buffer);
+  }
+  // fog of war + which species the player has discovered (their territory and names show only then)
+  if (s.visDirty && now - lastVis > 0.25) {
+    s.visDirty = false; lastVis = now;
+    const vis = s.vis.slice(), met = s.met.slice();
+    out.vis = vis; out.met = met; tr.push(vis.buffer, met.buffer);
   }
   if (now - lastCol >= 1 || lastCol < 0) { lastCol = now; const c = s.colonyTable(); out.colonies = c; tr.push(c.buffer); }
   if (now - lastStats >= 0.2 || lastStats < 0) { lastStats = now; out.stats = s.stats(); out.goals = { ...s.goals }; }

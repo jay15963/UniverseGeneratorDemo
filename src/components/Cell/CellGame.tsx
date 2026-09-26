@@ -3,11 +3,12 @@
 // colonies and their cells (top right), the division bar of the chosen colony, selection and stances (delegation), objectives,
 // minimap.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Pause, Play, FastForward, Home, Target, HelpCircle, X, CheckCircle2, Circle, Sprout, Zap, Users, Hexagon, Trophy, Skull, CircleDot, ChevronDown, Dna } from 'lucide-react';
-import { CellSpecies, KINDS, Kind, TRAINABLE, ROLE, saveSpecies } from '../../lib/cell/look';
+import { ArrowLeft, Pause, Play, FastForward, Home, Target, HelpCircle, X, CheckCircle2, Circle, Sprout, Zap, Users, Hexagon, Trophy, Skull, CircleDot, ChevronDown, Dna, FlaskConical, Lock, Shield, Wind } from 'lucide-react';
+import { CellSpecies, KINDS, Kind, TRAINABLE, ROLE, saveSpecies, SPECIES_KINDS, LOCKED, TECHS } from '../../lib/cell/look';
 import { makeGenome, Stage, DEFAULT_PARAMS } from '../../lib/creature/genome';
 import { renderCreature } from '../../lib/creature/render';
 import { SpeciesPanel } from './SpeciesPanel';
+import { TechPanel } from './TechPanel';
 import { makeWorld, WorldDef } from '../../lib/cell/world';
 import { buildAtlas, atlasJobs, Atlas, LAYER } from '../../lib/cell/atlas';
 import { STANCES, GRACE, COLONY_GAP, NODE_GAP } from '../../lib/cell/sim';
@@ -18,7 +19,7 @@ interface Props { species: CellSpecies; onExit: () => void; onRestart: () => voi
 const GOALS: [string, string][] = [
   ['food', 'Acumule 200 nutrientes'],
   ['divide', 'Divida a célula-mãe para criar uma célula'],
-  ['photo', 'Leve uma fotossintética a um feixe de luz dentro do biofilme'],
+  ['photo', 'Coloque uma fotossintética sob um feixe de luz dentro do biofilme'],
   ['node', 'Fixe um nódulo de biofilme (botão Nódulo na barra de divisão)'],
   ['colony', 'Funde uma nova colônia (divida uma célula-mãe e leve-a a um espaço livre)'],
   ['gene', 'Roube um gene: engula células de outra espécie com fagócitas'],
@@ -37,13 +38,16 @@ const STANCE_HINT = [
 const TIP_NOTE: Partial<Record<Kind, string>> = {
   [Kind.WORKER]: 'Não luta: foge dos inimigos e só coleta. É a coletora que cria biofilme: use o botão Nódulo e a coletora mais próxima da colônia vai até o ponto e se transforma.',
   [Kind.NODE]: `Entra no modo de posicionamento: clique na borda do seu biofilme. Não pode ficar a menos de ${NODE_GAP} de outro nódulo ou colônia, nem de inimigos - os alcances aparecem no mapa. Expande o território e dá +6 de população.`,
-  [Kind.PHOTO]: 'Fica parada no biofilme gerando energia. Sob um feixe de luz, gera o dobro.',
+  [Kind.PHOTO]: 'Estrutura (F): clique no mapa, dentro do seu biofilme, onde ela deve se fixar. Não custa manutenção e gera energia; sob um feixe de luz, o dobro. Shift: colocar várias.',
+  [Kind.SENTINEL]: 'Estrutura (T): clique no mapa, dentro do seu biofilme. Atira de longe (270) em tudo que chega perto: proteja fotossintéticas, nódulos e colônias.',
   [Kind.MOTHER]: `Nasce solta: selecione e clique com o botão direito num espaço livre a ${COLONY_GAP}+ de outras células-mãe (fora de biofilme estrangeiro). Ao parar, ela se fixa e vira uma nova colônia (+8 de população).`,
   [Kind.SCOUT]: 'Rápida e com reserva maior: ótima para achar nutrientes, luz e espaços livres.',
 };
-const ORDER: Kind[] = [Kind.MOTHER, Kind.NODE, Kind.WORKER, Kind.PHOTO, Kind.SCOUT, Kind.HUNTER, Kind.SPITTER, Kind.ARMOR];
+const ORDER: Kind[] = [Kind.MOTHER, Kind.NODE, Kind.WORKER, Kind.PHOTO, Kind.SENTINEL, Kind.SCOUT, Kind.HUNTER, Kind.SPITTER, Kind.ARMOR];
 /** the division bar: the node sits next to the worker that becomes it */
-const BAR: Kind[] = [Kind.WORKER, Kind.NODE, Kind.SCOUT, Kind.PHOTO, Kind.HUNTER, Kind.SPITTER, Kind.ARMOR, Kind.MOTHER];
+const BAR: Kind[] = [Kind.WORKER, Kind.NODE, Kind.PHOTO, Kind.SENTINEL, Kind.SCOUT, Kind.HUNTER, Kind.SPITTER, Kind.ARMOR, Kind.MOTHER];
+const PLACE_KINDS: Kind[] = [Kind.NODE, Kind.PHOTO, Kind.SENTINEL];
+const fmt = (v: number) => (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(1));
 
 export function CellGame({ species, onExit, onRestart }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -59,7 +63,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
   const [wonSeen, setWonSeen] = useState(false);
   const [atlas, setAtlas] = useState<Atlas | null>(null);
   const [tip, setTip] = useState<{ k: Kind; x: number } | null>(null);
-  const [panel, setPanel] = useState(false);
+  const [panel, setPanel] = useState<'' | 'species' | 'tech'>('');
   const [world, setWorld] = useState<WorldDef | null>(null);
   const worldSeed = useMemo(() => Math.random().toString(36).slice(2, 8), []);
 
@@ -100,7 +104,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
   const thumbs = useMemo(() => {
     if (!atlas) return {} as Record<number, string>;
     const out: Record<number, string> = {};
-    for (let k = 0; k < 8; k++) {
+    for (let k = 0; k < SPECIES_KINDS; k++) {
       const e = atlas.bySprite[k];
       if (!e) continue;
       const c = document.createElement('canvas'); c.width = e.w; c.height = e.h;
@@ -153,7 +157,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
   return (
     <div className="fixed inset-0 bg-[#031016] text-white font-sans overflow-hidden select-none">
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
-      <canvas ref={overlayRef} className="absolute inset-0 w-full h-full cursor-crosshair" style={{ cursor: hud?.placing ? 'copy' : undefined }} />
+      <canvas ref={overlayRef} className="absolute inset-0 w-full h-full cursor-crosshair" style={{ cursor: hud && (hud.placing >= 0 || hud.cloud) ? 'copy' : undefined }} />
 
       {phase !== 'play' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#031016] z-50">
@@ -177,8 +181,15 @@ export function CellGame({ species, onExit, onRestart }: Props) {
             </div>
           </div>
           <div className="pointer-events-auto flex items-center gap-1 sm:gap-3 px-3 py-1.5 rounded-xl bg-black/65 border border-white/10 text-sm font-mono">
-            <Res icon={<Sprout className="w-4 h-4 text-yellow-300" />} v={Math.floor(st.food)} title="Nutrientes (as coletoras trazem para o biofilme)" />
-            <Res icon={<Zap className="w-4 h-4 text-cyan-300" />} v={Math.floor(st.energy)} title="Energia (fotossintéticas e as células-mãe produzem)" />
+            <Res icon={<Sprout className="w-4 h-4 text-yellow-300" />} v={<>{Math.floor(st.food)}<span className="text-neutral-500 text-[10px]">/{st.foodCap}</span> <span className="text-[10px] text-emerald-300">+{fmt(st.foodRate)}</span></>}
+              title={`Nutrientes: as coletoras trazem para o biofilme. Estoque máximo ${st.foodCap} (cresce com colônias e nódulos). +${fmt(st.foodRate)}/s agora.`} warn={st.food >= st.foodCap - 1} />
+            <span title={`Energia: fotossintéticas e células-mãe produzem +${fmt(st.energyIn)}/s; a manutenção das células gasta -${fmt(st.energyOut)}/s. Estoque máximo ${st.energyCap}. Sem energia as células começam a morrer.`}
+              className={`flex items-center gap-1 ${st.energy < 5 && st.energyIn < st.energyOut ? 'text-red-300 animate-pulse' : 'text-neutral-100'}`}>
+              <Zap className="w-4 h-4 text-cyan-300" />{Math.floor(st.energy)}<span className="text-neutral-500 text-[10px]">/{st.energyCap}</span>
+              <span className="text-[10px] text-emerald-300">+{fmt(st.energyIn)}</span><span className="text-[10px] text-red-300">-{fmt(st.energyOut)}</span>
+              <span className={`text-[10px] font-bold ${st.energyIn - st.energyOut >= 0 ? 'text-emerald-200' : 'text-red-300'}`}>({st.energyIn - st.energyOut >= 0 ? '+' : ''}{fmt(st.energyIn - st.energyOut)}/s)</span>
+            </span>
+            <Res icon={<Dna className="w-4 h-4 text-violet-300" />} v={st.dna.toFixed(1)} title="DNA: paga as pesquisas da árvore de evolução" />
             <Res icon={<Users className="w-4 h-4 text-emerald-300" />} v={`${st.pop}/${st.cap}`} title="População / limite: +8 por colônia, +6 por nódulo" warn={st.pop >= st.cap} />
             <Res icon={<CircleDot className="w-4 h-4 text-amber-200" />} v={st.ncol} title="Colônias (células-mãe fixadas)" />
             <Res icon={<Hexagon className="w-4 h-4 text-violet-300" />} v={st.nodes} title="Nódulos de biofilme" />
@@ -190,7 +201,10 @@ export function CellGame({ species, onExit, onRestart }: Props) {
           </div>
           <div className="pointer-events-auto flex gap-2 items-center">
             <span className="hidden sm:inline text-[10px] font-mono text-emerald-300/80 bg-black/50 rounded px-2 py-1" title="FPS do motor (1000 / ms de CPU por quadro)">{hud!.fps} FPS</span>
-            <button onClick={() => setPanel(o => !o)} title="Espécies: genes, diplomacia e evolução" className={`relative flex items-center gap-1.5 px-2.5 py-2 rounded-xl border text-xs font-bold ${panel ? 'bg-teal-400 text-black border-teal-300' : st.canEvolve ? 'bg-violet-500/30 border-violet-300 text-violet-50 animate-pulse' : 'bg-black/60 border-white/10 hover:bg-white/10'}`}>
+            <button onClick={() => setPanel(o => (o === 'tech' ? '' : 'tech'))} title="Árvore de evolução (pesquisas com DNA)" className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl border text-xs font-bold ${panel === 'tech' ? 'bg-teal-400 text-black border-teal-300' : 'bg-black/60 border-white/10 hover:bg-white/10'}`}>
+              <FlaskConical className="w-4 h-4" /> Evolução {st.research && <span className="font-mono font-normal text-[10px] opacity-80">{Math.round(st.research.p * 100)}%</span>}
+            </button>
+            <button onClick={() => setPanel(o => (o === 'species' ? '' : 'species'))} title="Espécies: genes, diplomacia e evolução" className={`relative flex items-center gap-1.5 px-2.5 py-2 rounded-xl border text-xs font-bold ${panel === 'species' ? 'bg-teal-400 text-black border-teal-300' : st.canEvolve ? 'bg-violet-500/30 border-violet-300 text-violet-50 animate-pulse' : 'bg-black/60 border-white/10 hover:bg-white/10'}`}>
               <Dna className="w-4 h-4" /> Espécies <span className="font-mono font-normal text-[10px] opacity-80">{st.nations.length} · {st.genes.length + (st.mito ? 1 : 0)} genes</span>
             </button>
             <button onClick={() => eng?.selectMother()} title="Célula-mãe (H)" className="p-2 rounded-xl bg-black/60 border border-white/10 hover:bg-white/10"><Home className="w-4 h-4" /></button>
@@ -200,7 +214,34 @@ export function CellGame({ species, onExit, onRestart }: Props) {
       )}
 
       {/* messages */}
-      {st?.msg && <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-xl bg-black/75 border border-teal-300/30 text-sm text-teal-50 pointer-events-none max-w-[520px] text-center">{st.msg}</div>}
+      {phase === 'play' && st && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1.5 max-w-[540px] w-[calc(100vw-560px)] min-w-[280px]">
+          {st.msg && <div className="px-4 py-2 rounded-xl bg-black/75 border border-teal-300/30 text-sm text-teal-50 pointer-events-none text-center">{st.msg}</div>}
+          {st.events.length > 0 && (
+            <div className="flex flex-wrap justify-center gap-1 pointer-events-none">
+              {st.events.map(e => (
+                <span key={e.id} className="px-2 py-0.5 rounded-full text-[10px] font-bold border bg-black/70" style={{ color: EVENT_COL[e.kind], borderColor: `${EVENT_COL[e.kind]}66` }}>
+                  {e.name}{e.until < 1e8 ? ` · ${Math.max(0, Math.ceil(e.until - st.time))} s` : ''}
+                </span>
+              ))}
+            </div>
+          )}
+          {world && st.offers.map(o => {
+            const sp = world.species[o.nation];
+            return (
+              <div key={o.id} className="pointer-events-auto w-full rounded-xl bg-[#0a1a20]/95 border border-amber-300/40 shadow-xl px-3 py-2 text-xs flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full shrink-0" style={{ background: eng?.paletteCss[o.nation] }} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-amber-50"><i className="font-serif">{sp.genus} {sp.species}</i> {o.kind === 'peace' ? 'propõe paz.' : o.kind === 'symbiosis' ? 'propõe simbiose (troca de recursos e biofilme compartilhado).' : <>exige <b className="text-yellow-300">{o.amount} nutrientes</b> de tributo ou ataca.</>}</div>
+                  <div className="text-[10px] text-neutral-500">Responda em {Math.max(0, Math.ceil(o.until - st.time))} s (sem resposta = recusa)</div>
+                </div>
+                <button onClick={() => eng?.cmd({ t: 'answer', id: o.id, yes: true })} className="px-2 py-1 rounded-md bg-emerald-400/90 text-black font-bold hover:bg-emerald-300">{o.kind === 'tribute' ? 'Pagar' : 'Aceitar'}</button>
+                <button onClick={() => eng?.cmd({ t: 'answer', id: o.id, yes: false })} className="px-2 py-1 rounded-md bg-white/10 font-bold hover:bg-red-500/30">Recusar</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* objectives */}
       {phase === 'play' && st && !panel && (
@@ -251,7 +292,8 @@ export function CellGame({ species, onExit, onRestart }: Props) {
         </div>
       )}
 
-      {phase === 'play' && st && panel && world && <SpeciesPanel st={st} species={world.species} eng={eng} thumb={thumbOf} onClose={() => setPanel(false)} />}
+      {phase === 'play' && st && panel === 'species' && world && <SpeciesPanel st={st} species={world.species} eng={eng} thumb={thumbOf} onClose={() => setPanel('')} />}
+      {phase === 'play' && st && panel === 'tech' && <TechPanel st={st} eng={eng} onClose={() => setPanel('')} />}
 
       {/* minimap */}
       <div className={`absolute left-2 bottom-2 z-20 ${phase === 'play' ? '' : 'invisible'}`}>
@@ -275,7 +317,9 @@ export function CellGame({ species, onExit, onRestart }: Props) {
               <div className="mt-2 grid grid-cols-3 gap-1 text-[10px] font-mono">
                 <span className="text-yellow-300">🟡 {KINDS[tip.k].food}</span><span className="text-cyan-300">⚡ {KINDS[tip.k].energy}</span><span className="text-neutral-300">⏱ {KINDS[tip.k].time}s</span>
                 <span className="text-neutral-400">vida {KINDS[tip.k].hp}</span><span className="text-neutral-400">ataque {KINDS[tip.k].dmg || '—'}</span><span className="text-neutral-400">pop {KINDS[tip.k].pop}</span>
+                <span className="col-span-3 text-cyan-200/80">manutenção {KINDS[tip.k].upkeep ? `-${KINDS[tip.k].upkeep} ⚡/s` : 'nenhuma'}</span>
               </div>
+              {LOCKED[tip.k] && !st.techs.includes(LOCKED[tip.k]!) && <p className="mt-1.5 text-red-200 bg-red-500/10 border border-red-400/20 rounded-md px-2 py-1">Bloqueada: pesquise <b>{TECHS.find(t => t.id === LOCKED[tip.k])!.name}</b> na árvore de evolução.</p>}
             </div>
           )}
           {queue.length > 0 && (
@@ -302,15 +346,19 @@ export function CellGame({ species, onExit, onRestart }: Props) {
               </div>
             </div>
             {[...BAR, ...TRAINABLE.filter(k => !BAR.includes(k))].map(k => {
-              const K = KINDS[k], placing = k === Kind.NODE && hud?.placing;
-              const ok = st.food >= K.food && st.energy >= K.energy && st.alive && !!active && (k !== Kind.NODE || st.counts[Kind.WORKER] > 0);
+              const K = KINDS[k], placing = hud?.placing === k, place = PLACE_KINDS.includes(k);
+              const lock = LOCKED[k] && !st.techs.includes(LOCKED[k]!) ? TECHS.find(t => t.id === LOCKED[k])! : null;
+              const disc = st.techs.includes('com3') && k !== Kind.NODE ? 0.85 : 1, fc = Math.round(K.food * disc), ec = Math.round(K.energy * disc);
+              const ok = !lock && st.food >= fc && st.energy >= ec && st.alive && !!active && (k !== Kind.NODE || st.counts[Kind.WORKER] > 0);
               return (
                 <button key={k} onClick={() => eng?.train(k)} disabled={!ok}
                   onMouseEnter={e => { const r = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(), b = e.currentTarget.getBoundingClientRect(); setTip({ k, x: b.left - r.left + b.width / 2 }); }}
-                  className={`group relative w-[56px] sm:w-[62px] rounded-lg border px-1 pt-1 pb-0.5 flex flex-col items-center ${placing ? 'border-violet-300 bg-violet-400/30' : ok ? (k === Kind.NODE ? 'border-violet-300/25 bg-white/5 hover:bg-violet-400/20 hover:border-violet-300/60' : 'border-white/10 bg-white/5 hover:bg-teal-400/15 hover:border-teal-300/50') : 'border-white/5 bg-white/[0.02] opacity-50'} ${k === Kind.MOTHER ? 'ml-1' : ''}`}>
+                  className={`group relative w-[56px] sm:w-[62px] rounded-lg border px-1 pt-1 pb-0.5 flex flex-col items-center ${placing ? 'border-violet-300 bg-violet-400/30' : ok ? (place ? 'border-violet-300/25 bg-white/5 hover:bg-violet-400/20 hover:border-violet-300/60' : 'border-white/10 bg-white/5 hover:bg-teal-400/15 hover:border-teal-300/50') : 'border-white/5 bg-white/[0.02] opacity-50'} ${k === Kind.MOTHER ? 'ml-1' : ''}`}>
                   <div className="h-8 w-full flex items-center justify-center">{thumbs[k] && <img src={thumbs[k]} className="max-h-8 max-w-full" style={{ imageRendering: 'pixelated' }} />}</div>
+                  {lock && <Lock className="absolute top-1 right-1 w-3 h-3 text-neutral-300" />}
                   <div className="text-[10px] font-bold truncate w-full text-center">{k === Kind.MOTHER ? 'Colônia' : k === Kind.NODE ? 'Nódulo' : K.name}</div>
-                  <div className="text-[9px] font-mono text-neutral-400"><span className="text-yellow-300">{K.food}</span>{K.energy ? <> · <span className="text-cyan-300">{K.energy}</span></> : null}</div>
+                  {lock ? <div className="text-[8.5px] text-red-200/80 truncate w-full text-center">{lock.name}</div>
+                    : <div className="text-[9px] font-mono text-neutral-400"><span className="text-yellow-300">{fc}</span>{ec ? <> · <span className="text-cyan-300">{ec}</span></> : null}</div>}
                 </button>
               );
             })}
@@ -343,6 +391,12 @@ export function CellGame({ species, onExit, onRestart }: Props) {
                 ))}
               </div>
               <p className="text-[10px] text-neutral-500 leading-snug min-h-[26px]">{STANCE_HINT[sel.stance >= 0 && sel.stance < 5 ? sel.stance : 0]}</p>
+              {(st?.techs.includes('mot3') || (st?.techs.includes('pre3') && sel.counts[Kind.SPITTER] > 0)) && (
+                <div className="mt-1.5 flex gap-1">
+                  {st?.techs.includes('mot3') && <button onClick={() => eng?.cyst()} title="Encistamento (C): as células param, ficam blindadas (+3 de armadura) e não gastam energia. De novo para despertar." className="flex-1 flex items-center justify-center gap-1 px-1 py-1 rounded-md bg-amber-500/15 border border-amber-300/30 text-amber-100 text-[10px] font-bold hover:bg-amber-500/25"><Shield className="w-3 h-3" /> Cisto</button>}
+                  {st?.techs.includes('pre3') && sel.counts[Kind.SPITTER] > 0 && <button onClick={() => eng?.aimCloud()} title="Nuvem de toxina (X): clique no alvo; a secretora selecionada mais próxima (até 420) lança uma nuvem que envenena por 5 s. Recarga 20 s." className={`flex-1 flex items-center justify-center gap-1 px-1 py-1 rounded-md border text-[10px] font-bold ${hud?.cloud ? 'bg-lime-400 text-black border-lime-300' : 'bg-lime-500/15 border-lime-300/30 text-lime-100 hover:bg-lime-500/25'}`}><Wind className="w-3 h-3" /> Nuvem de toxina</button>}
+                </div>
+              )}
               {sel.seeds > 0 && <p className="mt-1 text-[10px] text-amber-200 leading-snug bg-amber-400/10 rounded-md px-2 py-1">Célula-mãe solta: clique com o botão direito num espaço livre (a {COLONY_GAP}+ de outras células-mãe) para fundar a colônia.</p>}
             </>
           )}
@@ -365,6 +419,9 @@ export function CellGame({ species, onExit, onRestart }: Props) {
               <li>🟡 <b>Nutrientes</b>: as coletoras colhem e levam ao biofilme. ⚡ <b>Energia</b>: fotossintéticas (o dobro sob os feixes de luz).</li>
               <li>🧫 <b>Dividir</b>: os botões embaixo criam células a partir da célula-mãe. O botão <b>Colônia</b> cria uma nova célula-mãe para fundar outra colônia num espaço livre.</li>
               <li>🟣 <b>Biofilme</b> é o seu território: dentro dele as células se curam e comem; fora, morrem de fome. O botão <b>Nódulo</b> manda uma coletora virar nódulo: expande o território e dá +6 de população.</li>
+              <li>🌫️ <b>Névoa</b>: você só vê as células de outras espécies perto das suas. Uma espécie (nome, cor e território) só aparece depois de avistada.</li>
+              <li>⚡ <b>Manutenção</b>: cada célula gasta energia por segundo (veja +entrada −gasto no topo). Sem energia, as células morrem. <b>Fotossintéticas</b> e <b>Sentinelas</b> são estruturas: escolha no mapa onde se fixam.</li>
+              <li>🔬 <b>Evolução</b>: gaste DNA (de células engolidas, mortas ou espécies descobertas) em pesquisas: novas células, habilidades (Cisto, Nuvem de toxina) e melhorias.</li>
               <li>🧬 <b>Espécies</b> (botão no topo): roube genes engolindo células de outras espécies, faça paz e simbiose, e chegue à endossimbiose para evoluir para <b>multicelular</b>.</li>
               <li>🎯 <b>Colônias</b>: cada colônia é um grupo com cor e nome, com as células que ela gerou. Selecione uma colônia (painel à direita ou 1..9) e dê ordens e comportamentos (Defender, Caçar…) a ela inteira. Coletoras nunca lutam: fogem.</li>
             </ul>
@@ -372,6 +429,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
               <span>Arrastar: selecionar</span><span>Botão direito: ordem</span>
               <span>Duplo clique: todas do tipo</span><span>WASD / setas: câmera</span>
               <span>1..9: selecionar colônia</span><span>N: nódulo</span>
+              <span>F / T: fotossintética / sentinela</span><span>C / X: cisto / nuvem</span>
               <span>Espaço: pausa</span><span>H: célula-mãe</span>
             </div>
             <button onClick={() => setHelp(false)} className="mt-4 w-full py-2.5 rounded-xl font-bold text-black bg-gradient-to-r from-teal-300 to-emerald-300">Começar</button>
@@ -405,6 +463,8 @@ export function CellGame({ species, onExit, onRestart }: Props) {
     </div>
   );
 }
+
+const EVENT_COL: Record<string, string> = { bloom: '#fde047', toxic: '#a3e635', current: '#7dd3fc', heat: '#fb923c', plague: '#e879f9' };
 
 function Res({ icon, v, title, warn }: { icon: React.ReactNode; v: React.ReactNode; title: string; warn?: boolean }) {
   return <span title={title} className={`flex items-center gap-1 ${warn ? 'text-amber-300' : 'text-neutral-100'}`}>{icon}{v}</span>;
