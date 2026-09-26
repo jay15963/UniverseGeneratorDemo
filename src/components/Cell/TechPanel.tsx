@@ -5,13 +5,13 @@ import { TECHS, BRANCHES, geneDiscount, KINDS } from '../../lib/cell/look';
 import type { Stats } from '../../lib/cell/sim';
 import type { CellEngine } from './engine';
 
-const BRANCH_COL: Record<string, string> = { met: '#facc15', mot: '#38bdf8', mem: '#a78bfa', pre: '#f87171', com: '#34d399' };
+const BRANCH_COL: Record<string, string> = { met: '#facc15', mot: '#38bdf8', mem: '#a78bfa', pre: '#f87171', com: '#34d399', tit: '#fb923c' };
 
 export function TechPanel({ st, eng, onClose }: { st: Stats; eng: CellEngine | null; onClose: () => void }) {
   const disc = geneDiscount(st.genes.length);
   const cur = st.research ? TECHS.find(t => t.id === st.research!.id) : null;
   return (
-    <div className="absolute top-14 left-2 z-30 w-[640px] max-w-[calc(100vw-16px)] max-h-[calc(100vh-80px)] overflow-y-auto no-scrollbar rounded-2xl bg-[#061318]/95 border border-teal-300/25 shadow-2xl text-xs">
+    <div className="absolute top-14 left-2 z-30 w-[760px] max-w-[calc(100vw-16px)] max-h-[calc(100vh-80px)] overflow-y-auto no-scrollbar rounded-2xl bg-[#061318]/95 border border-teal-300/25 shadow-2xl text-xs">
       <div className="sticky top-0 z-10 bg-[#061318]/95 flex items-center justify-between px-3 py-2 border-b border-white/5">
         <div className="flex items-center gap-2 font-black text-sm text-teal-100"><FlaskConical className="w-4 h-4 text-teal-300" /> Árvore de evolução</div>
         <div className="flex items-center gap-3">
@@ -26,7 +26,7 @@ export function TechPanel({ st, eng, onClose }: { st: Stats; eng: CellEngine | n
           <div className="mt-1 h-1 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-teal-300" style={{ width: `${st.research!.p * 100}%` }} /></div>
         </div>
       )}
-      <div className="grid grid-cols-5 gap-1.5 p-2">
+      <div className="grid grid-cols-6 gap-1.5 p-2">
         {BRANCHES.map(([b, name]) => (
           <div key={b} className="flex flex-col gap-1.5 min-w-0">
             <div className="text-center text-[10px] font-black uppercase tracking-[0.12em] py-1 rounded-md" style={{ color: BRANCH_COL[b], background: `${BRANCH_COL[b]}18` }}>{name}</div>

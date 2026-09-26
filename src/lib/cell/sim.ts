@@ -18,7 +18,7 @@
 // partner becomes an organelle: its gene and mitochondria for good). Endosymbiosis + 3 genes + 60 cells open the way
 // to the multicellular stage.
 // Wild life: bacteria (prey), diatoms, amoebas.
-import { KINDS, Kind, TRAINABLE, GeneId, geneOf, DNA_FOR_GENE, SPECIES_KINDS, isStructure, TECHS, LOCKED, geneDiscount, PLACED } from './look';
+import { KINDS, Kind, TRAINABLE, GeneId, geneOf, DNA_FOR_GENE, SPECIES_KINDS, isStructure, TECHS, LOCKED, geneDiscount, PLACED, titanType, titanLimit, TITANS } from './look';
 import { WorldDef, WORLD, BIO, BIO_N, flowAt } from './world';
 import { mulberry, seedToInt } from '../terrain/noise';
 
@@ -115,7 +115,10 @@ export class Sim {
   cyst = new Uint8Array(CAP);      // dormant (Encistamento): still, armoured, no upkeep
   inf = new Float32Array(CAP);     // seconds since a virus got in (0 = healthy)
   immune = new Float32Array(CAP);  // immune to the virus until this time
-  acd = new Float32Array(CAP);     // ability cooldown (toxin cloud)
+  acd = new Float32Array(CAP);     // ability cooldown (toxin cloud, titan powers)
+  tt = new Uint8Array(CAP);        // titan body plan (0 rotifer, 1 tardigrade, 2 hydra, 3 nematode, 4 copepod)
+  stun = new Float32Array(CAP);    // paralysed (hydra sting) until this time
+  dash = new Float32Array(CAP);    // copepod leap: flying until this time (0 = not leaping)
   x = new Float32Array(CAP); y = new Float32Array(CAP); vx = new Float32Array(CAP); vy = new Float32Array(CAP); ang = new Float32Array(CAP);
   hp = new Float32Array(CAP); sat = new Float32Array(CAP); cd = new Float32Array(CAP); carry = new Float32Array(CAP);
   task = new Uint8Array(CAP); stance = new Uint8Array(CAP); manual = new Uint8Array(CAP);
@@ -147,10 +150,12 @@ export class Sim {
   cols = new Map<number, Colony>(); nextCol = 1;
   allMothers: number[] = [];
   deaths: number[] = [];       // x, y, set, kind (for death bursts)
+  fx: number[] = [];           // x, y, radius, type (titan powers: 0 sting, 1 leap impact)
+  titanWarn = -99;
   msg: string | null = null; msgAt = 0; won = false;
   r: () => number;
-  neutralTarget = { bac: 1300, dia: 240, ame: 10 };
-  neutralCount = { bac: 0, dia: 0, ame: 0 };
+  neutralTarget = { bac: 1300, dia: 240, ame: 10, tit: 3 };
+  neutralCount = { bac: 0, dia: 0, ame: 0, tit: 0 };
   goals = { food: false, divide: false, photo: false, node: false, colony: false, gene: false, pact: false, endo: false, big: false };
   // the player's diplomacy with every nation
   rel: Float32Array; pact: Uint8Array; pactAt: Float32Array; met: Uint8Array; dna: Float32Array;
@@ -217,8 +222,9 @@ export class Sim {
     this.alive[i] = 1; this.gen[i] = (this.gen[i] + 1) & 0xffff; this.kind[i] = k; this.col[i] = nation;
     this.set[i] = nation >= 0 ? this.nations[nation].species : NEUTRAL_SET + variant;
     this.x[i] = clampW(x); this.y[i] = clampW(y); this.vx[i] = 0; this.vy[i] = 0; this.ang[i] = this.r() * Math.PI * 2;
-    this.hp[i] = K.hp; this.sat[i] = k === Kind.SCOUT ? 80 : k === Kind.MOTHER ? 120 : 40; this.cd[i] = 0; this.carry[i] = 0;
-    this.task[i] = T_IDLE; this.stance[i] = ST_AUTO; this.manual[i] = 0; this.tgt[i] = -1; this.rooted[i] = 0; this.grp[i] = -1; this.warned[i] = 0; this.role[i] = 0; this.cyst[i] = 0; this.inf[i] = 0; this.immune[i] = 0; this.acd[i] = 0;
+    this.hp[i] = K.hp; this.sat[i] = k === Kind.SCOUT ? 80 : k === Kind.MOTHER ? 120 : k === Kind.TITAN ? 240 : 40; this.cd[i] = 0; this.carry[i] = 0;
+    this.task[i] = T_IDLE; this.stance[i] = ST_AUTO; this.manual[i] = 0; this.tgt[i] = -1; this.rooted[i] = 0; this.grp[i] = -1; this.warned[i] = 0; this.role[i] = 0; this.cyst[i] = 0; this.inf[i] = 0; this.immune[i] = 0; this.acd[i] = 0; this.stun[i] = 0; this.dash[i] = 0;
+    this.tt[i] = k !== Kind.TITAN ? 0 : nation >= 0 ? titanType(this.w.species[this.nations[nation].species]) : variant - WILD_TITAN;
     this.gx[i] = x; this.gy[i] = y; this.ax[i] = x; this.ay[i] = y; this.hitAt[i] = -99; this.hitBy[i] = -1; this.grow[i] = 0;
     if (nation >= 0) {
       const N = this.nations[nation];
@@ -253,10 +259,16 @@ export class Sim {
     const k = this.kind[i] as Kind, c = this.col[i];
     this.alive[i] = 0; this.free.push(i); this.count--;
     this.deaths.push(this.x[i], this.y[i], this.set[i], k);
-    const drop = [3, 2, 5, 4, 7, 5, 26, 10, 6, 1, 4, 12][k] ?? 2;
+    const drop = [3, 2, 5, 4, 7, 5, 26, 10, 6, 40, 1, 4, 12][k] ?? 2;
     for (let j = 0; j < drop; j++) this.addMote(this.x[i] + (this.r() - 0.5) * KINDS[k].r * 2, this.y[i] + (this.r() - 0.5) * KINDS[k].r * 2, 4 + this.r() * 3, -1);
     if (k === Kind.BACTERIA) this.neutralCount.bac--; else if (k === Kind.DIATOM) this.neutralCount.dia--; else if (k === Kind.AMOEBA) this.neutralCount.ame--;
+    else if (k === Kind.TITAN && c < 0) this.neutralCount.tit--;
     if (by >= 0) this.gainDna(this.col[by], i, false);
+    if (k === Kind.TITAN) {
+      const who = by >= 0 ? this.col[by] : -1, what = `${c < 0 ? 'selvagem' : c === 0 ? 'seu' : 'de ' + this.w.species[c].genus} (${TITANS[this.tt[i]].name})`;
+      if (who === 0) this.say(`Titã ${what} abatido! +25 DNA.`);
+      else if (c === 0) this.say(`Seu titã (${TITANS[this.tt[i]].name}) morreu!`);
+    }
     if (c < 0) return;
     if (by >= 0 && this.col[by] === 0 && c > 0) { this.dna[c] += 0.35; this.rel[c] = Math.max(-100, this.rel[c] - 2); this.stealCheck(c); }
     const N = this.nations[c];
@@ -328,6 +340,20 @@ export class Sim {
       }
     }
   }
+  /** a wild titan appears somewhere far from the player's colonies */
+  spawnWildTitan() {
+    const P = this.nations[0], type = Math.floor(this.r() * 5);
+    for (let t = 0; t < 30; t++) {
+      const x = 400 + this.r() * (WORLD - 800), y = 400 + this.r() * (WORLD - 800);
+      if (this.inRock(x, y, 40) || this.bioOwner(x, y) !== 255) continue;
+      if (P.motherList.some(m => this.alive[m] && Math.hypot(this.x[m] - x, this.y[m] - y) < 1800)) continue;
+      const i = this.spawn(Kind.TITAN, -1, x, y, WILD_TITAN + type);
+      if (i < 0) return;
+      this.neutralCount.tit++; this.stance[i] = ST_EXPLORE;
+      this.say(`Um titã selvagem apareceu na poça: ${TITANS[type].name} gigante (${TITANS[type].power}). Veja o mapa.`);
+      return;
+    }
+  }
   spawnNeutral(k: Kind) {
     const r = this.r, F = this.w.fields;
     let x = 0, y = 0;
@@ -354,8 +380,8 @@ export class Sim {
   // relations: nations are at war unless the player made peace / symbiosis with them; wild amoebas eat anyone
   hostile(a: number, b: number): boolean {
     const ca = this.col[a], cb = this.col[b];
-    if (ca === cb) return ca === -1 ? (this.kind[a] === Kind.AMOEBA) !== (this.kind[b] === Kind.AMOEBA) : false;
-    if (ca < 0 || cb < 0) return this.kind[a] === Kind.AMOEBA || this.kind[b] === Kind.AMOEBA;
+    if (ca === cb) return ca === -1 ? wildPred(this.kind[a]) !== wildPred(this.kind[b]) : false;
+    if (ca < 0 || cb < 0) return wildPred(this.kind[a]) || wildPred(this.kind[b]);
     if ((ca === 0 && this.pact[cb]) || (cb === 0 && this.pact[ca])) return false;
     if ((ca === 0 && this.nations[cb].truce > this.time) || (cb === 0 && this.nations[ca].truce > this.time)) return false;
     if (ca > 0 && cb > 0 && this.aiPact[ca * this.nations.length + cb]) return false;
@@ -506,6 +532,7 @@ export class Sim {
     for (let k = 0; k < 6 && n.bac < t.bac; k++) this.spawnNeutral(Kind.BACTERIA);
     if (n.dia < t.dia && this.r() < 0.5) this.spawnNeutral(Kind.DIATOM);
     if (n.ame < t.ame && this.r() < 0.02) this.spawnNeutral(Kind.AMOEBA);
+    if (this.time > 150 && n.tit < t.tit && this.r() < (n.tit ? 0.004 : 0.02)) this.spawnWildTitan();
   }
 
   // --- production ------------------------------------------------------------------------------------------------------------
@@ -544,7 +571,13 @@ export class Sim {
   /** division cost (Diferenciação makes it 15% cheaper) */
   cost(N: Nation, k: Kind): [number, number] { const f = N.techs.has('com3') ? 0.85 : 1; return [Math.round(KINDS[k].food * f), Math.round(KINDS[k].energy * f)]; }
   unlocked(N: Nation, k: Kind) { const t = LOCKED[k]; return !t || N.techs.has(t); }
-  canTrain(N: Nation, k: Kind) { const [f, e] = this.cost(N, k); return N.food >= f && N.energy >= e && this.unlocked(N, k); }
+  canTrain(N: Nation, k: Kind) { const [f, e] = this.cost(N, k); return N.food >= f && N.energy >= e && this.unlocked(N, k) && (k !== Kind.TITAN || this.titanRoom(N) > 0); }
+  /** how many more titans the nation may grow (alive + in the division queues count) */
+  titanRoom(N: Nation) {
+    let q = 0;
+    for (const m of N.motherList) for (const e of this.queues.get(m) ?? []) if (e.kind === Kind.TITAN) q++;
+    return titanLimit(N.techs) - N.counts[Kind.TITAN] - q;
+  }
   train(N: Nation, m: number, k: Kind, tx?: number, ty?: number) {
     const q = this.queues.get(m);
     if (!q || q.length >= 6 || !this.canTrain(N, k)) return false;
@@ -581,7 +614,7 @@ export class Sim {
     if (cap >= 0) { N.hx = this.x[cap]; N.hy = this.y[cap]; }
     const cnt = N.counts;
     const mil = cnt[Kind.HUNTER] + cnt[Kind.ARMOR] + cnt[Kind.SPITTER];
-    N.power = cnt[Kind.HUNTER] * 3 + cnt[Kind.ARMOR] * 4 + cnt[Kind.SPITTER] * 3 + N.mothers * 4;
+    N.power = cnt[Kind.HUNTER] * 3 + cnt[Kind.ARMOR] * 4 + cnt[Kind.SPITTER] * 3 + cnt[Kind.TITAN] * 25 + N.mothers * 4;
     if (N.player) return;
     // research: a random open tech every now and then (never the step to multicellular)
     if (!N.research && this.time >= N.nextTech) {
@@ -613,6 +646,7 @@ export class Sim {
       if (cnt[Kind.WORKER] < wantW && !(N.builder >= 0 && cnt[Kind.WORKER] >= 3)) k = Kind.WORKER;
       else if (needPhoto && N.energy < N.energyCap * 0.9) k = Kind.PHOTO;
       else if (cnt[Kind.SENTINEL] < wantSent && this.time > 90) k = Kind.SENTINEL;
+      else if (this.time > 240 && this.titanRoom(N) > 0 && N.food >= KINDS[Kind.TITAN].food + 40 && N.energy >= KINDS[Kind.TITAN].energy + 20) k = Kind.TITAN;
       else if (mil < wantMil) {
         const p = N.prefs, s = p[0] + p[1] + p[2], u = this.r() * s;
         k = u < p[0] ? Kind.HUNTER : u < p[0] + p[1] ? Kind.SPITTER : Kind.ARMOR;
@@ -797,13 +831,24 @@ export class Sim {
     if (k === Kind.PHOTO || k === Kind.SENTINEL) {
       if (!this.rooted[i]) { if (this.task[i] === T_IDLE) this.settleStruct(i); return; }
       if (k === Kind.SENTINEL && (!this.valid(this.tgt[i], this.tgen[i]) || this.task[i] !== T_ATTACK)) {
-        const j = this.nearest(x, y, K.range + 12, j2 => this.aggro(i, j2) && (this.col[j2] >= 0 || this.kind[j2] === Kind.AMOEBA));
+        const j = this.nearest(x, y, K.range + 12, j2 => this.aggro(i, j2) && (this.col[j2] >= 0 || wildPred(this.kind[j2])));
         if (j >= 0) { this.setTarget(i, j); this.task[i] = T_ATTACK; } else this.task[i] = T_IDLE;
       }
       return;
     }
     // wild life
     if (c < 0) {
+      if (k === Kind.TITAN) {
+        // a roaming boss: it goes for any cell that comes near and answers whoever hurts it
+        if (!this.valid(this.tgt[i], this.tgen[i]) || this.task[i] !== T_ATTACK) {
+          let j = this.nearest(x, y, 280, j2 => this.col[j2] >= 0 && !isStructure(this.kind[j2]) && this.kind[j2] !== Kind.TITAN);
+          const hb = this.hitBy[i];
+          if (j < 0 && hb >= 0 && this.alive[hb] && this.time - this.hitAt[i] < 4) j = hb;
+          if (j >= 0) { this.setTarget(i, j); this.task[i] = T_ATTACK; }
+          else if (this.task[i] !== T_WANDER || Math.hypot(this.gx[i] - x, this.gy[i] - y) < 40) this.wander(i, 900);
+        }
+        return;
+      }
       if (k === Kind.AMOEBA) {
         if (this.cd[i] > 1.5) { if (this.task[i] !== T_WANDER) this.wander(i, 80); return; }   // digesting
         if (!this.valid(this.tgt[i], this.tgen[i])) {
@@ -936,9 +981,9 @@ export class Sim {
         N.energy -= up; N.eOut += up;
       }
       if (home) {
-        this.sat[i] = Math.min(k === Kind.SCOUT ? 80 : k === Kind.MOTHER ? 120 : 40, this.sat[i] + 6 * dt);
+        this.sat[i] = Math.min(k === Kind.SCOUT ? 80 : k === Kind.MOTHER ? 120 : k === Kind.TITAN ? 240 : 40, this.sat[i] + (k === Kind.TITAN ? 20 : 6) * dt);
         if (this.hp[i] < K.hp && this.time - this.hitAt[i] > 2) this.hp[i] = Math.min(K.hp, this.hp[i] + K.hp * (N.genes.has('regen') ? 0.04 : 0.02) * (N.techs.has('com2') ? 1.5 : 1) * dt);
-      } else if (!settled && !this.cyst[i]) { this.sat[i] -= dt * (N.genes.has('reserve') ? 0.62 : 1); if (this.sat[i] <= 0) { this.sat[i] = 0; this.hp[i] -= Math.max(1.5, K.hp * 0.02) * dt; if (this.hp[i] <= 0) { this.kill(i); return; } } }
+      } else if (!settled && !this.cyst[i]) { this.sat[i] -= dt * (N.genes.has('reserve') ? 0.62 : 1); if (this.sat[i] <= 0) { this.sat[i] = 0; this.hp[i] -= (k === Kind.TITAN ? K.hp * 0.006 : Math.max(1.5, K.hp * 0.02)) * dt; if (this.hp[i] <= 0) { this.kill(i); return; } } }
       // out of energy: the cells run out of ATP and die, the photosynthesisers and mothers hold on
       if (N.energy <= 0) {
         N.energy = 0;
@@ -949,10 +994,11 @@ export class Sim {
       if (k === Kind.PHOTO && home && this.rooted[i]) this.income(N, 0, (this.inLight(x, y) ? 2.4 : 1.2) * dt * (N.genes.has('photo') ? 1.4 : 1) * (N.mito ? 1.5 : 1));
       if (k === Kind.NODE) this.income(N, 0.15 * dt, 0);
     }
+    if (k === Kind.TITAN) { this.titanAct(i, dt); if (!this.alive[i]) return; }
     // the virus eats the cell from inside
     if (this.inf[i] > 0) { this.hp[i] -= K.hp * 0.02 * dt; if (this.hp[i] <= 0) { this.kill(i); return; } }
     // vents scald what swims too close (much more during a heat wave)
-    if (this.tick % 5 === 0 && !this.has(c, 'heat')) {
+    if (this.tick % 5 === 0 && !this.has(c, 'heat') && !this.tough(i)) {
       const hot = this.eventOn('heat');
       for (const v of this.w.vents) { const d = Math.hypot(v.x - x, v.y - y); if (d < (v.r + 16) * (hot ? 3.5 : 1)) { this.hp[i] -= 3 * (hot ? 2 : 1) * dt * 5; if (this.hp[i] <= 0) { this.kill(i); return; } } }
     }
@@ -983,6 +1029,8 @@ export class Sim {
       const d = Math.hypot(this.x[j] - x, this.y[j] - y) - K.r - KINDS[this.kind[j]].r;
       // chase, but give up on prey that drags too far from the anchor
       if (!this.manual[i] && c >= 0 && this.stance[i] !== ST_HUNT && this.col[j] >= 0 && Math.hypot(this.x[j] - this.ax[i], this.y[j] - this.ay[i]) > 450) { this.task[i] = T_IDLE; this.tgt[i] = -1; return; }
+      if (c < 0 && k === Kind.TITAN && d > 700) { this.task[i] = T_IDLE; this.tgt[i] = -1; return; }
+      if (this.stun[i] > this.time) { this.gx[i] = x; this.gy[i] = y; return; }
       if (k === Kind.SENTINEL) {
         this.gx[i] = x; this.gy[i] = y;
         if (d > K.range + 12) { this.task[i] = T_IDLE; this.tgt[i] = -1; }
@@ -996,7 +1044,12 @@ export class Sim {
         else if (this.cd[i] <= 0) { this.cd[i] = K.cd; this.strike(i, j); }
         return;
       }
-      if (d <= K.range + 2) {
+      if (k === Kind.TITAN && this.tt[i] === 3) {
+        // the nematode never stops at its prey: it drives through and turns back
+        const dx = this.x[j] - x, dy = this.y[j] - y, dd = Math.hypot(dx, dy) || 1;
+        this.gx[i] = this.x[j] + (dx / dd) * 140; this.gy[i] = this.y[j] + (dy / dd) * 140;
+        if (d <= K.range + 2 && this.cd[i] <= 0) { this.cd[i] = K.cd; this.strike(i, j); }
+      } else if (d <= K.range + 2) {
         this.gx[i] = x; this.gy[i] = y;
         if (this.cd[i] <= 0) { this.cd[i] = K.cd; this.strike(i, j); }
       } else { this.gx[i] = this.x[j]; this.gy[i] = this.y[j]; }
@@ -1004,6 +1057,86 @@ export class Sim {
       if (Math.hypot(this.gx[i] - x, this.gy[i] - y) < K.r + 8) {
         if (t === T_AMOVE || t === T_MOVE) { this.ax[i] = x; this.ay[i] = y; }
         this.task[i] = T_IDLE; this.manual[i] = 0;
+      }
+    }
+  }
+  /** the tardigrade shrugs off heat, toxins and viruses */
+  tough(i: number) { return this.kind[i] === Kind.TITAN && this.tt[i] === 1; }
+  /** titan powers, one per body plan */
+  titanAct(i: number, dt: number) {
+    const c = this.col[i], K = KINDS[Kind.TITAN], x = this.x[i], y = this.y[i], T = this.tt[i];
+    const N = c >= 0 ? this.nations[c] : null;
+    if (N?.techs.has('tit3') || c < 0) this.hp[i] = Math.min(K.hp, this.hp[i] + K.hp * (c < 0 ? 0.004 : 0.01) * dt);
+    const foe = (j: number) => j !== i && this.hostile(i, j) && !(this.time < GRACE && this.col[j] === 0 && c > 0);
+    const boost = N?.techs.has('tit2') ? 1.3 : 1;
+    // an enemy titan coming for the player's colonies
+    if (c !== 0 && this.tick % 40 === 0 && this.time - this.titanWarn > 40) {
+      const P = this.nations[0];
+      if (P.alive && P.motherList.some(m => this.alive[m] && Math.hypot(this.x[m] - x, this.y[m] - y) < 750)) {
+        this.titanWarn = this.time;
+        this.say(`Um titã ${c < 0 ? 'selvagem' : 'inimigo'} (${TITANS[T].name}) se aproxima das suas colônias!`);
+      }
+    }
+    if (this.stun[i] > this.time) return;
+    if (T === 0 && this.tick % 5 === 0) {
+      // rotifer: the corona's vortex drags motes and small cells into the mouth
+      const a = this.ang[i], mx = x + Math.cos(a) * K.r, my = y + Math.sin(a) * K.r, R = 230, st = 5 * dt;
+      const b0x = Math.max(0, Math.floor((mx - R) / HB)), b1x = Math.min(HN - 1, Math.floor((mx + R) / HB));
+      const b0y = Math.max(0, Math.floor((my - R) / HB)), b1y = Math.min(HN - 1, Math.floor((my + R) / HB));
+      for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++) for (let m = this.mhead[by * HN + bx]; m >= 0; m = this.mnext[m]) {
+        if (!this.malive[m]) continue;
+        const dx = mx - this.mx[m], dy = my - this.my[m], d = Math.hypot(dx, dy);
+        if (d > R) continue;
+        if (d < 16) { if (N) this.income(N, this.mamt[m], 0); else this.hp[i] = Math.min(K.hp, this.hp[i] + 8); this.eatMote(m); continue; }
+        const pull = Math.min(d, (70 + (R - d) * 0.5) * st);
+        this.mx[m] += (dx / d) * pull; this.my[m] += (dy / d) * pull;
+      }
+      this.nearest(mx, my, 175, j => {
+        if (!foe(j) || isStructure(this.kind[j]) || KINDS[this.kind[j]].r > 11 || this.cyst[j]) return false;
+        const dx = mx - this.x[j], dy = my - this.y[j], d = Math.hypot(dx, dy) || 1;
+        const pull = Math.min(d, 55 * st);
+        this.x[j] += (dx / d) * pull; this.y[j] += (dy / d) * pull;
+        if (d < 18 + KINDS[this.kind[j]].r) this.damage(j, 14 * boost, i);
+        return false;
+      });
+    } else if (T === 2 && this.acd[i] <= this.time) {
+      // hydra: the tentacles sting everything around and paralyse it
+      const hits: number[] = [];
+      this.nearest(x, y, 150, j => { if (foe(j)) hits.push(j); return false; });
+      if (hits.length) {
+        this.acd[i] = this.time + 2.5;
+        this.fx.push(x, y, 150, 0);
+        for (const j of hits) { if (!this.alive[j]) continue; if (!isStructure(this.kind[j])) this.stun[j] = this.time + 1.5; this.damage(j, 18 * boost, i); }
+      }
+    } else if (T === 3 && this.tick % 4 === 0) {
+      // nematode: tramples through the ranks, hurting and shoving aside whatever it crosses
+      const a = this.ang[i];
+      this.nearest(x, y, K.r + 16, j => {
+        if (!foe(j) || this.kind[j] === Kind.TITAN || (isStructure(this.kind[j]) && this.rooted[j]) || this.kind[j] === Kind.NODE || this.kind[j] === Kind.MOTHER) return false;
+        const side = Math.sign((this.x[j] - x) * -Math.sin(a) + (this.y[j] - y) * Math.cos(a)) || 1;
+        this.x[j] += -Math.sin(a) * side * 6; this.y[j] += Math.cos(a) * side * 6;
+        this.damage(j, 8 * boost, i);
+        return false;
+      });
+    } else if (T === 4) {
+      // copepod: leaps on its target from afar; the landing hurts and throws everything near
+      if (this.dash[i] > 0 && this.dash[i] <= this.time) {
+        this.dash[i] = 0;
+        this.fx.push(x, y, 80, 1);
+        this.nearest(x, y, 80, j => {
+          if (!foe(j)) return false;
+          const dx = this.x[j] - x, dy = this.y[j] - y, d = Math.hypot(dx, dy) || 1;
+          if (!isStructure(this.kind[j]) && this.kind[j] !== Kind.TITAN) { this.x[j] += (dx / d) * 30; this.y[j] += (dy / d) * 30; }
+          this.damage(j, 45 * boost, i);
+          return false;
+        });
+      } else if (!this.dash[i] && this.acd[i] <= this.time && this.task[i] === T_ATTACK && this.valid(this.tgt[i], this.tgen[i])) {
+        const j = this.tgt[i], dx = this.x[j] - x, dy = this.y[j] - y, d = Math.hypot(dx, dy);
+        if (d > 110 && d < 430) {
+          const v = 620, tt = Math.max(0.12, (d - K.r) / v);
+          this.vx[i] = (dx / d) * v; this.vy[i] = (dy / d) * v; this.ang[i] = Math.atan2(dy, dx);
+          this.dash[i] = this.time + tt; this.acd[i] = this.time + 6;
+        }
       }
     }
   }
@@ -1023,11 +1156,13 @@ export class Sim {
       if (k === Kind.AMOEBA) { this.cd[i] = 8; this.task[i] = T_IDLE; this.tgt[i] = -1; }
       return;
     }
+    if (k === Kind.TITAN) { this.damage(j, K.dmg * (c >= 0 && this.nations[c].techs.has('tit2') ? 1.3 : 1) * (this.tt[i] === 1 ? 1.3 : 1), i); return; }
     this.damage(j, K.dmg * (k === Kind.HUNTER && this.has(c, 'jaws') ? 1.3 : 1) * (k === Kind.HUNTER && c >= 0 && this.nations[c].techs.has('pre2') ? 1.25 : 1), i);
   }
   damage(j: number, dmg: number, by: number) {
     const cj = this.col[j];
-    const d = Math.max(1, dmg - KINDS[this.kind[j]].armor - (this.has(cj, 'armor') ? 1 : 0) - (cj >= 0 && this.nations[cj].techs.has('mem1') ? 1 : 0) - (this.cyst[j] ? 3 : 0));
+    let d = Math.max(1, dmg - KINDS[this.kind[j]].armor - (this.has(cj, 'armor') ? 1 : 0) - (cj >= 0 && this.nations[cj].techs.has('mem1') ? 1 : 0) - (this.cyst[j] ? 3 : 0));
+    if (this.kind[j] === Kind.TITAN) d *= (this.tt[j] === 1 ? 0.45 : 1) * (cj >= 0 && this.nations[cj].techs.has('tit2') ? 0.77 : 1);
     this.hp[j] -= d; this.hitAt[j] = this.time; this.hitBy[j] = by;
     if (this.hp[j] <= 0) { this.kill(j, by); if (by >= 0 && this.kind[by] === Kind.AMOEBA) { this.cd[by] = 8; this.task[by] = T_IDLE; this.tgt[by] = -1; } }
   }
@@ -1086,7 +1221,12 @@ export class Sim {
       const t = this.task[i];
       const still = this.cyst[i] || (isStructure(k) && (this.rooted[i] || k === Kind.NODE));
       const N0 = this.col[i] >= 0 ? this.nations[this.col[i]] : null;
-      const speed = still ? 0 : (k === Kind.MOTHER && !this.rooted[i] ? 36 : K.speed) * (this.has(this.col[i], 'speed') ? 1.15 : 1) * (N0?.techs.has('mot1') ? 1.1 : 1);
+      if (this.dash[i] > this.time) {
+        // a leaping copepod flies straight at its target
+        this.x[i] = clampW(this.x[i] + this.vx[i] * dt); this.y[i] = clampW(this.y[i] + this.vy[i] * dt);
+        continue;
+      }
+      const speed = still || this.stun[i] > this.time ? 0 : (k === Kind.MOTHER && !this.rooted[i] ? 36 : K.speed) * (this.has(this.col[i], 'speed') ? 1.15 : 1) * (N0?.techs.has('mot1') ? 1.1 : 1) * (k === Kind.TITAN ? TSPEED[this.tt[i]] : 1);
       if (speed > 0 && t !== T_IDLE) {
         const dx = this.gx[i] - this.x[i], dy = this.gy[i] - this.y[i], d = Math.hypot(dx, dy);
         const sp = speed * (t === T_WANDER ? 0.45 : 1) * (this.sat[i] <= 0 ? 0.6 : 1);
@@ -1265,7 +1405,7 @@ export class Sim {
     this.say(`${e.name}: ${tips[kind]}${where}.`);
   }
   infect(i: number, force = false) {
-    if (!this.alive[i] || this.inf[i] > 0 || this.immune[i] > this.time) return;
+    if (!this.alive[i] || this.inf[i] > 0 || this.immune[i] > this.time || this.tough(i)) return;
     const c = this.col[i];
     if (!force && c >= 0 && this.nations[c].techs.has('mem4') && this.r() < 0.8) { this.immune[i] = this.time + 20; return; }
     this.inf[i] = 0.01;
@@ -1280,7 +1420,7 @@ export class Sim {
     for (const e of this.events) {
       if (e.kind === 'bloom') for (let k = 0; k < 8; k++) { const a = this.r() * 6.283, d = Math.sqrt(this.r()) * e.r; this.addMote(e.x + Math.cos(a) * d, e.y + Math.sin(a) * d, 5 + this.r() * 4, -1); }
       if (e.kind === 'toxic') for (let i = 0; i < this.top; i++) {
-        if (!this.alive[i] || (this.x[i] - e.x) ** 2 + (this.y[i] - e.y) ** 2 > e.r * e.r) continue;
+        if (!this.alive[i] || this.tough(i) || (this.x[i] - e.x) ** 2 + (this.y[i] - e.y) ** 2 > e.r * e.r) continue;
         this.hp[i] -= 1.5; if (this.hp[i] <= 0) this.kill(i);
       }
     }
@@ -1291,7 +1431,7 @@ export class Sim {
       this.inf[i] += dt; n++; sx += this.x[i]; sy += this.y[i];
       if (this.r() < 0.35) { const j = this.nearest(this.x[i], this.y[i], 30, q => q !== i && this.inf[q] <= 0 && this.kind[q] !== Kind.DIATOM); if (j >= 0) this.infect(j); }
       if (this.inf[i] >= 20) {
-        if (isStructure(this.kind[i])) { this.inf[i] = 0; this.immune[i] = this.time + 120; continue; }
+        if (isStructure(this.kind[i]) || this.kind[i] === Kind.TITAN) { this.inf[i] = 0; this.immune[i] = this.time + 120; continue; }
         const x = this.x[i], y = this.y[i];
         this.kill(i);
         for (let j = 0; j < this.top; j++) if (this.alive[j] && (this.x[j] - x) ** 2 + (this.y[j] - y) ** 2 < 55 * 55 && this.r() < 0.5) this.infect(j);
@@ -1304,7 +1444,7 @@ export class Sim {
     if (this.events.length < before && pl && pl.until === 0) this.say('A praga viral acabou.');
     // toxin clouds
     for (const c of this.clouds) for (let i = 0; i < this.top; i++) {
-      if (!this.alive[i] || this.col[i] === c.nation || (this.col[i] >= 0 && c.nation >= 0 && !this.hostileNations(c.nation, this.col[i]))) continue;
+      if (!this.alive[i] || this.tough(i) || this.col[i] === c.nation || (this.col[i] >= 0 && c.nation >= 0 && !this.hostileNations(c.nation, this.col[i]))) continue;
       if ((this.x[i] - c.x) ** 2 + (this.y[i] - c.y) ** 2 > c.r * c.r) continue;
       this.hp[i] -= 4; this.hitAt[i] = this.time; if (this.hp[i] <= 0) this.kill(i);
     }
@@ -1335,7 +1475,7 @@ export class Sim {
   gainDna(killer: number, victim: number, engulf: boolean) {
     if (killer < 0) return;
     const N = this.nations[killer], k = this.kind[victim];
-    const base = k === Kind.BACTERIA ? 0.3 : k === Kind.DIATOM ? 2 : k === Kind.AMOEBA ? 4 : this.col[victim] >= 0 ? (isStructure(k) ? 0.6 : 0.3) : 0.2;
+    const base = k === Kind.TITAN ? 25 : k === Kind.BACTERIA ? 0.3 : k === Kind.DIATOM ? 2 : k === Kind.AMOEBA ? 4 : this.col[victim] >= 0 ? (isStructure(k) ? 0.6 : 0.3) : 0.2;
     N.dnaPts += base + (engulf ? 0.7 + (N.techs.has('pre2') ? 0.4 : 0) : 0);
   }
 
@@ -1375,6 +1515,7 @@ export class Sim {
         if (m < 0 || !this.rooted[m]) { this.say('Nenhuma colônia para dividir.'); break; }
         if (!this.unlocked(P, cmd.kind)) { this.say(`Pesquise ${TECHS.find(t => t.id === LOCKED[cmd.kind])!.name} primeiro.`); break; }
         if (PLACED.includes(cmd.kind)) { this.say('Escolha no mapa onde colocar.'); break; }
+        if (cmd.kind === Kind.TITAN && this.titanRoom(P) <= 0) { this.say(`Limite de titãs atingido (${titanLimit(P.techs)}). Pesquise mais Gigantismo para ter outro.`); break; }
         if (!this.train(P, m, cmd.kind)) this.say((this.queues.get(m)?.length ?? 0) >= 6 ? 'Fila de divisão cheia.' : 'Nutrientes ou energia insuficientes.');
         break;
       }
@@ -1504,7 +1645,7 @@ export class Sim {
   }
 
   // --- snapshots for the view ---------------------------------------------------------------------------------------------------
-  snapshot(): { ents: Float32Array; n: number; motes: Float32Array; nm: number; shots: Float32Array; np: number; deaths: number[] } {
+  snapshot(): { ents: Float32Array; n: number; motes: Float32Array; nm: number; shots: Float32Array; np: number; deaths: number[]; fx: number[] } {
     const n = this.top, ents = new Float32Array(n * STRIDE);
     for (let i = 0; i < n; i++) {
       const o = i * STRIDE;
@@ -1513,7 +1654,7 @@ export class Sim {
       ents[o] = this.x[i]; ents[o + 1] = this.y[i]; ents[o + 2] = this.ang[i];
       ents[o + 3] = this.set[i] * 16 + k; ents[o + 4] = this.col[i];
       ents[o + 5] = Math.max(0, this.hp[i]) / KINDS[k].hp;
-      ents[o + 6] = (this.carry[i] > 0 ? 1 : 0) | (this.time - this.hitAt[i] < 0.15 ? 2 : 0) | (this.sat[i] <= 0 ? 4 : 0) | (this.stance[i] << 4) | (this.task[i] === T_BUILD ? 128 : 0) | (k === Kind.MOTHER && !this.rooted[i] ? 256 : 0) | (this.cyst[i] ? 512 : 0) | (this.inf[i] > 0 ? 1024 : 0);
+      ents[o + 6] = (this.carry[i] > 0 ? 1 : 0) | (this.time - this.hitAt[i] < 0.15 ? 2 : 0) | (this.sat[i] <= 0 ? 4 : 0) | (this.stance[i] << 4) | (this.task[i] === T_BUILD ? 128 : 0) | (k === Kind.MOTHER && !this.rooted[i] ? 256 : 0) | (this.cyst[i] ? 512 : 0) | (this.inf[i] > 0 ? 1024 : 0) | (this.stun[i] > this.time ? 2048 : 0);
       ents[o + 7] = this.gen[i];
       ents[o + 8] = this.grp[i];
     }
@@ -1524,7 +1665,8 @@ export class Sim {
     const shots = new Float32Array(this.ptop * 3);
     for (let p = 0; p < this.ptop; p++) if (this.palive[p]) { shots[np * 3] = this.px[p]; shots[np * 3 + 1] = this.py[p]; shots[np * 3 + 2] = Math.atan2(this.pvy[p], this.pvx[p]); np++; }
     const deaths = this.deaths; this.deaths = [];
-    return { ents, n, motes, nm, shots, np, deaths };
+    const fx = this.fx; this.fx = [];
+    return { ents, n, motes, nm, shots, np, deaths, fx };
   }
   /** the player's colonies with their cells counted by kind, centre and division queue */
   colonyInfo(): ColonyInfo[] {
@@ -1569,6 +1711,12 @@ export class Sim {
 
 /** how close a placed structure may sit to another structure (same kind keeps its own gap, the big ones their body) */
 export const structGap = (k: number, other: number) => (other === k ? (k === Kind.SENTINEL ? 70 : 34) : other === Kind.MOTHER ? 46 : other === Kind.NODE ? 32 : 0);
-const isMil = (k: number) => k === Kind.HUNTER || k === Kind.ARMOR || k === Kind.SPITTER;
-const massOf = (k: number) => (k === Kind.NODE ? 1e4 : k === Kind.MOTHER ? 60 : k === Kind.ARMOR ? 6 : k === Kind.AMOEBA ? 20 : k === Kind.DIATOM ? 3 : 1);
+const isMil = (k: number) => k === Kind.HUNTER || k === Kind.ARMOR || k === Kind.SPITTER || k === Kind.TITAN;
+/** wild predators (hostile to every nation and to the wild prey) */
+const wildPred = (k: number) => k === Kind.AMOEBA || k === Kind.TITAN;
+/** titan speed by body plan: rotifer, tardigrade, hydra, nematode, copepod */
+const TSPEED = [0.95, 0.9, 0.6, 2.3, 1.35];
+/** wild titans use the neutral sprite sets NEUTRAL_SET + WILD_TITAN + body plan */
+const WILD_TITAN = 7;
+const massOf = (k: number) => (k === Kind.TITAN ? 400 : k === Kind.NODE ? 1e4 : k === Kind.MOTHER ? 60 : k === Kind.ARMOR ? 6 : k === Kind.AMOEBA ? 20 : k === Kind.DIATOM ? 3 : 1);
 export { TRAINABLE };

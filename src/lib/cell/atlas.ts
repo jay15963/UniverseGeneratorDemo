@@ -1,7 +1,7 @@
 // Sprite atlas of the cellular era: every sprite strip (its frames side by side) shelf-packed into 2048x2048 layers of a
 // texture array. Sprite ids used by the simulation are set * 16 + kind (sets 0..16 = species, 17.. = wild variants).
 import type { ArtJob } from './art.worker';
-import { Kind, SPECIES_KINDS, CellSpecies } from './look';
+import { Kind, SPECIES_KINDS, CellSpecies, TitanType } from './look';
 import { ROCK_VARIANTS } from './art';
 import { NEUTRAL_SET } from './sim';
 
@@ -10,12 +10,16 @@ export interface AtlasEntry { x: number; y: number; w: number; h: number; layer:
 export interface Atlas { layers: Uint8Array[]; entries: Map<string, AtlasEntry>; bySprite: (AtlasEntry | undefined)[] }
 
 export const spriteKey = (set: number, kind: number) => `k:${set}:${kind}`;
-export const NEUTRAL_VARIANTS = 7;   // bacteria 0-3, diatoms 4-5, amoeba 6
+export const NEUTRAL_VARIANTS = 12;  // bacteria 0-3, diatoms 4-5, amoeba 6, wild titans 7-11 (one per body plan)
+export const WILD_TITAN = 7;
 
 export function atlasJobs(species: CellSpecies[]): ArtJob[] {
   const jobs: ArtJob[] = [];
-  species.forEach((sp, set) => { for (let k = 0; k < SPECIES_KINDS; k++) jobs.push({ key: spriteKey(set, k), t: 'kind', sp, kind: k as Kind }); });
-  for (let v = 0; v < NEUTRAL_VARIANTS; v++) {
+  // the titans are the heaviest sprites: queue them first so they spread over the worker pool
+  species.forEach((sp, set) => jobs.push({ key: spriteKey(set, Kind.TITAN), t: 'kind', sp, kind: Kind.TITAN }));
+  species.forEach((sp, set) => { for (let k = 0; k < SPECIES_KINDS; k++) if (k !== Kind.TITAN) jobs.push({ key: spriteKey(set, k), t: 'kind', sp, kind: k as Kind }); });
+  for (let t = 0; t < 5; t++) jobs.push({ key: spriteKey(NEUTRAL_SET + WILD_TITAN + t, Kind.TITAN), t: 'wildTitan', type: t as TitanType });
+  for (let v = 0; v < WILD_TITAN; v++) {
     const kind = v < 4 ? Kind.BACTERIA : v < 6 ? Kind.DIATOM : Kind.AMOEBA;
     jobs.push({ key: spriteKey(NEUTRAL_SET + v, kind), t: 'neutral', kind, variant: v < 4 ? v : v < 6 ? v - 4 : 0 });
   }

@@ -135,8 +135,8 @@ export function hslRgb(h: number, s: number, l: number): [number, number, number
 // ---------------------------------------------------------------------------------------------------
 // Unit kinds (shared by the art, the simulation and the HUD)
 // ---------------------------------------------------------------------------------------------------
-export enum Kind { WORKER = 0, SCOUT = 1, HUNTER = 2, PHOTO = 3, ARMOR = 4, SPITTER = 5, MOTHER = 6, NODE = 7, SENTINEL = 8, BACTERIA = 9, DIATOM = 10, AMOEBA = 11 }
-export const SPECIES_KINDS = 9;          // kinds drawn for every species (units + mother + node + sentinel)
+export enum Kind { WORKER = 0, SCOUT = 1, HUNTER = 2, PHOTO = 3, ARMOR = 4, SPITTER = 5, MOTHER = 6, NODE = 7, SENTINEL = 8, TITAN = 9, BACTERIA = 10, DIATOM = 11, AMOEBA = 12 }
+export const SPECIES_KINDS = 10;         // kinds drawn for every species (units + mother + node + sentinel + titan)
 /** kinds that stand still once placed (they root where they were sent) */
 export const isStructure = (k: number) => k === Kind.MOTHER || k === Kind.NODE || k === Kind.PHOTO || k === Kind.SENTINEL;
 /** kinds the division bar places on the map instead of dividing free */
@@ -160,24 +160,38 @@ export const KINDS: KindInfo[] = [
   { name: 'Célula-mãe', short: 'MÃE', blurb: 'Funda uma nova colônia: leve-a a um espaço livre (longe de outras células-mãe) e ela se fixa, cria biofilme, divide-se e dá +8 de população.', food: 160, energy: 70, time: 18, hp: 700, armor: 3, speed: 9, r: 22, sight: 260, dmg: 6, range: 4, cd: 1, pop: 0, upkeep: 0.2 },
   { name: 'Nódulo de biofilme', short: 'NÓD', blurb: 'A coletora mais próxima da colônia nada até o ponto e se transforma: espalha biofilme (território), cura as células e dá +6 de população.', food: 50, energy: 20, time: 6, hp: 180, armor: 2, speed: 0, r: 12, sight: 180, dmg: 0, range: 0, cd: 1, pop: 0, upkeep: 0.05 },
   { name: 'Sentinela', short: 'SEN', blurb: 'Torre de guarda: nasce na colônia, nada até o ponto e se fixa. Dispara espinhos mais longe que a secretora - proteja as fotossintéticas, os nódulos e as colônias.', food: 50, energy: 40, time: 8, hp: 130, armor: 2, speed: 30, r: 9, sight: 320, dmg: 6, range: 270, cd: 1.4, pop: 1, upkeep: 0.3 },
+  { name: 'Titã', short: 'TIT', blurb: 'Um organismo multicelular gigante que a colônia leva muito tempo para formar. Cada espécie tem o seu: rotífero, tardígrado, hidra, nematoide ou copépode, cada um com um poder.', food: 380, energy: 220, time: 60, hp: 1400, armor: 4, speed: 26, r: 28, sight: 380, dmg: 20, range: 8, cd: 1.2, pop: 8, upkeep: 1.6 },
   { name: 'Bactéria', short: 'BAC', blurb: 'Presa selvagem. Vira nutriente e DNA.', food: 0, energy: 0, time: 0, hp: 8, armor: 0, speed: 30, r: 4, sight: 90, dmg: 0, range: 0, cd: 1, pop: 0, upkeep: 0 },
   { name: 'Diatomácea', short: 'DIA', blurb: 'Alga de carapaça de vidro, quase parada. Rica em nutrientes e DNA.', food: 0, energy: 0, time: 0, hp: 60, armor: 3, speed: 3, r: 10, sight: 0, dmg: 0, range: 0, cd: 1, pop: 0, upkeep: 0 },
   { name: 'Ameba selvagem', short: 'AME', blurb: 'Predadora solitária que devora qualquer célula.', food: 0, energy: 0, time: 0, hp: 260, armor: 1, speed: 34, r: 20, sight: 220, dmg: 14, range: 4, cd: 1.1, pop: 0, upkeep: 0 },
 ];
 /** the kinds the mother cell can divide into */
-export const TRAINABLE = [Kind.WORKER, Kind.SCOUT, Kind.HUNTER, Kind.PHOTO, Kind.ARMOR, Kind.SPITTER, Kind.SENTINEL, Kind.MOTHER];
+export const TRAINABLE = [Kind.WORKER, Kind.SCOUT, Kind.HUNTER, Kind.PHOTO, Kind.ARMOR, Kind.SPITTER, Kind.SENTINEL, Kind.TITAN, Kind.MOTHER];
 /** what each kind is for, in one line (the division tooltips) */
 export const ROLE: Partial<Record<Kind, string>> = {
   [Kind.WORKER]: 'Economia', [Kind.SCOUT]: 'Batedora', [Kind.HUNTER]: 'Combate corpo a corpo', [Kind.PHOTO]: 'Energia',
   [Kind.ARMOR]: 'Linha de frente', [Kind.SPITTER]: 'Combate à distância', [Kind.MOTHER]: 'Nova colônia', [Kind.NODE]: 'Território',
-  [Kind.SENTINEL]: 'Torre de defesa',
+  [Kind.SENTINEL]: 'Torre de defesa', [Kind.TITAN]: 'Organismo gigante',
 };
+
+// ---------------------------------------------------------------------------------------------------
+// Titans: every species grows one body plan (from its seed); wild ones roam the pool
+// ---------------------------------------------------------------------------------------------------
+export type TitanType = 0 | 1 | 2 | 3 | 4;
+export const TITANS: { name: string; power: string; desc: string }[] = [
+  { name: 'Rotífero', power: 'Vórtice', desc: 'A coroa de cílios gira e cria um vórtice: puxa nutrientes (que viram estoque) e células pequenas inimigas para a boca, onde são trituradas.' },
+  { name: 'Tardígrado', power: 'Indestrutível', desc: 'Blindagem enorme; imune a fontes termais, toxinas, nuvens e à praga viral.' },
+  { name: 'Hidra', power: 'Ferroada', desc: 'A cada 2,5 s os tentáculos ferroam todos os inimigos em volta e os deixam paralisados.' },
+  { name: 'Nematoide', power: 'Atropelar', desc: 'Rápido: atravessa as fileiras inimigas ferindo e empurrando quem estiver no caminho.' },
+  { name: 'Copépode', power: 'Salto', desc: 'Salta sobre o alvo de longe e o impacto fere e arremessa quem estiver perto.' },
+];
+export const titanType = (sp: CellSpecies): TitanType => (Math.abs(seedToInt(sp.seed + ':titan')) % 5) as TitanType;
 
 // ---------------------------------------------------------------------------------------------------
 // The evolution tree: researched with DNA + energy, one at a time
 // ---------------------------------------------------------------------------------------------------
-export type Branch = 'met' | 'mot' | 'mem' | 'pre' | 'com';
-export const BRANCHES: [Branch, string][] = [['met', 'Metabolismo'], ['mot', 'Motilidade'], ['mem', 'Membrana'], ['pre', 'Predação'], ['com', 'Comunicação']];
+export type Branch = 'met' | 'mot' | 'mem' | 'pre' | 'com' | 'tit';
+export const BRANCHES: [Branch, string][] = [['met', 'Metabolismo'], ['mot', 'Motilidade'], ['mem', 'Membrana'], ['pre', 'Predação'], ['com', 'Comunicação'], ['tit', 'Gigantismo']];
 export interface Tech { id: string; branch: Branch; tier: number; name: string; desc: string; dna: number; energy: number; time: number; req: string[]; unlock?: Kind }
 export const TECHS: Tech[] = [
   { id: 'met1', branch: 'met', tier: 1, name: 'Quimiotaxia', desc: 'Coletoras sentem comida 60% mais longe e carregam 25% mais.', dna: 4, energy: 40, time: 25, req: [] },
@@ -198,9 +212,14 @@ export const TECHS: Tech[] = [
   { id: 'com2', branch: 'com', tier: 2, name: 'Adesão celular', desc: 'Células se curam 50% mais rápido e sofrem metade do dano quando falta energia.', dna: 10, energy: 70, time: 40, req: ['com1'] },
   { id: 'com3', branch: 'com', tier: 3, name: 'Diferenciação', desc: 'Divisões 15% mais baratas.', dna: 16, energy: 100, time: 50, req: ['com2'] },
   { id: 'com4', branch: 'com', tier: 4, name: 'Multicelularidade', desc: 'O passo final: exigido para evoluir para multicelular.', dna: 25, energy: 150, time: 70, req: ['com3'] },
+  { id: 'tit1', branch: 'tit', tier: 1, name: 'Organismo colonial', desc: 'Libera o Titã da sua espécie (1 de cada vez).', dna: 12, energy: 90, time: 45, req: ['met1', 'mem1'], unlock: Kind.TITAN },
+  { id: 'tit2', branch: 'tit', tier: 2, name: 'Tecidos especializados', desc: 'Titãs com +30% de vida e de dano; até 2 titãs.', dna: 18, energy: 120, time: 55, req: ['tit1', 'com2'] },
+  { id: 'tit3', branch: 'tit', tier: 3, name: 'Superorganismo', desc: 'Titãs se regeneram em qualquer lugar; até 3 titãs.', dna: 26, energy: 160, time: 70, req: ['tit2'] },
 ];
 /** kinds that need research first */
-export const LOCKED: Partial<Record<Kind, string>> = { [Kind.ARMOR]: 'mem2', [Kind.SENTINEL]: 'mem3', [Kind.SPITTER]: 'pre1' };
+export const LOCKED: Partial<Record<Kind, string>> = { [Kind.ARMOR]: 'mem2', [Kind.SENTINEL]: 'mem3', [Kind.SPITTER]: 'pre1', [Kind.TITAN]: 'tit1' };
+/** how many titans a species can keep alive */
+export const titanLimit = (techs: { has(t: string): boolean }) => (techs.has('tit3') ? 3 : techs.has('tit2') ? 2 : techs.has('tit1') ? 1 : 0);
 /** every stolen gene makes research 8% cheaper in DNA (up to 40%) */
 export const geneDiscount = (genes: number) => Math.max(0.6, 1 - genes * 0.08);
 

@@ -335,7 +335,7 @@ Owner's rules - keep them:
   the body (hunters/spitters -> predator diet, photosynthesisers -> gentle, armour -> size), saved with the species
   (`CellSpecies.evolved`) and previewed as the aquatic larva of the creature generator.
 - **Fog of war** (`sim.ts` `updateVision`, `VIS` 64 px grid sent as `vis`): only other nations' cells are hidden outside
-  the player's sight; nutrients and wildlife (and the future titans) are always visible. The fog is a light dithered
+  the player's sight; nutrients, wildlife and every titan are always visible. The fog is a light dithered
   darkening (`gl.ts` fog pass). A species' name, colour and whole territory appear only once one of its cells has been
   seen (`met`: palette alpha in the biofilm shader, minimap, labels, species panel), so the pool looks empty at first;
   a discovery gives +3 DNA.
@@ -355,4 +355,15 @@ Owner's rules - keep them:
 - **Active AI diplomacy**: AI species offer peace / symbiosis and demand tributes (Aceitar / Recusar cards, 30 s;
   ignoring = refusing; a refused tribute sends them to war), make and break pacts among themselves and gang up on a
   player grown far stronger than everyone (coalition).
-- Next round (agreed with the owner): **titans** (giant, always-visible organisms) get a round of their own.
+- **Titans** (`Kind.TITAN`, art in `titan.ts`): giant multicellular micro-animals, **always visible** (never under the
+  fog), one body plan per species (`titanType(seed)`), drawn from above with the species' colours / pattern / glow:
+  Rotífero (counter-rotating ciliated wheels, grinding jaws; power **Vórtice**: drags motes - food for its nation - and
+  small enemy cells into its mouth), Tardígrado (8 clawed walking legs, plates or storage cells; **Indestrutível**:
+  takes ~half damage, immune to vents, toxins, clouds and the plague), Hidra (writhing tentacles with stinging cells and
+  a bud; **Ferroada**: every 2.5 s stings everything within 150 and paralyses it 1.5 s), Nematoide (undulating ringed
+  worm; **Atropelar**: fast, drives through the ranks hurting and shoving), Copépode (one red eye, beating antennae,
+  egg sacs; **Salto**: leaps on targets 110-430 away, the landing hurts and throws). Research branch **Gigantismo**
+  (tit1 unlocks 1 titan, tit2 +30% life/damage and 2, tit3 regeneration and 3); expensive, 60 s to divide, 8 pop,
+  1.6 energy/s. The AI researches and builds them. **Wild titans** (neutral sets `NEUTRAL_SET + 7..11`) appear from
+  ~2.5 min (up to 3), roam and attack any cell nearby; killing any titan gives 25 DNA. Titans get a health bar, a name
+  tag and a minimap diamond (wild ones orange); power effects are sent as `fx` rings.

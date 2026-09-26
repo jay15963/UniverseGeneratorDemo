@@ -12,9 +12,9 @@ export const FRAMES = 8;
 const TAU = Math.PI * 2;
 export interface CellSprite { w: number; h: number; frames: Uint8ClampedArray[] }
 
-const clamp = (x: number, a: number, b: number) => (x < a ? a : x > b ? b : x);
-const R_ = (c: HSL, spread = 1) => ramp(c.h, clamp(c.s, 0, 1), clamp(c.l, 0.05, 0.95), spread);
-const hueTo = (a: number, b: number, t: number) => { let d = b - a; if (d > 0.5) d -= 1; if (d < -0.5) d += 1; return (a + d * t + 1) % 1; };
+export const clamp = (x: number, a: number, b: number) => (x < a ? a : x > b ? b : x);
+export const R_ = (c: HSL, spread = 1) => ramp(c.h, clamp(c.s, 0, 1), clamp(c.l, 0.05, 0.95), spread);
+export const hueTo = (a: number, b: number, t: number) => { let d = b - a; if (d > 0.5) d -= 1; if (d < -0.5) d += 1; return (a + d * t + 1) % 1; };
 
 /** radius of the base shape along angle a (unit cell) */
 function shapeR(shape: CellShape, a: number, rr: number[]): number {
@@ -30,7 +30,7 @@ function shapeR(shape: CellShape, a: number, rr: number[]): number {
   }
 }
 
-interface Ctx {
+export interface Ctx {
   look: CellLook; rr: number[]; ph: number; R: number; elong: number; wob: number; shape: CellShape;
   mem: Mat; memDark: Mat; cyto: Mat; nuc: Mat; nucDark: Mat; org: Mat[]; vac: Mat; eye: Mat; glow: Mat | null; pale: Mat;
   glowN: number; memThick: number;
@@ -63,7 +63,7 @@ function patternFn(look: CellLook, seed: number): Mat['pattern'] {
   }
 }
 
-function makeCtx(sp: CellSpecies, R: number, ph: number, over: Partial<CellLook> = {}): Ctx {
+export function makeCtx(sp: CellSpecies, R: number, ph: number, over: Partial<CellLook> = {}): Ctx {
   const look = { ...sp.look, ...over };
   const col = cellColours(look, sp.mode);
   const rr = Array.from({ length: 64 }, mulberry(seedToInt(sp.seed + ':art')));
@@ -145,7 +145,7 @@ function eyespot(rig: Rig, c: Ctx, size: number) {
   const [x, y] = rimPt(c, -0.45, 0.72);
   rig.e(x, y, 0.7 + size * 1.5, 0.6 + size * 1.2, 0, c.eye);
 }
-function glowDots(rig: Rig, c: Ctx) {
+export function glowDots(rig: Rig, c: Ctx) {
   if (!c.glow) return;
   for (let i = 0; i < c.glowN; i++) {
     const a = c.rr[56 + (i % 8)] * TAU + i, [x, y] = rimPt(c, a, 0.72);
@@ -267,7 +267,7 @@ function buildKind(rig: Rig, sp: CellSpecies, kind: Kind, ph: number) {
 }
 
 // --- neutral life & props ------------------------------------------------------------------------------------------------
-function neutralSpecies(variant: number): CellSpecies {
+export function neutralSpecies(variant: number): CellSpecies {
   const seed = 'neutral' + variant;
   const r = mulberry(seedToInt(seed));
   return {
@@ -382,7 +382,7 @@ function shiftShape(s: Shape, dx: number, dy: number): Shape {
   return { k: 'p', pts: s.pts.map((v, i) => v + (i & 1 ? dy : dx)) };
 }
 /** rasterises n frames on one canvas size, centred on the cell (the sprite's anchor is its centre) */
-function render(build: (rig: Rig, ph: number) => void, n: number): CellSprite {
+export function render(build: (rig: Rig, ph: number) => void, n: number): CellSprite {
   const sets: Part[][] = [];
   let hx = 2, hy = 2;
   for (let f = 0; f < n; f++) {
