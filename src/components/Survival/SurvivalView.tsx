@@ -30,6 +30,7 @@ import { ERA_NAMES, type CityMeta } from '../../lib/city/codes';
 import { ERAS } from '../../lib/structure/genome';
 import type { Discovery } from '../../lib/play/discovery';
 import { drawFog } from '../../lib/play/fogPaint';
+import { Underwater } from './underwater';
 
 interface Props {
   session: PlanetSession;
@@ -47,11 +48,13 @@ interface Props {
   standby?: boolean;
   /** play mode: discovery fog over the unknown; `sight` = radius (tiles) revealed around the camera at gameplay zoom */
   discovery?: { fog: Discovery; sight: number } | null;
+  /** play mode, aquatic era: the local zooms look under the sea (seabed, water column), the far zoom is the surface */
+  aquatic?: boolean;
 }
 
 /** A drawable image: a GPU texture region (WebGL path) or a canvas (Canvas2D fallback). */
 interface Img { reg?: TexRegion; c?: HTMLCanvasElement; w: number; h: number }
-interface LoadedRow { y: number; h: number; img: Img; anim: Img[] | null }
+interface LoadedRow { y: number; h: number; img: Img; anim: Img[] | null; bed?: Img | null; bedAnim?: Img[] | null }
 interface LoadedChunk {
   data: ChunkData; rows: LoadedRow[]; mini: HTMLCanvasElement; lastUsed: number;
   byRow: Feature[][];   // features bucketed by local tile row, pre-sorted by y
@@ -89,6 +92,8 @@ interface Painter {
   sprite(c: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number): void;
   shadow(x: number, y: number, rx: number): void;
   flushShadows(): void;
+  /** a sprite multiplied by a colour (premultiplied ABGR on the GPU; alpha only on the canvas fallback) */
+  tint(c: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, col: number, alpha: number): void;
 }
 function canvasPainter(ctx: CanvasRenderingContext2D): Painter {
   let any = false;
@@ -101,6 +106,7 @@ function canvasPainter(ctx: CanvasRenderingContext2D): Painter {
       ctx.ellipse(x + rx * 0.25, y, rx, rx * 0.38, 0, 0, Math.PI * 2);
     },
     flushShadows: () => { if (any) { ctx.fillStyle = 'rgba(8,12,6,0.28)'; ctx.fill(); any = false; } },
+    tint: (c, sx, sy, sw, sh, dx, dy, _col, alpha) => { ctx.globalAlpha = alpha * 0.6; ctx.drawImage(c, sx, sy, sw, sh, dx, dy, sw, sh); ctx.globalAlpha = 1; },
   };
 }
 const SHADOW_COL = rgba(8, 12, 6, 0.28);
@@ -110,6 +116,7 @@ function glPainter(gl: GLWorld, shadowTex: HTMLCanvasElement): Painter {
     sprite: (c, sx, sy, sw, sh, dx, dy) => { const r = gl.atlas(c); gl.quad(r, sx, sy, sw, sh, dx, dy, sw, sh); },
     shadow: (x, y, rx) => { const r = gl.atlas(shadowTex); gl.quad(r, 0, 0, r.w, r.h, x - rx * 0.75, y - rx * 0.38, rx * 2, rx * 0.76, SHADOW_COL); },
     flushShadows: () => { /* drawn immediately */ },
+    tint: (c, sx, sy, sw, sh, dx, dy, col) => { const r = gl.atlas(c); gl.quad(r, sx, sy, sw, sh, dx, dy, sw, sh, col); },
   };
 }
 /** Pixel-art ellipse used for contact shadows on the GPU path. */
@@ -135,7 +142,12 @@ function canvasImg(px: Uint8ClampedArray, w: number, h: number): Img {
 /** Packs all terrain rows (and liquid animation frames) of a chunk into the columns of a single texture. */
 function packChunkRows(gl: GLWorld, data: ChunkData): { rows: LoadedRow[]; tex: WebGLTexture } {
   const items: { px: Uint8ClampedArray; h: number; col: number; y: number }[] = [];
-  for (const r of data.rows) { items.push({ px: r.px, h: r.h, col: 0, y: 0 }); if (r.anim) for (const a of r.anim) items.push({ px: a, h: r.h, col: 0, y: 0 }); }
+  for (const r of data.rows) {
+    items.push({ px: r.px, h: r.h, col: 0, y: 0 });
+    if (r.anim) for (const a of r.anim) items.push({ px: a, h: r.h, col: 0, y: 0 });
+    if (r.bed) items.push({ px: r.bed, h: r.h, col: 0, y: 0 });
+    if (r.bedAnim) for (const a of r.bedAnim) items.push({ px: a, h: r.h, col: 0, y: 0 });
+  }
   let colH = 2048, cols = 1, usedH = 1;
   for (;;) {
     let col = 0, y = 0;
@@ -157,7 +169,9 @@ function packChunkRows(gl: GLWorld, data: ChunkData): { rows: LoadedRow[]; tex: 
   const rows = data.rows.map(r => {
     const img = region(items[k++]);
     const anim = r.anim ? r.anim.map(() => region(items[k++])) : null;
-    return { y: r.y, h: r.h, img, anim };
+    const bed = r.bed ? region(items[k++]) : null;
+    const bedAnim = r.bedAnim ? r.bedAnim.map(() => region(items[k++])) : null;
+    return { y: r.y, h: r.h, img, anim, bed, bedAnim };
   });
   return { rows, tex };
 }
@@ -177,7 +191,7 @@ const PLAYER_K = CITIZEN_K;
 const REACH = 26;
 const SPEED = 74;
 
-export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null, standby = false, discovery = null }: Props) {
+export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null, standby = false, discovery = null, aquatic = false }: Props) {
   const cine = cinematic;
   const spectator = spectatorProp || !!cine;
   /** spectator mode can drop in as a citizen of one of its cities (and leave again) */
@@ -378,7 +392,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         const gl = glRef.current;
         let rows: LoadedRow[], tex: WebGLTexture | null = null;
         if (gl) ({ rows, tex } = packChunkRows(gl, data));
-        else rows = data.rows.map(r => ({ y: r.y, h: r.h, img: canvasImg(r.px, CHUNK_PX, r.h), anim: r.anim ? r.anim.map(a => canvasImg(a, CHUNK_PX, r.h)) : null }));
+        else rows = data.rows.map(r => ({ y: r.y, h: r.h, img: canvasImg(r.px, CHUNK_PX, r.h), anim: r.anim ? r.anim.map(a => canvasImg(a, CHUNK_PX, r.h)) : null,
+          bed: r.bed ? canvasImg(r.bed, CHUNK_PX, r.h) : null, bedAnim: r.bedAnim ? r.bedAnim.map(a => canvasImg(a, CHUNK_PX, r.h)) : null }));
         const byRow: Feature[][] = Array.from({ length: CHUNK }, () => []);
         for (const f of data.features) byRow[Math.max(0, Math.min(CHUNK - 1, Math.floor(f.y / TILE) - data.cy * CHUNK))].push(f);
         for (const b of byRow) b.sort((a, b2) => (a.t === Feat.LILY_PAD ? a.y - 100 : a.y) - (b2.t === Feat.LILY_PAD ? b2.y - 100 : b2.y));
@@ -409,6 +424,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     if (!c) return null;
     const tx = Math.floor(wx / TILE) - c.data.cx * CHUNK, ty = Math.floor(wy / TILE) - c.data.cy * CHUNK;
     return { c, k: ty * CHUNK + tx };
+  };
+  /** open sea under a world point (not rivers or ponds) */
+  const seaAt = (wx: number, wy: number) => {
+    const cc = cellAt(wx, wy);
+    if (!cc) return false;
+    const gr = cc.c.data.ground[cc.k];
+    return gr === Ground.DEEP_WATER || gr === Ground.SHALLOW_WATER;
   };
   const groundAt = (wx: number, wy: number): Ground | null => {
     const q = cellAt(wx, wy);
@@ -769,6 +791,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     };
     // --- regional LOD blocks (sampled terrain, painted cities, no features) ---
     let farNow = false;
+    // --- aquatic era: submerged local zooms, surface far zoom, transitions between them ---
+    const uw = new Underwater();
+    let subNow = false, prevSub: boolean | null = null, seaFrac = 0, seaSampleT = 0;
+    let waterRGB: [number, number, number] | null = null;
+    const SILHOUETTE = rgba(10, 28, 44, 0.5);
     const regions = new Map<string, RegionBlock>();
     const regionPending = new Set<string>();
     const freeSlots: number[] = [];
@@ -884,6 +911,16 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       for (const d of animalDraws) { const rr = Math.floor(d.a.y / TILE); if (!animals.has(rr)) animals.set(rr, []); animals.get(rr)!.push(d); }
       const drawAnimal = (d: AnimalDraw) => {
         const sh = d.sheet;
+        const swimmer = aquatic && d.a.sp.habitat === 'water';
+        if (swimmer && subNow) {
+          // under the sea: the whole body, gliding a little above its shadow on the floor
+          p.sprite(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.x - sh.ax), Math.round(d.y - sh.ay - 6));
+          return;
+        }
+        if (swimmer && d.clip > 0.35) {
+          // seen from above the surface: a dark shape under the water, what breaks the surface drawn over it
+          p.tint(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.x - sh.ax), Math.round(d.y - sh.ay * 0.6), SILHOUETTE, 0.5);
+        }
         if (d.clip > 0) {
           // surfacing swimmer: only what sticks out of the water, cut at the water line
           const vis = Math.max(0, Math.min(sh.ch, Math.round(sh.ch * (1 - d.clip) * 1.25)));
@@ -908,7 +945,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           if (!c) continue;
           const row = c.rows[j];
           if (!row) continue;
-          const im = row.anim ? row.anim[liquidFrame] : row.img;
+          const im = subNow && row.bed ? (row.bedAnim ? row.bedAnim[liquidFrame] : row.bed) : row.anim ? row.anim[liquidFrame] : row.img;
           p.blit(im, 0, 0, im.w, im.h, (cx0 + k) * CHUNK_PX, row.y, im.w, im.h);
         }
         // 2. contact shadows of this row
@@ -917,13 +954,17 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           if (!c) continue;
           for (const f of c.byRow[j]) {
             if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id) || (farNow && SMALL_FEATS.has(f.t))) continue;
+            if (subNow && f.t === Feat.LILY_PAD && seaAt(f.x, f.y)) continue;
             const sh = bank.get(f.t, f.v, false).shadow;
             if (sh) p.shadow(f.x, f.y - f.l * LIFT, sh);
           }
         }
         if (r === prow) p.shadow(g.x - 0.5, g.y - g.lift, 6);
         const rowAnimals = animals.get(r);
-        if (rowAnimals) for (const d of rowAnimals) if (d.clip === 0) p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY, Math.max(3, d.sheet.cw * 0.28));
+        if (rowAnimals) for (const d of rowAnimals) {
+          if (d.clip === 0) p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY, Math.max(3, d.sheet.cw * 0.28));
+          else if (subNow && aquatic && d.a.sp.habitat === 'water') p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY + 4, Math.max(3, d.sheet.cw * 0.24));
+        }
         p.flushShadows();
         let ai = 0;
         // 3. sprites of this row in y order, player merged in
@@ -933,6 +974,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           if (!c) continue;
           for (const f of c.byRow[j]) {
             if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id) || (farNow && SMALL_FEATS.has(f.t))) continue;
+            if (subNow && f.t === Feat.LILY_PAD && seaAt(f.x, f.y)) continue;
             while (rowAnimals && ai < rowAnimals.length && rowAnimals[ai].a.y < f.y && f.t !== Feat.LILY_PAD) drawAnimal(rowAnimals[ai++]);
             if (!playerDone && f.y > g.y && f.t !== Feat.LILY_PAD) { drawPlayer(); playerDone = true; }
             if (stop && r === stop.row && f.y > stop.y) continue;
@@ -1387,6 +1429,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       if (lod !== lodShown || (!cine && zt !== zoomShown)) { lodShown = lod; zoomShown = zt; setLodLabel({ lod, zoom: zt }); }
       const local = chunked(lod), far = lod === 'far', regional = lod === 'regional';
       farNow = far;
+      subNow = aquatic && lod === 'local';
+      if (aquatic && prevSub !== null && subNow !== prevSub && seaFrac > 0.25 && !uw.trans) uw.trans = { up: !subNow, t0: now / 1000 };
+      prevSub = subNow;
+      fx.underwater = subNow && seaFrac > 0.5;
       if (standbyRef.current) { raf = requestAnimationFrame(frame); return; }
 
       // --- interaction target (same terrace only; hand-gatherables win over tool-only things) ---
@@ -1418,6 +1464,19 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const vw = W / Z / 2 + 48, vh = H / Z / 2 + 64;
       const x0 = camX - vw, x1 = camX + vw, y0 = camY - vh, y1 = camY + vh;
       const t = (now - t0) / 1000;
+      // share of the view that is open sea (sampled a few times a second): weights the underwater ambience
+      if (aquatic && local && now - seaSampleT > 250) {
+        seaSampleT = now;
+        let n = 0, sea = 0;
+        for (let j = 0; j < 5; j++) for (let i = 0; i < 7; i++) {
+          const wx = x0 + ((i + 0.5) / 7) * (x1 - x0), wy = y0 + ((j + 0.5) / 5) * (y1 - y0);
+          if (!chunkAt(wx, wy)) continue;
+          n++; if (seaAt(wx, wy)) sea++;
+          if (!waterRGB && seaAt(wx, wy)) { const cc = cellAt(wx, wy)!; const m = cc.c.data.mini; waterRGB = [m[cc.k * 4], m[cc.k * 4 + 1], m[cc.k * 4 + 2]]; }
+        }
+        const f = n ? sea / n : 0;
+        seaFrac = prevSub === null || seaFrac === 0 ? f : seaFrac + (f - seaFrac) * 0.5;
+      }
       const day = (g.time / DAY_SECONDS) % 1;
       const sun = Math.sin((day - 0.25) * Math.PI * 2);
 
@@ -1619,6 +1678,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           octx.beginPath(); octx.ellipse(sx, sy, (LENS / 2 - 3) * g.lensK * S, (LENS / 2 - 3) * g.lensK * S / 1.12, 0, 0, Math.PI * 2); octx.stroke();
         }
         if (sun > -0.2 && sun < 0.25) { octx.fillStyle = `rgba(255,120,40,${(1 - Math.abs(sun - 0.02) / 0.23) * 0.12})`; octx.fillRect(0, 0, DW, DH); }
+        if (subNow) uw.ambience(octx, DW, DH, S, tx0, ty0, t, seaFrac, Math.max(0, Math.min(1, sun + 0.2)), dpr);
         fx.drawScreen(octx, DW, DH, S, fxc, toScreen);
         fogPass();
         if (spectator && !cine && !avatarRef.current) drawCityLabels(toScreen, dpr, S, false, DW);
@@ -1653,6 +1713,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           octx.stroke();
         }
         if (spectator || regional) { drawLinks(toScreen, dpr); drawCityLabels(toScreen, dpr, S, true, DW, regional); }
+      }
+
+      // surfacing / diving between the submerged and the surface zooms
+      if (uw.trans) {
+        const k = (now / 1000 - uw.trans.t0) / Underwater.TRANS;
+        if (k >= 1) uw.trans = null;
+        else uw.transition(octx, DW, DH, dpr, Math.max(0, k), uw.trans.up, waterRGB ?? [22, 92, 120]);
       }
 
       if (cineFade > 0.002) {
@@ -1820,6 +1887,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           <button onClick={() => zoomStep(1)} title="Afastar (roda / -)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><ZoomOut className="w-4 h-4" /></button>
         </div>
       )}
+      {!loading && aquatic && (lodLabel.lod === 'local' || lodLabel.lod === 'far') && (
+        <div className={`absolute left-1/2 -translate-x-1/2 ${spectator ? 'bottom-[70px]' : 'bottom-[76px]'} pointer-events-none bg-[#031824]/75 border border-cyan-200/20 rounded-lg px-3 py-1.5 text-center`}>
+          <div className="text-cyan-50 font-bold text-sm tracking-wide">{lodLabel.lod === 'local' ? 'Gameplay aquático · submerso' : 'Regional aquático · superfície'}</div>
+          <div className="text-[11px] font-mono text-cyan-200/60">{lodLabel.lod === 'local' ? 'o fundo do mar e a coluna d\'água · roda para subir' : 'o mar visto de cima · roda para mergulhar'}</div>
+        </div>
+      )}
       {!loading && (lodLabel.lod === 'regional' || lodLabel.lod === 'world') && (
         <div className={`absolute left-1/2 -translate-x-1/2 ${spectator ? 'bottom-[70px]' : 'bottom-[76px]'} pointer-events-none bg-black/70 border border-white/15 rounded-lg px-3 py-1.5 text-center`}>
           <div className="text-white font-bold text-sm tracking-wide">{LOD_NAME[lodLabel.lod]}</div>
@@ -1894,7 +1967,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         </div>
       )}
 
-      {free && !loading && (() => {
+      {free && !loading && !discovery && (() => {
         const sel = cityList.find(c => c.id === selCity) ?? null;
         const LEGEND: [string, string][] = [['#50c85a', 'Residencial'], ['#4682eb', 'Comercial'], ['#ebcd3c', 'Industrial'], ['#82d2f5', 'Administrativo'],
           ['#dc3c37', 'Militar'], ['#a05ad2', 'Campos (fazenda, mina…)'], ['#8a857c', 'Muralhas e torres'], ['#9a7048', 'Ruas (material da era)']];

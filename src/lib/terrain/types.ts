@@ -78,6 +78,9 @@ export interface TerrainRow {
   h: number;   // buffer height in px
   px: Uint8ClampedArray; // CHUNK_PX x h RGBA
   anim?: Uint8ClampedArray[]; // looping animation frames (flowing water / lava), same size as px
+  /** aquatic view: the row with the seabed instead of the sea's surface (and its caustic / seagrass frames) */
+  bed?: Uint8ClampedArray;
+  bedAnim?: Uint8ClampedArray[];
 }
 
 export interface ChunkData {

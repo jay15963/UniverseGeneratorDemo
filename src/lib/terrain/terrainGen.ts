@@ -34,6 +34,7 @@ import { RockType, ROCK_RAMPS, GROUND_RAMPS, LEAF, RGB, shiftRamp, vegetationHue
 import { CZ, CityChunkData, isGraded, isRoad, isWallish, isZone, keepFeature } from '../city/codes';
 import { lifeStageOf, vegAmount, seaZone, SeaZone } from '../planet-generator/lifeStage';
 import { cityPixel, cityRegionColor } from '../city/paint';
+import { seabedRow, BedStyle } from './seabed';
 
 // ---------------------------------------------------------------------------
 // Cities painted into the terrain (per worker). A city plan is a set of per-chunk tile codes with the
@@ -111,6 +112,9 @@ export class TerrainGenerator {
   /** the planet's life stage (0 bare land .. 1 green) and its ocean depth bands */
   readonly vita: number;
   readonly depthQ: [number, number];
+  /** aquatic view: rows also carry the seabed */
+  readonly bedStyle: BedStyle | null;
+  private qT: Float32Array | null = null;
 
   constructor(gen: PlanetFields) {
     this.gen = gen;
@@ -134,6 +138,18 @@ export class TerrainGenerator {
       marsh: shiftRamp(R.marsh, vh), jungle: shiftRamp(R.jungle, vh * 0.5), tundra: shiftRamp(R.tundra, vh * 0.5),
       water: shiftRamp(R.water, wh), shallow: shiftRamp(R.shallow, wh), swampWater: shiftRamp(R.swampWater, wh * 0.5),
     };
+    this.bedStyle = c.aquaticView && this.hasSea ? {
+      seed: this.seed, sand: R.sand, mud: R.mud, rock: ROCK_RAMPS as unknown as RGB[][], water: this.ramps.water, shallow: this.ramps.shallow,
+      grass: shiftRamp(R.marsh, vh), alien, vh,
+    } : null;
+  }
+  /** deepness of a sea tile for the seabed: 0 shore .. 0.33 shelf edge .. 0.66 abyss edge .. 1 */
+  private deepness(t: TileInfo): number {
+    if (!(t.g === Ground.DEEP_WATER || t.g === Ground.SHALLOW_WATER)) return 0;
+    const dr = t.depth / Math.max(1e-4, this.sea), [q0, q1] = this.depthQ;
+    if (dr < q0) return (dr / q0) * 0.33;
+    if (dr < q1) return 0.33 + ((dr - q0) / Math.max(1e-4, q1 - q0)) * 0.33;
+    return 0.66 + Math.min(1, (dr - q1) / Math.max(1e-4, 1 - q1)) * 0.34;
   }
 
   // ---------------------------------------------------------------------------
@@ -547,6 +563,7 @@ export class TerrainGenerator {
 
     const pixels = this.raster(cx, cy, tiles, nearWater, city);
     const falls: ChunkData['falls'] = [];
+    if (this.bedStyle) { const qT = this.qT ??= new Float32Array(N * N); for (let i = 0; i < N * N; i++) qT[i] = this.deepness(tiles[i]); }
     const rows = this.compose(cx, cy, tiles, pixels, falls, this.lastLiquid!);
     let features = this.place(cx, cy, tiles, nearWater);
     if (city) {
@@ -895,6 +912,8 @@ export class TerrainGenerator {
       const H = TILE + (maxL - minL) * LIFT; // buffer spans only this row's own relief
       const buf = new Uint8ClampedArray(CHUNK_PX * H * 4);
       const animPx: number[] = []; // [bufIndex, wx, wy, kind, tileCol] * n
+      const bedPx: number[] = [];  // aquatic view: [bufIndex, wx, wy, q*1000, temp*1000, rock] * n
+      const qT = this.bedStyle ? this.qT : null;
       const rowGroundY = (cy * CHUNK + j) * TILE;
       for (let i = 0; i < CHUNK; i++) {
         const t = tiles[jj * N + i + B];
@@ -933,6 +952,14 @@ export class TerrainGenerator {
           buf[bk] = r * k; buf[bk + 1] = g * k; buf[bk + 2] = b * k; buf[bk + 3] = 255;
           const lq = liq[gk >> 2];
           if (lq) animPx.push(bk, wx0 + x, rowGroundY + y, lq, i);
+          if (qT && L === 0 && (t.g === Ground.DEEP_WATER || t.g === Ground.SHALLOW_WATER)) {
+            // bilinear deepness between tile centres (shore pixels stay shallow)
+            const fx = (x + 0.5) / TILE - 0.5, fy = (y + 0.5) / TILE - 0.5;
+            const di = fx < 0 ? -1 : 1, dj = fy < 0 ? -1 : 1, ax = Math.abs(fx), ay = Math.abs(fy);
+            const o = jj * N + i + B;
+            const q = qT[o] * (1 - ax) * (1 - ay) + qT[o + di] * ax * (1 - ay) + qT[o + dj * N] * (1 - ax) * ay + qT[o + di + dj * N] * ax * ay;
+            bedPx.push(bk, wx0 + x, rowGroundY + y, Math.round(q * 1000), Math.round(t.temp * 1000), t.rock);
+          }
         }
         // --- south face ---
         if (south >= L) continue;
@@ -985,7 +1012,9 @@ export class TerrainGenerator {
           }
         }
       }
-      rows.push({ y: rowGroundY - maxL * LIFT, h: H, px: buf, anim: animPx.length ? this.animateLiquid(buf, animPx, tiles, jj) : undefined });
+      const row: TerrainRow = { y: rowGroundY - maxL * LIFT, h: H, px: buf, anim: animPx.length ? this.animateLiquid(buf, animPx, tiles, jj) : undefined };
+      if (bedPx.length && this.bedStyle) { const b = seabedRow(this.bedStyle, buf, CHUNK_PX, bedPx); row.bed = b.bed; row.bedAnim = b.anim; }
+      rows.push(row);
     }
     return rows;
   }

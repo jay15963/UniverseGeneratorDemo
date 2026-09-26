@@ -42,6 +42,8 @@ const LEAF_COLS: Record<number, string[]> = {
 const BUTTERFLY = ['#f5a623', '#ffffff', '#6fb8ff', '#ffe066', '#ff7ab8', '#b28cff'];
 
 export class NatureFx {
+  /** the camera is under the sea: no rain or snow on screen */
+  underwater = false;
   leaves: Leaf[] = [];
   flies: Fly[] = [];       // butterflies
   bugs: Bug[] = [];        // fireflies
@@ -396,9 +398,10 @@ export class NatureFx {
     // overcast tint
     if (I > 0.02) { ctx.fillStyle = `rgba(30,42,64,${I * (this.rainy ? 0.36 : 0.14)})`; ctx.fillRect(0, 0, W, H); }
 
-    // precipitation
+    // precipitation (none under the sea)
+    if (this.underwater) this.drops.length = 0;
     const snow = this.weather === 'snow';
-    const want = (this.rainy || snow) ? Math.round(I * (snow ? 160 : 260)) : 0;
+    const want = (this.rainy || snow) && !this.underwater ? Math.round(I * (snow ? 160 : 260)) : 0;
     while (this.drops.length < want) this.drops.push({ x: R() * W, y: R() * H, v: snow ? 30 + R() * 30 : 500 + R() * 250, len: snow ? 1 + Math.round(R()) : 6 + R() * 8 });
     if (this.drops.length > want) this.drops.length = want;
     const dt = c.dt;

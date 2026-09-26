@@ -5,7 +5,7 @@ import { ArrowLeft, Lock, Play, Globe2 } from 'lucide-react';
 import { makeGenome, Stage, DEFAULT_PARAMS } from '../../lib/creature/genome';
 import { renderCreature } from '../../lib/creature/render';
 import { drawKind, spriteCanvas } from '../../lib/cell/art';
-import { Kind, loadSpecies, makeSpecies, universeOf } from '../../lib/cell/look';
+import { Kind, loadSpecies, makeSpecies } from '../../lib/cell/look';
 
 interface Props { onBack: () => void; onCell: () => void; onHome: () => void }
 
@@ -56,10 +56,10 @@ export function EraSelect({ onBack, onCell, onHome }: Props) {
           <Globe2 className="w-8 h-8 text-sky-300 shrink-0" />
           <div className="min-w-0 flex-1">
             <div className="text-[9px] font-mono tracking-[0.25em] text-sky-300/70">PLANETA NATAL · <span className="italic font-serif tracking-normal text-amber-100/80">{species.genus} {species.species}</span></div>
-            <div className="font-black text-lg leading-tight truncate">{species.home && species.home.universeSeed === universeOf(species) ? species.home.bodyName : 'Um mundo oceânico do universo ' + universeOf(species)}</div>
-            <p className="text-[11px] text-neutral-400">O mesmo planeta de verdade em todas as eras. Só as águas de origem são conhecidas — o resto está sob a neblina de descoberta.</p>
+            <div className="font-black text-lg leading-tight truncate">Mundo natal</div>
+            <p className="text-[11px] text-neutral-400">Um planeta de verdade do seu universo, o mesmo em todas as eras. Só as águas de origem são conhecidas — o resto está sob a neblina de descoberta.</p>
           </div>
-          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-black bg-sky-300 rounded-lg px-3 py-1.5">Ver planeta</span>
+          <span className="inline-flex items-center gap-1.5 text-xs font-bold text-black bg-sky-300 rounded-lg px-3 py-1.5">Descer ao planeta</span>
         </button>
       </div>
       <div className="max-w-6xl mx-auto p-4 sm:p-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
