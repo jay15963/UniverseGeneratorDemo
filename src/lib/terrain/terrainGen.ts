@@ -8,6 +8,8 @@ export interface PlanetFields {
   ox: number; oy: number; fw: number; fh: number;
   elevation: Float32Array; temperature: Float32Array; moisture: Float32Array;
   fertility: Float32Array; ores: Float32Array; waterAccumulation: Float32Array;
+  /** map px to the nearest water (vegetation front of a young world) and the ocean's depth percentiles (lifeStage.ts) */
+  coast?: Float32Array; depthQ?: [number, number];
 }
 
 export function cropFields(src: Omit<PlanetFields, 'ox' | 'oy' | 'fw' | 'fh'>, cx: number, cy: number, size: number): PlanetFields {
@@ -23,12 +25,14 @@ export function cropFields(src: Omit<PlanetFields, 'ox' | 'oy' | 'fw' | 'fh'>, c
     config: src.config, ox, oy, fw, fh,
     elevation: crop(src.elevation), temperature: crop(src.temperature), moisture: crop(src.moisture),
     fertility: crop(src.fertility), ores: crop(src.ores), waterAccumulation: crop(src.waterAccumulation),
+    coast: src.coast ? crop(src.coast) : undefined, depthQ: src.depthQ,
   };
 }
 import { Ground, Feat, Feature, ChunkData, TerrainRow, TILE, CHUNK, CHUNK_PX, WORLD_TILES_X, LIFT, MAX_LEVEL, LIQUID_FRAMES } from './types';
 import { fbm2, vnoise, rand2, ridge, hash3, mulberry, seedToInt, smoothstep } from './noise';
 import { RockType, ROCK_RAMPS, GROUND_RAMPS, LEAF, RGB, shiftRamp, vegetationHueShift, waterHueShift, hex, mixRGB } from './palettes';
 import { CZ, CityChunkData, isGraded, isRoad, isWallish, isZone, keepFeature } from '../city/codes';
+import { lifeStageOf, vegAmount, seaZone, SeaZone } from '../planet-generator/lifeStage';
 import { cityPixel, cityRegionColor } from '../city/paint';
 
 // ---------------------------------------------------------------------------
@@ -76,6 +80,8 @@ interface TileInfo {
   cz: number;        // city tile code (CZ), 0 = none
   ce: number;        // era of that city
   rd: number;        // city road ramp direction 1=S 2=N 3=E 4=W
+  veg: number;       // 0..1 how far the plants have reached here (young worlds: bare land)
+  zone: number;      // SeaZone of water tiles (coast / open sea / abyss), 0 on land
 }
 
 const B = 2; // tile border computed around each chunk
@@ -102,6 +108,9 @@ export class TerrainGenerator {
   readonly hasSea: boolean;
   readonly ramps: Record<string, RGB[]>;
   private lastLiquid: Uint8Array | null = null;
+  /** the planet's life stage (0 bare land .. 1 green) and its ocean depth bands */
+  readonly vita: number;
+  readonly depthQ: [number, number];
 
   constructor(gen: PlanetFields) {
     this.gen = gen;
@@ -113,6 +122,8 @@ export class TerrainGenerator {
     this.mode = modeFor(c.planetType);
     this.sea = c.planetType === PlanetType.OCEAN_WORLD ? 1 - (c.islandDensity || 0.1) - 0.02 : c.seaLevel;
     this.hasSea = [PlanetType.EARTH_LIKE, PlanetType.ALIEN_LIFE, PlanetType.OCEAN_WORLD, PlanetType.SWAMP_WORLD].includes(c.planetType);
+    this.vita = gen.coast ? lifeStageOf(c) : 1;
+    this.depthQ = gen.depthQ ?? [0.3, 0.55];
     const alien = c.planetType === PlanetType.ALIEN_LIFE;
     const vh = vegetationHueShift(c.vegetationHue, alien);
     const wh = waterHueShift(c.waterHue, alien);
@@ -201,8 +212,31 @@ export class TerrainGenerator {
     return Math.max(0, Math.min(MAX_LEVEL, Math.floor(e / 0.038)));
   }
 
-  /** Full per-tile environment. */
+  /** Full per-tile environment (a young world's land is stripped bare where the plants have not reached). */
   tile(tx: number, ty: number): TileInfo {
+    const t = this.tileRaw(tx, ty);
+    if (t.veg < 1 && t.biome !== 255) this.barrenize(t, tx, ty);
+    return t;
+  }
+  /** Before the plants: dry rock, gravel, dust and red sand; the front is sparse, dry grass */
+  private barrenize(t: TileInfo, tx: number, ty: number) {
+    const v = t.veg, s = this.seed;
+    t.forest *= v < 0.5 ? 0 : (v - 0.5) * 2;
+    const g = t.g;
+    const green = g === Ground.GRASS || g === Ground.LUSH_GRASS || g === Ground.DRY_GRASS || g === Ground.FOREST_FLOOR || g === Ground.NEEDLES
+      || g === Ground.JUNGLE_FLOOR || g === Ground.MARSH || g === Ground.PEAT || g === Ground.TUNDRA;
+    if (!green) return;
+    const n = fbm2(tx / 16, ty / 16, s + 41, 3), n2 = fbm2(tx / 40, ty / 40, s + 42, 3);
+    if (v >= 0.4) {
+      // the green front: patchy, dry grass with bare dirt between
+      if (n > 0.35 + (v - 0.4) * 1.2) t.g = n2 > 0.55 ? Ground.GRAVEL : Ground.DIRT;
+      else if (g === Ground.LUSH_GRASS || g === Ground.FOREST_FLOOR || g === Ground.JUNGLE_FLOOR || g === Ground.NEEDLES) t.g = v > 0.75 ? Ground.GRASS : Ground.DRY_GRASS;
+      return;
+    }
+    if (t.temp < 0.2) t.g = n > 0.62 ? Ground.STONE : n2 > 0.5 ? Ground.GRAVEL : Ground.SNOW;
+    else t.g = n > 0.7 ? Ground.STONE : n2 > 0.62 ? Ground.GRAVEL : t.temp > 0.55 && t.moist < 0.55 && n < 0.45 ? Ground.RED_SAND : Ground.DIRT;
+  }
+  private tileRaw(tx: number, ty: number): TileInfo {
     const gen = this.gen, S = this.S, s = this.seed;
     const mx = tx / S, my = ty / S;
     const wx = (fbm2(tx / 80, ty / 80, s + 1, 3) - 0.5) * 1.6;
@@ -220,7 +254,7 @@ export class TerrainGenerator {
     temp = Math.max(0, Math.min(1, temp));
     moist = Math.max(0, Math.min(1, moist));
 
-    const info: TileInfo = { g: Ground.GRASS, biome: 255, h, depth: 0, temp, moist, fert, ore, forest: 0, rock, wet: 0, beach: false, lv: 0, ramp: false, cz: 0, ce: 0, rd: 0 };
+    const info: TileInfo = { g: Ground.GRASS, biome: 255, h, depth: 0, temp, moist, fert, ore, forest: 0, rock, wet: 0, beach: false, lv: 0, ramp: false, cz: 0, ce: 0, rd: 0, veg: 1, zone: 0 };
     if (this.mode !== 'living') { this.barrenGround(info, tx, ty); return info; }
 
     const sea = this.sea;
@@ -229,6 +263,7 @@ export class TerrainGenerator {
       info.depth = sea - h;
       if (temp < 0.13 && fbm2(tx / 25, ty / 25, s + 12, 3) > 0.35) info.g = Ground.ICE;
       else info.g = info.depth < 0.012 ? Ground.SHALLOW_WATER : Ground.DEEP_WATER;
+      info.zone = info.g === Ground.SHALLOW_WATER ? SeaZone.COAST : seaZone(info.depth / Math.max(1e-4, sea), this.depthQ);
       return info;
     }
     const alt = (h - sea) / Math.max(0.05, 1 - sea);
@@ -241,7 +276,7 @@ export class TerrainGenerator {
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) M = Math.max(M, this.at(acc, rmx + dx, rmy + dy));
     if (M > 2) {
       const c = this.bil(acc, rmx, rmy) / M;
-      if (c > 0.86) { info.g = Ground.RIVER_WATER; info.depth = (c - 0.86) * 0.2; return info; }
+      if (c > 0.86) { info.g = Ground.RIVER_WATER; info.depth = (c - 0.86) * 0.2; info.zone = SeaZone.COAST; return info; }
       if (c > 0.72) info.wet = Math.max(info.wet, (c - 0.72) / 0.14);
     } else if (M >= 1) info.wet = Math.max(info.wet, 0.25);
 
@@ -249,7 +284,7 @@ export class TerrainGenerator {
     if (moist > 0.38 && alt < 0.6 && temp > 0.12) {
       const r = ridge(tx / 130, ty / 130, s + 9, 3);
       const width = 0.011 + (moist - 0.38) * 0.012;
-      if (r > 1 - width) { info.g = Ground.RIVER_WATER; info.depth = 0.004; return info; }
+      if (r > 1 - width) { info.g = Ground.RIVER_WATER; info.depth = 0.004; info.zone = SeaZone.COAST; return info; }
       if (r > 1 - width * 3.2) info.wet = Math.max(info.wet, (r - (1 - width * 3.2)) / (width * 2.2));
     }
     // --- Ponds & swamps ---
@@ -258,6 +293,7 @@ export class TerrainGenerator {
     if (moist > 0.5 && temp > 0.15 && alt < 0.5 && p > pondT) {
       info.g = moist > 0.82 || this.type === PlanetType.SWAMP_WORLD ? Ground.SWAMP_WATER : Ground.SHALLOW_WATER;
       info.depth = (p - pondT) * 0.1;
+      info.zone = SeaZone.COAST;
       return info;
     }
     if (moist > 0.5 && p > pondT - 0.035) info.wet = Math.max(info.wet, (p - (pondT - 0.035)) / 0.035);
@@ -265,6 +301,7 @@ export class TerrainGenerator {
     // --- Land ---
     const biome = this.classify(temp, moist);
     info.biome = biome;
+    if (this.vita < 0.9) info.veg = vegAmount(this.vita, this.bil(this.gen.coast!, mx, my), moist, fbm2(tx / 220, ty / 220, s + 40, 3));
     const coast = this.hasSea && h - sea < 0.0024 + (vnoise(tx / 9, ty / 9, s + 15) - 0.5) * 0.002;
     const nPatch = fbm2(tx / 16, ty / 16, s + 16, 3);
     const nPatch2 = fbm2(tx / 23, ty / 23, s + 17, 3);
@@ -524,10 +561,12 @@ export class TerrainGenerator {
     const ground = new Uint8Array(CHUNK * CHUNK), biome = new Uint8Array(CHUNK * CHUNK), rock = new Uint8Array(CHUNK * CHUNK);
     const temp = new Float32Array(CHUNK * CHUNK);
     const level = new Uint8Array(CHUNK * CHUNK), ramp = new Uint8Array(CHUNK * CHUNK), lava = new Uint8Array(CHUNK * CHUNK);
+    const zone = new Uint8Array(CHUNK * CHUNK);
     for (let j = 0; j < CHUNK; j++) for (let i = 0; i < CHUNK; i++) {
       const t = tiles[(j + B) * N + i + B];
       const k = j * CHUNK + i;
       ground[k] = t.g; biome[k] = t.biome; rock[k] = t.rock; temp[k] = t.temp;
+      zone[k] = t.zone | (t.veg >= 0.5 ? 4 : 0);
       level[k] = t.lv; lava[k] = t.g === Ground.LAVA ? 1 : 0;
       if (t.ramp) {
         const n = tiles[(j + B - 1) * N + i + B].lv, so = tiles[(j + B + 1) * N + i + B].lv, e = tiles[(j + B) * N + i + B + 1].lv, w = tiles[(j + B) * N + i + B - 1].lv;
@@ -541,7 +580,7 @@ export class TerrainGenerator {
       mini[mk] = pixels[gk] * lvl; mini[mk + 1] = pixels[gk + 1] * lvl; mini[mk + 2] = pixels[gk + 2] * lvl; mini[mk + 3] = 255;
       if (ramp[j * CHUNK + i]) { mini[mk] = 235; mini[mk + 1] = 215; mini[mk + 2] = 160; }
     }
-    return { cx, cy, rows, ground, biome, rock, temp, level, ramp, lava, falls, features, mini };
+    return { cx, cy, rows, ground, biome, rock, temp, level, ramp, lava, falls, features, mini, zone };
   }
 
   /** Stamps the visible city tiles onto a chunk window (codes, graded levels, road ramps). */
@@ -1165,7 +1204,7 @@ export class TerrainGenerator {
         const i = gi + Math.floor(r() * 2), j = gj + Math.floor(r() * 2);
         const t = T(i, j);
         if (!treeGround(t.g) || occupied[j * CHUNK + i]) continue;
-        const p = t.forest * 0.92 + (t.beach && t.temp > 0.55 ? 0.12 : 0);
+        const p = t.forest * 0.92 + (t.beach && t.temp > 0.55 && this.vita >= 0.45 ? 0.12 : 0);
         if (r() > p) continue;
         const species = this.pickTree(t, nearWater[(j + B) * N + i + B], r());
         const conifer = species === Feat.PINE || species === Feat.SPRUCE;
@@ -1198,7 +1237,7 @@ export class TerrainGenerator {
       const g = t.g;
 
       if (isWater(g)) {
-        if ((g === Ground.SHALLOW_WATER || g === Ground.SWAMP_WATER) && t.temp > 0.3 && living && wd === 0) {
+        if ((g === Ground.SHALLOW_WATER || g === Ground.SWAMP_WATER) && t.temp > 0.3 && living && wd === 0 && this.vita >= 0.3) {
           if (r() < (g === Ground.SWAMP_WATER ? 0.16 : 0.05) && t.depth < 0.02) { const [x, y] = spot(); add(Feat.LILY_PAD, Math.floor(r() * 4), x, y); }
           if (r() < 0.05) { const [x, y] = spot(); add(Feat.CATTAIL, Math.floor(r() * 3), x, y); }
         }
@@ -1225,6 +1264,8 @@ export class TerrainGenerator {
         continue;
       }
 
+      // no plants here yet (young world): only rocks and minerals
+      if (t.veg < 0.35) continue;
       const b = t.biome;
       const D = t.forest;
       const warm = t.temp > 0.55, cold = t.temp < 0.3;
@@ -1234,7 +1275,7 @@ export class TerrainGenerator {
       // Beach
       if (t.beach) {
         if (r() < 0.03) { const [x, y] = spot(); add(Feat.SEASHELL, Math.floor(r() * 4), x, y); }
-        if (r() < 0.012) { const [x, y] = spot(); add(Feat.STICK, 3 + Math.floor(r() * 2), x, y); } // driftwood
+        if (this.vita >= 0.6 && r() < 0.012) { const [x, y] = spot(); add(Feat.STICK, 3 + Math.floor(r() * 2), x, y); } // driftwood
         continue;
       }
       // Shores: reeds & cattails

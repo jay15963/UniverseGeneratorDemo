@@ -12,6 +12,7 @@ import { ITEMS, harvestFor, featureName, ItemDef } from '../../lib/terrain/items
 import { vegetationHueShift, ROCK_NAMES, RockType } from '../../lib/terrain/palettes';
 import { GLWorld, TexRegion, rgba } from '../../lib/render/glWorld';
 import { planetFauna } from '../../lib/fauna/species';
+import { lifeStageOf } from '../../lib/planet-generator/lifeStage';
 import { SpriteStore } from '../../lib/fauna/spriteStore';
 import { Fauna, World, AnimalDraw } from './fauna';
 import { Genome, Stage as CStage } from '../../lib/creature/genome';
@@ -227,7 +228,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   // wildlife: 200+ species for living worlds, sprites rendered by workers on demand
   const store = useMemo(() => new SpriteStore(), []);
   useEffect(() => () => store.dispose(), [store]);
-  const fauna = useMemo(() => new Fauna(planetFauna(cfg), store, cfg.seed), [cfg, store]);
+  const fauna = useMemo(() => new Fauna(planetFauna(cfg), store, cfg.seed, lifeStageOf(cfg)), [cfg, store]);
   const citizens = useMemo(() => new Citizens(store), [store]);
   // vehicles and ships (rendered by a small pool of vehicle workers, created on first use)
   const vpoolRef = useRef<StructPool | null>(null);
@@ -458,7 +459,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const q = cellAt(wx, wy);
       if (!q) return null;
       const d = q.c.data, gr = d.ground[q.k] as Ground, info = GROUND_INFO[gr];
-      return { water: !!info.water, deep: gr === Ground.DEEP_WATER, blocking: !!info.blocking, level: d.level[q.k], biome: d.biome[q.k], color: [d.mini[q.k * 4], d.mini[q.k * 4 + 1], d.mini[q.k * 4 + 2]] };
+      return { water: !!info.water, deep: gr === Ground.DEEP_WATER, blocking: !!info.blocking, level: d.level[q.k], biome: d.biome[q.k], color: [d.mini[q.k * 4], d.mini[q.k * 4 + 1], d.mini[q.k * 4 + 2]], zone: d.zone ? d.zone[q.k] : 5 };
     },
     canStep: (fx0, fy0, tx, ty) => canStep(fx0, fy0, tx, ty),
   };

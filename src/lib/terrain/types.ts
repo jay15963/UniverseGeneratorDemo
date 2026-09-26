@@ -93,6 +93,7 @@ export interface ChunkData {
   biome: Uint8Array;         // CHUNK² biome ids (BiomeType, 255 = none)
   rock: Uint8Array;          // CHUNK² RockType
   temp: Float32Array;        // CHUNK² local temperature 0..1
+  zone: Uint8Array;          // CHUNK² bits 0-1 SeaZone of water (1 coast, 2 open sea, 3 abyss), bit 2 = plants have reached it
   features: Feature[];
 }
 

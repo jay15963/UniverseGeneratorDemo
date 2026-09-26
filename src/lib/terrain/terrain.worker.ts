@@ -23,7 +23,7 @@ ctx.onmessage = (ev: MessageEvent) => {
       const t0 = performance.now();
       const chunk = gen.chunk(m.cx, m.cy);
       ctx.postMessage({ kind: 'chunk', id: m.id, chunk, ms: performance.now() - t0 },
-        [...chunk.rows.flatMap(r => [r.px.buffer, ...(r.anim ?? []).map(a => a.buffer)]), chunk.ground.buffer, chunk.biome.buffer, chunk.rock.buffer,
+        [...chunk.rows.flatMap(r => [r.px.buffer, ...(r.anim ?? []).map(a => a.buffer)]), chunk.ground.buffer, chunk.zone.buffer, chunk.biome.buffer, chunk.rock.buffer,
           chunk.temp.buffer, chunk.level.buffer, chunk.ramp.buffer, chunk.lava.buffer, chunk.mini.buffer]);
     }
   } catch (e) {

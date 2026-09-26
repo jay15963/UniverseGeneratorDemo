@@ -17,7 +17,7 @@ import { planLinks, CityLink } from '../city/links';
 import { pickSites } from '../city/sites';
 import type { CityPlan } from '../city/codes';
 
-const fieldsOf = (g: PlanetGenerator) => ({ config: g.config, elevation: g.elevation, temperature: g.temperature, moisture: g.moisture, fertility: g.fertility, ores: g.ores, waterAccumulation: g.waterAccumulation });
+const fieldsOf = (g: PlanetGenerator) => ({ config: g.config, elevation: g.elevation, temperature: g.temperature, moisture: g.moisture, fertility: g.fertility, ores: g.ores, waterAccumulation: g.waterAccumulation, coast: g.coast, depthQ: g.depthQ });
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const sessions = new Map<string, PlanetGenerator>();
@@ -133,7 +133,7 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       }
       case 'chunk': {
         const chunk = terrainFor(msg.sessionId).chunk(msg.cx, msg.cy);
-        post({ kind: 'chunk', id: msg.id, chunk }, [...chunk.rows.flatMap(r => [r.px.buffer, ...(r.anim ?? []).map(a => a.buffer)]), chunk.ground.buffer, chunk.biome.buffer, chunk.rock.buffer, chunk.temp.buffer, chunk.level.buffer, chunk.ramp.buffer, chunk.lava.buffer, chunk.mini.buffer]);
+        post({ kind: 'chunk', id: msg.id, chunk }, [...chunk.rows.flatMap(r => [r.px.buffer, ...(r.anim ?? []).map(a => a.buffer)]), chunk.ground.buffer, chunk.zone.buffer, chunk.biome.buffer, chunk.rock.buffer, chunk.temp.buffer, chunk.level.buffer, chunk.ramp.buffer, chunk.lava.buffer, chunk.mini.buffer]);
         break;
       }
       case 'spawn': {
@@ -145,7 +145,7 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         const gen = sessions.get(msg.sessionId);
         if (!gen) throw new Error('Unknown session ' + msg.sessionId);
         const f = cropFields(fieldsOf(gen), msg.x, msg.y, msg.size);
-        post({ kind: 'fields', id: msg.id, fields: f }, [f.elevation.buffer, f.temperature.buffer, f.moisture.buffer, f.fertility.buffer, f.ores.buffer, f.waterAccumulation.buffer]);
+        post({ kind: 'fields', id: msg.id, fields: f }, [f.elevation.buffer, f.temperature.buffer, f.moisture.buffer, f.fertility.buffer, f.ores.buffer, f.waterAccumulation.buffer, ...(f.coast ? [f.coast.buffer] : [])]);
         break;
       }
       case 'city': {

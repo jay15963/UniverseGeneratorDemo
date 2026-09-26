@@ -20,6 +20,8 @@ export interface Species {
   k: number;
   diet: 'herb' | 'omni' | 'carn';
   name: string;
+  /** water species: the depth band they live in (reefs: small & normal; open sea: the big ones; abyss: leviathans) */
+  zone: 'coast' | 'open' | 'abyss' | null;
 }
 
 // typical climate of each biome (temperature, moisture) in the creature parameter space
@@ -64,33 +66,48 @@ export function planetFauna(cfg: PlanetConfig, count = 220): Species[] {
     };
     const genome = makeGenome(`${cfg.seed}:sp${i}`, p, alien ? 'alien' : 'earth');
     let stage: Stage;
-    if (habitat === 'water') stage = giantRoll < 0.12 ? Stage.AQUA_GIANT : Stage.AQUA;
+    // sea: leviathans in the abyss, giants in the open sea, larvae and normal swimmers on the reefs; land: rare leviathans
+    if (habitat === 'water') stage = giantRoll < 0.07 ? Stage.AQUA_LEVIATHAN : giantRoll < 0.3 ? Stage.AQUA_GIANT : giantRoll < 0.45 ? Stage.AQUA_LARVA : Stage.AQUA;
     else if (habitat === 'shore') stage = giantRoll < 0.15 ? Stage.AMPHIBIAN_GIANT : Stage.AMPHIBIAN;
-    else stage = giantRoll < 0.07 ? Stage.LAND_GIANT : Stage.LAND;
-    const giant = stage === Stage.AQUA_GIANT || stage === Stage.AMPHIBIAN_GIANT || stage === Stage.LAND_GIANT;
+    else stage = giantRoll < 0.035 ? Stage.LAND_LEVIATHAN : giantRoll < 0.1 ? Stage.LAND_GIANT : Stage.LAND;
+    const lev = stage === Stage.AQUA_LEVIATHAN || stage === Stage.LAND_LEVIATHAN;
+    const giant = lev || stage === Stage.AQUA_GIANT || stage === Stage.AMPHIBIAN_GIANT || stage === Stage.LAND_GIANT;
     // neighbours in climate space share the species
     const biomes = habitat === 'water' ? [] : LAND_BIOMES.filter(b => b === home || (Math.abs(CLIMATE[b][0] - t0) < 0.14 && Math.abs(CLIMATE[b][1] - m0) < 0.25 && rnd() < 0.6));
     const flyer = stage === Stage.LAND && (genome.wings !== 'none' || genome.locomotion === 'flyer' || genome.locomotion === 'dragon');
-    const speed = (diet === 'carn' ? 62 : diet === 'omni' ? 50 : 44) * (giant ? 0.6 : 1) * (0.8 + rnd() * 0.4);
-    const k = habitat === 'water' ? (giant ? 0.32 : 0.3 + size * 0.1) : giant ? 0.34 : 0.26 + size * 0.14;
+    const speed = (diet === 'carn' ? 62 : diet === 'omni' ? 50 : 44) * (lev ? 0.5 : giant ? 0.6 : 1) * (0.8 + rnd() * 0.4);
+    const k = lev ? (habitat === 'water' ? 0.44 : 0.4) : habitat === 'water' ? (giant ? 0.32 : stage === Stage.AQUA_LARVA ? 0.34 : 0.3 + size * 0.1) : giant ? 0.34 : 0.26 + size * 0.14;
+    const zone: Species['zone'] = habitat !== 'water' ? null : stage === Stage.AQUA_LEVIATHAN ? 'abyss' : stage === Stage.AQUA_GIANT ? 'open' : stage === Stage.AQUA_LARVA ? 'coast' : rnd() < 0.72 ? 'coast' : 'open';
     out.push({
       id: i, genome, stage, habitat, biomes, flyer, speed, k, diet,
-      herd: giant ? [1, 1] : diet === 'herb' ? [2, size < 0.4 ? 6 : 4] : diet === 'carn' ? [1, 2] : [1, 3],
-      name: `${genome.name.genus} ${genome.name.species}`,
+      herd: giant ? [1, 1] : stage === Stage.AQUA_LARVA ? [3, 7] : diet === 'herb' ? [2, size < 0.4 ? 6 : 4] : diet === 'carn' ? [1, 2] : [1, 3],
+      name: `${genome.name.genus} ${genome.name.species}`, zone,
     });
   }
+  // every living sea has its leviathans (at least two), every animal land at least one
+  const ensure = (st: Stage, want: number, from: (s: Species) => boolean, habitat: Habitat) => {
+    let have = out.filter(q => q.stage === st).length;
+    for (const q of out) {
+      if (have >= want) break;
+      if (!from(q)) continue;
+      q.stage = st; q.k = habitat === 'water' ? 0.44 : 0.4; q.herd = [1, 1]; q.speed *= 0.6; q.zone = habitat === 'water' ? 'abyss' : null; have++;
+    }
+  };
+  ensure(Stage.AQUA_LEVIATHAN, 2, q => q.stage === Stage.AQUA_GIANT, 'water');
+  if (!ocean) ensure(Stage.LAND_LEVIATHAN, 1, q => q.stage === Stage.LAND_GIANT, 'land');
   return out;
 }
 
-/** Index: which species live in which biome (land & shore), plus the water list. */
+/** Index: which species live in which biome (land & shore), and the sea species by depth band. */
 export function faunaIndex(list: Species[]) {
   const byBiome = new Map<number, Species[]>();
   const shoreByBiome = new Map<number, Species[]>();
-  const water: Species[] = [], deepWater: Species[] = [];
+  const levByBiome = new Map<number, Species[]>();
+  const coast: Species[] = [], open: Species[] = [], abyss: Species[] = [];
   for (const s of list) {
-    if (s.habitat === 'water') { (s.stage === Stage.AQUA_GIANT ? deepWater : water).push(s); continue; }
-    const m = s.habitat === 'shore' ? shoreByBiome : byBiome;
+    if (s.habitat === 'water') { (s.zone === 'abyss' ? abyss : s.zone === 'open' ? open : coast).push(s); continue; }
+    const m = s.habitat === 'shore' ? shoreByBiome : s.stage === Stage.LAND_LEVIATHAN ? levByBiome : byBiome;
     for (const b of s.biomes) { if (!m.has(b)) m.set(b, []); m.get(b)!.push(s); }
   }
-  return { byBiome, shoreByBiome, water, deepWater };
+  return { byBiome, shoreByBiome, levByBiome, coast, open, abyss };
 }

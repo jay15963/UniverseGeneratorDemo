@@ -7,6 +7,7 @@ import { Sketch, Dir8, DIRS, DIR_SRC, FACINGS, Anim } from './pose';
 import { buildCell, Rig } from './cell';
 import { buildLarva, buildSwimmer, buildAmphibian, buildLand } from './bodies';
 import { buildCiv, LoadHooks } from './civ';
+import { buildSeaLeviathan, buildLandLeviathan } from './leviathan';
 
 export const FRAMES = 8;
 export type { Anim };
@@ -16,7 +17,8 @@ export const ANIM_PT: Record<Anim, string> = { idle: 'Parado', walk: 'Andando', 
 /** Animations that make sense for a creature at a stage (first = default). */
 export function animsFor(g: Genome, stage: Stage): Anim[] {
   if (stage === Stage.CELL) return ['swim'];
-  if (stage <= Stage.AQUA_GIANT) return ['swim', 'idle', 'run'];
+  if (stage <= Stage.AQUA_LEVIATHAN) return ['swim', 'idle', 'run'];
+  if (stage === Stage.LAND_LEVIATHAN) return ['idle', 'walk', 'run'];
   if (isCiv(stage)) return ['idle', 'walk', 'run'];
   if (stage === Stage.AMPHIBIAN || stage === Stage.AMPHIBIAN_GIANT) return ['idle', 'walk'];
   const flies = g.wings !== 'none' || g.locomotion === 'flyer' || g.locomotion === 'dragon';
@@ -41,6 +43,8 @@ export function buildParts(g: Genome, stage: Stage, frame: number, dir: Dir8 = '
       case Stage.AQUA: case Stage.AQUA_GIANT: buildSwimmer(S, kit, g, ph, blink, stage === Stage.AQUA_GIANT); break;
       case Stage.AMPHIBIAN: case Stage.AMPHIBIAN_GIANT: buildAmphibian(S, kit, g, ph, blink, stage === Stage.AMPHIBIAN_GIANT); break;
       case Stage.LAND: case Stage.LAND_GIANT: buildLand(S, kit, g, ph, blink, stage === Stage.LAND_GIANT); break;
+      case Stage.AQUA_LEVIATHAN: buildSeaLeviathan(S, kit, g, ph, blink); break;
+      case Stage.LAND_LEVIATHAN: buildLandLeviathan(S, kit, g, ph, blink); break;
       default: buildCiv(S, kit, g, stage, ph, blink, citizen, load); break;
     }
     parts = S.parts();
