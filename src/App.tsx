@@ -26,12 +26,13 @@ import { Trailer } from './components/Trailer/Trailer';
 import { EraSelect } from './components/Cell/EraSelect';
 import { CellEditor } from './components/Cell/CellEditor';
 import { CellGame } from './components/Cell/CellGame';
+import { HomeWorldView } from './components/Play/HomeWorldView';
 import { CellSpecies, loadSpecies, makeSpecies, randomSeed } from './lib/cell/look';
 
 export default function App() {
   const { config, setConfig, bodies, isGenerating, handleGenerate, showZones, setShowZones } = useSolarSystemController();
   
-  const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator' | 'creature-generator' | 'structure-generator' | 'equipment-generator' | 'vehicle-generator' | 'demo' | 'trailer' | 'era-select' | 'cell-editor' | 'cell-game'>(() => (typeof window !== 'undefined' && window.location.hash === '#jogar' ? 'era-select' : typeof window !== 'undefined' && window.location.hash === '#celula' ? 'cell-editor' : typeof window !== 'undefined' && window.location.hash === '#celula-jogo' ? 'cell-game' : typeof window !== 'undefined' && window.location.hash === '#criaturas' ? 'creature-generator' : typeof window !== 'undefined' && window.location.hash === '#estruturas' ? 'structure-generator' : typeof window !== 'undefined' && window.location.hash === '#equipamentos' ? 'equipment-generator' : typeof window !== 'undefined' && window.location.hash === '#veiculos' ? 'vehicle-generator' : typeof window !== 'undefined' && window.location.hash.startsWith('#demo') ? 'demo' : typeof window !== 'undefined' && window.location.hash.startsWith('#trailer') ? 'trailer' : 'menu'));
+  const [currentView, setCurrentView] = useState<'menu' | 'game' | 'planet-generator' | 'system-generator' | 'galaxy-generator' | 'universe-generator' | 'creature-generator' | 'structure-generator' | 'equipment-generator' | 'vehicle-generator' | 'demo' | 'trailer' | 'era-select' | 'cell-editor' | 'cell-game' | 'home-world'>(() => (typeof window !== 'undefined' && window.location.hash === '#planeta' ? 'home-world' : typeof window !== 'undefined' && window.location.hash === '#jogar' ? 'era-select' : typeof window !== 'undefined' && window.location.hash === '#celula' ? 'cell-editor' : typeof window !== 'undefined' && window.location.hash === '#celula-jogo' ? 'cell-game' : typeof window !== 'undefined' && window.location.hash === '#criaturas' ? 'creature-generator' : typeof window !== 'undefined' && window.location.hash === '#estruturas' ? 'structure-generator' : typeof window !== 'undefined' && window.location.hash === '#equipamentos' ? 'equipment-generator' : typeof window !== 'undefined' && window.location.hash === '#veiculos' ? 'vehicle-generator' : typeof window !== 'undefined' && window.location.hash.startsWith('#demo') ? 'demo' : typeof window !== 'undefined' && window.location.hash.startsWith('#trailer') ? 'trailer' : 'menu'));
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   // the player's cell species (cell editor -> cellular era); a new key restarts the game
   const [cellSpecies, setCellSpecies] = useState<CellSpecies>(() => loadSpecies() ?? makeSpecies(randomSeed()));
@@ -103,7 +104,11 @@ export default function App() {
   }
 
   if (currentView === 'era-select') {
-    return <EraSelect onBack={() => { if (window.location.hash === '#jogar') window.location.hash = ''; setCurrentView('menu'); }} onCell={() => setCurrentView('cell-editor')} />;
+    return <EraSelect onBack={() => { if (window.location.hash === '#jogar') window.location.hash = ''; setCurrentView('menu'); }} onCell={() => setCurrentView('cell-editor')} onHome={() => setCurrentView('home-world')} />;
+  }
+
+  if (currentView === 'home-world') {
+    return <HomeWorldView onBack={() => { if (window.location.hash === '#planeta') window.location.hash = ''; setCurrentView('era-select'); }} />;
   }
 
   if (currentView === 'cell-editor') {

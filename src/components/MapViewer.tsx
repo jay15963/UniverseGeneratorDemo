@@ -10,6 +10,8 @@ import { atmosphereFor } from '../lib/planet-generator/visualProfile';
 import { GlobeTexture } from '../lib/render/planetSphere';
 import { MapLegend } from './MapLegend';
 import { GlobeView } from './GlobeView';
+import type { Discovery } from '../lib/play/discovery';
+import { fogMapImage, fogTexture } from '../lib/play/fogPaint';
 
 interface MapViewerProps {
   layer: LayerType;
@@ -22,6 +24,10 @@ interface MapViewerProps {
   compact?: boolean;
   /** Display name of the world (used by the survival HUD). */
   worldName?: string;
+  /** play mode: discovery fog (unknown places are dark; landing only on discovered ground, as the spectator) */
+  fog?: Discovery | null;
+  /** radius (tiles) the camera reveals around itself at the gameplay zooms */
+  sight?: number;
 }
 
 interface HoverInfo { x: number; y: number; screenX: number; screenY: number; probe: PlanetProbe | null }
@@ -32,7 +38,9 @@ const LAYER_LABELS: Record<string, string> = {
   fertility: 'Fertilidade', ores: 'Minérios', spices: 'Especiarias', resources: 'Recursos', fauna: 'Fauna',
 };
 
-export function MapViewer({ layer, config, isGenerating, progress, status, session, compact, worldName }: MapViewerProps) {
+export function MapViewer({ layer, config, isGenerating, progress, status, session, compact, worldName, fog = null, sight = 160 }: MapViewerProps) {
+  const [fogTick, setFogTick] = useState(0);
+  const [fogMsg, setFogMsg] = useState('');
   // null = not choosing; 'player' walks the surface, 'spectator' is a free camera over the terrain
   const [landingMode, setLandingMode] = useState<null | 'player' | 'spectator'>(null);
   const [landing, setLanding] = useState<{ x: number; y: number; spectator: boolean } | null>(null);
@@ -57,6 +65,24 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const leftRef = useRef<HTMLCanvasElement>(null);
   const rightRef = useRef<HTMLCanvasElement>(null);
+  const fogRefs = [useRef<HTMLCanvasElement>(null), useRef<HTMLCanvasElement>(null), useRef<HTMLCanvasElement>(null)];
+  const [mapTex, setMapTex] = useState<GlobeTexture | null>(null);
+
+  // discovery fog over the three wrap-around canvases and the globe (repainted when back from the surface)
+  useEffect(() => {
+    if (!fog) return;
+    const img = fogMapImage(fog);
+    for (const r of fogRefs) {
+      const c = r.current; if (!c) continue;
+      if (c.width !== img.width) { c.width = img.width; c.height = img.height; }
+      c.getContext('2d')!.putImageData(img, 0, 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fog, fogTick]);
+  useEffect(() => {
+    if (!mapTex) { setGlobeTex(null); return; }
+    setGlobeTex(fog ? { ...mapTex, data: fogTexture(mapTex.data, mapTex.width, mapTex.height, fog) } : mapTex);
+  }, [mapTex, fog, fogTick]);
 
   // Render the requested layer in the worker, then paint the three wrap-around canvases
   useEffect(() => {
@@ -70,7 +96,7 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
         if (c.width !== img.width) { c.width = img.width; c.height = img.height; }
         c.getContext('2d')!.putImageData(img, 0, 0);
       }
-      setGlobeTex({ width: img.width, height: img.height, data: img.data });
+      setMapTex({ width: img.width, height: img.height, data: img.data });
       setRendering(false);
     }).catch(() => setRendering(false));
     return () => { cancelled = true; };
@@ -193,7 +219,8 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
   const handlePointerUp = (e: React.PointerEvent) => {
     if (landingMode && session && Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y) < 6) {
       const px = getMapPixel(e.clientX, e.clientY);
-      if (px && landingMode === 'spectator') { setLanding({ x: px.px, y: px.py, spectator: true }); setLandingMode(null); }
+      if (px && fog && !fog.known(px.px + 0.5, px.py + 0.5)) { setFogMsg('Área desconhecida — desça onde o planeta já foi descoberto'); setTimeout(() => setFogMsg(''), 2500); }
+      else if (px && landingMode === 'spectator') { setLanding({ x: px.px, y: px.py, spectator: true }); setLandingMode(null); }
       else if (px && session) {
         const { px: lx, py: ly } = px;
         setLandingMode(null);
@@ -210,6 +237,7 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
 
   const getHoverContent = (): string[] | null => {
     if (!hoverInfo?.probe) return null;
+    if (fog && !fog.known(hoverInfo.x + 0.5, hoverInfo.y + 0.5)) return ['❔ Desconhecido', 'Ninguém da sua espécie esteve aqui ainda'];
     const P = hoverInfo.probe;
     const pt = config.planetType;
     const lat = (0.5 - hoverInfo.y / config.height) * 180;
@@ -276,11 +304,11 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
           )}
           {canLand && (
             <div className="flex rounded-lg overflow-hidden border border-amber-300/50">
-              <button onClick={() => { setMode('map'); setLandingMode(m => (m === 'player' ? null : 'player')); }} disabled={!session}
+              {!fog && <button onClick={() => { setMode('map'); setLandingMode(m => (m === 'player' ? null : 'player')); }} disabled={!session}
                 title="Pousar com o personagem: explore a pé, colete recursos"
                 className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold transition-colors disabled:opacity-40 ${landingMode === 'player' ? 'bg-amber-400 text-black animate-pulse' : 'bg-gradient-to-r from-orange-500 to-amber-500 text-black hover:from-orange-400'}`}>
                 <Rocket className="w-3.5 h-3.5" /> {landingMode === 'player' ? 'Clique no mapa…' : 'Pousar'}
-              </button>
+              </button>}
               <button onClick={() => { setMode('map'); setLandingMode(m => (m === 'spectator' ? null : 'spectator')); }} disabled={!session}
                 title="Pousar como espectador: câmera livre sobre o terreno (WASD ou arrastar; quanto mais afastado o zoom, mais rápido)"
                 className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold border-l border-amber-300/50 transition-colors disabled:opacity-40 ${landingMode === 'spectator' ? 'bg-sky-300 text-black animate-pulse' : 'bg-black/50 text-amber-200 hover:bg-white/10'}`}>
@@ -348,10 +376,22 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
           <canvas ref={canvasRef} width={config.width} height={config.height} className="w-1/3 h-full" style={{ imageRendering: 'pixelated' }} />
           <canvas ref={rightRef} width={config.width} height={config.height} className="w-1/3 h-full" style={{ imageRendering: 'pixelated' }} />
         </div>
+        {fog && (
+          <div className="absolute flex pointer-events-none"
+            style={{
+              top: 0, left: '-100%', width: '300%', height: '100%',
+              transform: `translate(${viewTransform.x}px, ${viewTransform.y}px) scale(${viewTransform.scale})`,
+              transformOrigin: '33.333333% 0', willChange: 'transform',
+              visibility: mode === 'map' ? 'visible' : 'hidden',
+            }}>
+            {fogRefs.map((r, i) => <canvas key={i} ref={r} className="w-1/3 h-full" />)}
+          </div>
+        )}
+        {fogMsg && <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 bg-black/80 border border-white/15 text-neutral-200 text-xs px-3 py-1.5 rounded-full pointer-events-none">{fogMsg}</div>}
 
         {landingMode && mode === 'map' && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-amber-400 text-black text-xs font-bold px-3 py-1.5 rounded-full shadow-xl pointer-events-none">
-            {landingMode === 'spectator' ? 'Escolha onde a câmera desce — clique em qualquer ponto' : 'Escolha o local de pouso — clique em terra firme'}
+            {landingMode === 'spectator' ? (fog ? 'Escolha onde a câmera desce — clique numa área já descoberta' : 'Escolha onde a câmera desce — clique em qualquer ponto') : 'Escolha o local de pouso — clique em terra firme'}
           </div>
         )}
         {mode === 'globe' && (
@@ -369,7 +409,8 @@ export function MapViewer({ layer, config, isGenerating, progress, status, sessi
         </div>
       )}
       {landing && session && (
-        <SurvivalView session={session} mapX={landing.x} mapY={landing.y} spectator={landing.spectator} playerCreature={landing.spectator ? null : playerCreature} title={worldName ?? config.seed} onExit={() => setLanding(null)} />
+        <SurvivalView session={session} mapX={landing.x} mapY={landing.y} spectator={landing.spectator} playerCreature={landing.spectator ? null : playerCreature} title={worldName ?? config.seed}
+          discovery={fog ? { fog, sight } : null} onExit={() => { setLanding(null); if (fog) { fog.save(); setFogTick(t => t + 1); } }} />
       )}
       <div className="mt-3 bg-black/30 p-3 sm:p-4 rounded-xl border border-white/5">
         <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500 mb-2">Legenda</h3>
