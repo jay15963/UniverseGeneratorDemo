@@ -36,7 +36,7 @@ function send() {
   const now = performance.now() / 1000;
   const snap = s.snapshot();
   const out: Record<string, unknown> = { t: 'frame', time: s.time, paused: s.paused, speed: s.speed, ...snap };
-  const tr: Transferable[] = [snap.ents.buffer, snap.motes.buffer, snap.shots.buffer];
+  const tr: Transferable[] = [snap.ents.buffer, snap.motes.buffer, snap.shots.buffer, snap.virus.buffer];
   if (s.bioDirty && now - lastBio > 0.4) {
     s.bioDirty = false; lastBio = now;
     const own = s.bOwn.slice(), str = s.bStr.slice();

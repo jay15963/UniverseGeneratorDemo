@@ -220,7 +220,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
       {/* messages */}
       {phase === 'play' && st && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1.5 max-w-[540px] w-[calc(100vw-560px)] min-w-[280px]">
-          {st.msg && <div className="px-4 py-2 rounded-xl bg-black/75 border border-teal-300/30 text-sm text-teal-50 pointer-events-none text-center">{st.msg}</div>}
+          {(st.msg || hud?.note) && <div className="px-4 py-2 rounded-xl bg-black/75 border border-teal-300/30 text-sm text-teal-50 pointer-events-none text-center">{st.msg || hud?.note}</div>}
           {st.events.length > 0 && (
             <div className="flex flex-wrap justify-center gap-1 pointer-events-none">
               {st.events.map(e => (
@@ -271,7 +271,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
           <div className="px-1.5 pb-2 space-y-1.5">
             {colonies.map(c => (
               <div key={c.id} className={`rounded-lg border ${sel?.colony === c.id ? 'border-white/40 bg-white/10' : active?.id === c.id ? 'border-white/15 bg-white/[0.05]' : 'border-white/5 bg-white/[0.03]'}`}>
-                <button onClick={e => eng?.selectColony(c.id, e.shiftKey, e.detail >= 2)} title="Clique: selecionar a colônia · duplo clique: ir até ela"
+                <button onClick={e => eng?.selectColony(c.id, e.shiftKey, e.detail >= 2)} title="Clique: selecionar as células de combate da colônia (fagócitas, secretoras, encouraçadas, titãs) · duplo clique: ir até ela · os ícones abaixo selecionam um tipo"
                   className="w-full flex items-center gap-1.5 px-2 pt-1.5 text-left">
                   <span className="w-3 h-3 rounded-full shrink-0" style={{ background: c.color, boxShadow: `0 0 8px ${c.color}` }} />
                   <span className="flex-1 min-w-0">
@@ -354,7 +354,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
               const K = KINDS[k], placing = hud?.placing === k, place = PLACE_KINDS.includes(k);
               const lock = LOCKED[k] && !st.techs.includes(LOCKED[k]!) ? TECHS.find(t => t.id === LOCKED[k])! : null;
               const disc = st.techs.includes('com3') && k !== Kind.NODE ? 0.85 : 1, fc = Math.round(K.food * disc), ec = Math.round(K.energy * disc);
-              const ok = !lock && st.food >= fc && st.energy >= ec && st.alive && !!active && (k !== Kind.NODE || st.counts[Kind.WORKER] > 0) && (k !== Kind.TITAN || titanUsed < titanLim);
+              const ok = !lock && st.food >= fc && st.energy >= ec && st.alive && !!active && (k !== Kind.TITAN || titanUsed < titanLim);
               return (
                 <button key={k} onClick={() => eng?.train(k)} disabled={!ok}
                   onMouseEnter={e => { const r = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect(), b = e.currentTarget.getBoundingClientRect(); setTip({ k, x: b.left - r.left + b.width / 2 }); }}
@@ -362,7 +362,8 @@ export function CellGame({ species, onExit, onRestart }: Props) {
                   <div className="h-8 w-full flex items-center justify-center">{thumbs[k] && <img src={thumbs[k]} className="max-h-8 max-w-full" style={{ imageRendering: 'pixelated' }} />}</div>
                   {lock && <Lock className="absolute top-1 right-1 w-3 h-3 text-neutral-300" />}
                   <div className="text-[10px] font-bold truncate w-full text-center">{k === Kind.MOTHER ? 'Colônia' : k === Kind.NODE ? 'Nódulo' : k === Kind.TITAN ? `Titã ${lock ? '' : `${titanUsed}/${titanLim}`}` : K.name}</div>
-                  {lock ? <div className="text-[8.5px] text-red-200/80 truncate w-full text-center">{lock.name}</div>
+                  {k === Kind.NODE && !st.counts[Kind.WORKER] ? <div className="text-[8.5px] text-red-300 truncate w-full text-center" title="O nódulo nasce de uma coletora">sem coletoras</div>
+                    : lock ? <div className="text-[8.5px] text-red-200/80 truncate w-full text-center">{lock.name}</div>
                     : <div className="text-[9px] font-mono text-neutral-400"><span className="text-yellow-300">{fc}</span>{ec ? <> · <span className="text-cyan-300">{ec}</span></> : null}</div>}
                 </button>
               );
@@ -388,7 +389,7 @@ export function CellGame({ species, onExit, onRestart }: Props) {
                   </button>
                 ) : null)}
               </div>
-              {sel.colony >= 0 && <div className="mb-1 text-[10px] text-neutral-400">Colônia inteira: <b style={{ color: colonies.find(c => c.id === sel.colony)?.color }}>{colonies.find(c => c.id === sel.colony)?.name}</b> (o comportamento vale para as células que ela gerar)</div>}
+              {sel.colony >= 0 && <div className="mb-1 text-[10px] text-neutral-400">Combatentes da colônia: <b style={{ color: colonies.find(c => c.id === sel.colony)?.color }}>{colonies.find(c => c.id === sel.colony)?.name}</b> (o comportamento vale para as células que ela gerar)</div>}
               <div className="text-[10px] uppercase tracking-[0.15em] text-neutral-500 mb-1">Comportamento (delegação)</div>
               <div className="grid grid-cols-3 gap-1 mb-1">
                 {STANCES.map((s, i) => (
