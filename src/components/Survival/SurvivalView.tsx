@@ -71,6 +71,11 @@ interface LoadedChunk {
  */
 const ZOOMS = [6, 5, 4, 3, 2, 1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64, 1 / 128, 1 / 256, 1 / 512, 1 / 1024, 0];
 const MIN_LOCAL_ZOOM = 1 / 4;
+/**
+ * Aquatic era: zooming in past the closest gameplay stop while over water (sea, river, swamp) dives under it.
+ * zoomIdx -1, -2, -3 are these submerged stops (their own scales; the dive transition hides the jump).
+ */
+const SUB_ZOOMS = [3, 4, 6];
 type Lod = 'local' | 'far' | 'regional' | 'world';
 const lodOf = (z: number): Lod => (z >= 1 / 2 - 1e-9 ? 'local' : z >= 1 / 4 - 1e-9 ? 'far' : z >= 1 / 128 - 1e-9 ? 'regional' : 'world');
 /** levels drawn from the gameplay chunks */
@@ -94,6 +99,8 @@ interface Painter {
   flushShadows(): void;
   /** a sprite multiplied by a colour (premultiplied ABGR on the GPU; alpha only on the canvas fallback) */
   tint(c: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, col: number, alpha: number): void;
+  /** an image multiplied by a colour (the world above the water, seen from below) */
+  blitTint(im: Img, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number, col: number): void;
 }
 function canvasPainter(ctx: CanvasRenderingContext2D): Painter {
   let any = false;
@@ -107,6 +114,7 @@ function canvasPainter(ctx: CanvasRenderingContext2D): Painter {
     },
     flushShadows: () => { if (any) { ctx.fillStyle = 'rgba(8,12,6,0.28)'; ctx.fill(); any = false; } },
     tint: (c, sx, sy, sw, sh, dx, dy, _col, alpha) => { ctx.globalAlpha = alpha * 0.6; ctx.drawImage(c, sx, sy, sw, sh, dx, dy, sw, sh); ctx.globalAlpha = 1; },
+    blitTint: (im, sx, sy, sw, sh, dx, dy, dw, dh) => { ctx.drawImage(im.c!, sx, sy, sw, sh, dx, dy, dw, dh); ctx.fillStyle = 'rgba(5,11,18,0.9)'; ctx.fillRect(dx, dy, dw, dh); },
   };
 }
 const SHADOW_COL = rgba(8, 12, 6, 0.28);
@@ -117,6 +125,7 @@ function glPainter(gl: GLWorld, shadowTex: HTMLCanvasElement): Painter {
     shadow: (x, y, rx) => { const r = gl.atlas(shadowTex); gl.quad(r, 0, 0, r.w, r.h, x - rx * 0.75, y - rx * 0.38, rx * 2, rx * 0.76, SHADOW_COL); },
     flushShadows: () => { /* drawn immediately */ },
     tint: (c, sx, sy, sw, sh, dx, dy, col) => { const r = gl.atlas(c); gl.quad(r, sx, sy, sw, sh, dx, dy, sw, sh, col); },
+    blitTint: (im, sx, sy, sw, sh, dx, dy, dw, dh, col) => gl.quad(im.reg!, sx, sy, sw, sh, dx, dy, dw, dh, col),
   };
 }
 /** Pixel-art ellipse used for contact shadows on the GPU path. */
@@ -260,7 +269,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   const dragRef = useRef<{ id: number; x: number; y: number } | null>(null);
   const aliveRef = useRef(true);
   const overlayRef = useRef<HTMLCanvasElement>(null);
-  const [lodLabel, setLodLabel] = useState<{ lod: Lod; zoom: number }>({ lod: 'local', zoom: 3 });
+  const [lodLabel, setLodLabel] = useState<{ lod: Lod; zoom: number; sub?: boolean }>({ lod: 'local', zoom: 3 });
   const [perf, setPerf] = useState({ fps: 0, cpu: 0, chunkMs: 0, workers: 1, chunks: 0, draws: 0, gpu: false });
   const [perfOn, setPerfOn] = useState(true);
   const fx = useMemo(() => new NatureFx(seedToInt(cfg.seed + '_fx')), [cfg]);
@@ -425,12 +434,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     const tx = Math.floor(wx / TILE) - c.data.cx * CHUNK, ty = Math.floor(wy / TILE) - c.data.cy * CHUNK;
     return { c, k: ty * CHUNK + tx };
   };
-  /** open sea under a world point (not rivers or ponds) */
-  const seaAt = (wx: number, wy: number) => {
+  /** water one can dive into under a world point: sea, river or swamp */
+  const waterAt = (wx: number, wy: number) => {
     const cc = cellAt(wx, wy);
     if (!cc) return false;
     const gr = cc.c.data.ground[cc.k];
-    return gr === Ground.DEEP_WATER || gr === Ground.SHALLOW_WATER;
+    return gr === Ground.DEEP_WATER || gr === Ground.SHALLOW_WATER || gr === Ground.RIVER_WATER || gr === Ground.SWAMP_WATER;
   };
   const groundAt = (wx: number, wy: number): Ground | null => {
     const q = cellAt(wx, wy);
@@ -563,13 +572,22 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   /** Current zoom target in CSS px per world px (the last stop fits the whole planet on screen). */
   const zoomTarget = () => {
     const g = G.current;
+    if (g.zoomIdx < 0) return SUB_ZOOMS[Math.min(SUB_ZOOMS.length, -g.zoomIdx) - 1];
     const z = ZOOMS[g.zoomIdx];
     if (z) return z;
     const c = canvasRef.current;
     const W = c?.clientWidth || window.innerWidth, H = c?.clientHeight || window.innerHeight;
     return Math.min(W / WORLD_PX, H / (WORLD_PX * (session.height / session.width))) * 0.92;
   };
-  const zoomStep = (d: number) => { const g = G.current; g.zoomIdx = Math.max(0, Math.min(ZOOMS.length - 1, g.zoomIdx + d)); };
+  const zoomStep = (d: number) => {
+    const g = G.current;
+    // below the closest gameplay stop only in the aquatic era and only over water
+    const min = aquatic && (g.zoomIdx < 0 || waterAt(g.x, g.y)) ? -SUB_ZOOMS.length : 0;
+    const was = g.zoomIdx;
+    g.zoomIdx = Math.max(min, Math.min(ZOOMS.length - 1, g.zoomIdx + d));
+    // crossing the surface jumps straight to the new scale (the dive / surfacing transition covers it)
+    if ((was < 0) !== (g.zoomIdx < 0)) g.zoomView = zoomTarget();
+  };
 
   useEffect(() => {
     const c = canvasRef.current!;
@@ -743,6 +761,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   // ---------------------------------------------------------------------------
   useEffect(() => {
     aliveRef.current = true;
+    if (import.meta.env.DEV) (window as unknown as { __surv?: unknown }).__surv = { G, waterAt, session };   // browser tests
     const canvas = canvasRef.current!;
     const overlay = overlayRef.current!;
     // WebGL2 batched renderer; Canvas2D only as a fallback for browsers without it
@@ -796,6 +815,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     let subNow = false, prevSub: boolean | null = null, seaFrac = 0, seaSampleT = 0;
     let waterRGB: [number, number, number] | null = null;
     const SILHOUETTE = rgba(10, 28, 44, 0.5);
+    /** multiplier that turns what is above the water into a dark shape (submerged view) */
+    const ABOVE = rgba(26, 44, 64, 1);
     const regions = new Map<string, RegionBlock>();
     const regionPending = new Set<string>();
     const freeSlots: number[] = [];
@@ -912,6 +933,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const drawAnimal = (d: AnimalDraw) => {
         const sh = d.sheet;
         const swimmer = aquatic && d.a.sp.habitat === 'water';
+        if (subNow && !swimmer) {
+          // land animals and fliers: dark shapes above the water
+          p.tint(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.x - sh.ax), Math.round(d.y - sh.ay), ABOVE, 1);
+          return;
+        }
         if (swimmer && subNow) {
           // under the sea: the whole body, gliding a little above its shadow on the floor
           p.sprite(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.x - sh.ax), Math.round(d.y - sh.ay - 6));
@@ -945,6 +971,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           if (!c) continue;
           const row = c.rows[j];
           if (!row) continue;
+          if (subNow && !row.bed) { p.blitTint(row.img, 0, 0, row.img.w, row.img.h, (cx0 + k) * CHUNK_PX, row.y, row.img.w, row.img.h, ABOVE); continue; }
           const im = subNow && row.bed ? (row.bedAnim ? row.bedAnim[liquidFrame] : row.bed) : row.anim ? row.anim[liquidFrame] : row.img;
           p.blit(im, 0, 0, im.w, im.h, (cx0 + k) * CHUNK_PX, row.y, im.w, im.h);
         }
@@ -954,7 +981,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           if (!c) continue;
           for (const f of c.byRow[j]) {
             if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id) || (farNow && SMALL_FEATS.has(f.t))) continue;
-            if (subNow && f.t === Feat.LILY_PAD && seaAt(f.x, f.y)) continue;
+            if (subNow) continue;
             const sh = bank.get(f.t, f.v, false).shadow;
             if (sh) p.shadow(f.x, f.y - f.l * LIFT, sh);
           }
@@ -962,7 +989,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         if (r === prow) p.shadow(g.x - 0.5, g.y - g.lift, 6);
         const rowAnimals = animals.get(r);
         if (rowAnimals) for (const d of rowAnimals) {
-          if (d.clip === 0) p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY, Math.max(3, d.sheet.cw * 0.28));
+          if (d.clip === 0 && !subNow) p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY, Math.max(3, d.sheet.cw * 0.28));
           else if (subNow && aquatic && d.a.sp.habitat === 'water') p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY + 4, Math.max(3, d.sheet.cw * 0.24));
         }
         p.flushShadows();
@@ -974,13 +1001,15 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           if (!c) continue;
           for (const f of c.byRow[j]) {
             if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id) || (farNow && SMALL_FEATS.has(f.t))) continue;
-            if (subNow && f.t === Feat.LILY_PAD && seaAt(f.x, f.y)) continue;
+            const aboveW = subNow && !waterAt(f.x, f.y);
+            if (subNow && !aboveW && f.t === Feat.LILY_PAD) continue;
             while (rowAnimals && ai < rowAnimals.length && rowAnimals[ai].a.y < f.y && f.t !== Feat.LILY_PAD) drawAnimal(rowAnimals[ai++]);
             if (!playerDone && f.y > g.y && f.t !== Feat.LILY_PAD) { drawPlayer(); playerDone = true; }
             if (stop && r === stop.row && f.y > stop.y) continue;
             const s = bank.get(f.t, f.v, g.picked.has(f.id));
             const W = s.c.width, H = s.c.height;
             const x = f.x - s.ax, y = f.y - f.l * LIFT - s.ay;
+            if (aboveW) { p.tint(s.c, 0, 0, W, H, x, y, ABOVE, 1); continue; }
             if (TREES.has(f.t)) {
               // canopy sways in the wind, trunk stays rooted
               const dx = Math.round(fx.sway(t, f.x, f.y, 1.4));
@@ -1426,11 +1455,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       g.zoomView = cine || Math.abs(lt - lz) < 0.004 ? zt : Math.exp(lz + (lt - lz) * Math.min(1, dt * 11));
       const Z = g.zoomView;
       const lod = lodOf(Z);
-      if (lod !== lodShown || (!cine && zt !== zoomShown)) { lodShown = lod; zoomShown = zt; setLodLabel({ lod, zoom: zt }); }
+      if (lod !== lodShown || (!cine && zt !== zoomShown)) { lodShown = lod; zoomShown = zt; setLodLabel({ lod, zoom: zt, sub: aquatic && g.zoomIdx < 0 }); }
       const local = chunked(lod), far = lod === 'far', regional = lod === 'regional';
       farNow = far;
-      subNow = aquatic && lod === 'local';
-      if (aquatic && prevSub !== null && subNow !== prevSub && seaFrac > 0.25 && !uw.trans) uw.trans = { up: !subNow, t0: now / 1000 };
+      subNow = aquatic && g.zoomIdx < 0 && !cine;
+      if (aquatic && prevSub !== null && subNow !== prevSub) uw.trans = { up: !subNow, t0: now / 1000 };
       prevSub = subNow;
       fx.underwater = subNow && seaFrac > 0.5;
       if (standbyRef.current) { raf = requestAnimationFrame(frame); return; }
@@ -1471,8 +1500,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         for (let j = 0; j < 5; j++) for (let i = 0; i < 7; i++) {
           const wx = x0 + ((i + 0.5) / 7) * (x1 - x0), wy = y0 + ((j + 0.5) / 5) * (y1 - y0);
           if (!chunkAt(wx, wy)) continue;
-          n++; if (seaAt(wx, wy)) sea++;
-          if (!waterRGB && seaAt(wx, wy)) { const cc = cellAt(wx, wy)!; const m = cc.c.data.mini; waterRGB = [m[cc.k * 4], m[cc.k * 4 + 1], m[cc.k * 4 + 2]]; }
+          n++; if (waterAt(wx, wy)) sea++;
+          if (!waterRGB && waterAt(wx, wy)) { const cc = cellAt(wx, wy)!; const m = cc.c.data.mini; waterRGB = [m[cc.k * 4], m[cc.k * 4 + 1], m[cc.k * 4 + 2]]; }
         }
         const f = n ? sea / n : 0;
         seaFrac = prevSub === null || seaFrac === 0 ? f : seaFrac + (f - seaFrac) * 0.5;
@@ -1639,11 +1668,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       if (local && fxc) {
         octx.setTransform(S, 0, 0, S, tx0, ty0);
         octx.imageSmoothingEnabled = false;
-        fx.drawWorldBelow(octx, fxc);
-        fx.drawWorldAbove(octx, fxc);
+        if (!subNow) { fx.drawWorldBelow(octx, fxc); fx.drawWorldAbove(octx, fxc); }
         // procedural cloud shadows; at the far gameplay zoom a few real clouds float over the land
         const cov = 0.22 + fx.intensity * 0.55, stormy = fx.weather === 'storm' || fx.weather === 'rain';
-        if ((sun > 0 && fxc.climate.living) || fx.intensity > 0.2) clouds.draw(octx, fxc.view, t, fx.wind, cov, Z, 'shadow', 0.13 + fx.intensity * 0.12);
+        if (!subNow && ((sun > 0 && fxc.climate.living) || fx.intensity > 0.2)) clouds.draw(octx, fxc.view, t, fx.wind, cov, Z, 'shadow', 0.13 + fx.intensity * 0.12);
         if (far) clouds.draw(octx, fxc.view, t, fx.wind, Math.min(0.45, cov * 0.8), Z, 'cloud', 0.7, stormy);
 
         const mark = g.target;
@@ -1880,17 +1908,18 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5">
           <button onClick={() => zoomStep(-1)} title="Aproximar (roda / +)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><ZoomIn className="w-4 h-4" /></button>
           <div className="flex flex-col gap-1 py-1">
+            {aquatic && <div title="Visão aquática (submersa)" className={`w-2 h-2 rounded-full mx-auto ${lodLabel.sub ? 'bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.9)]' : 'bg-cyan-200/25'}`} />}
             {(['local', 'far', 'regional', 'world'] as Lod[]).map(l => (
-              <div key={l} title={LOD_NAME[l]} className={`w-2 h-2 rounded-full mx-auto ${lodLabel.lod === l ? 'bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]' : 'bg-white/25'}`} />
+              <div key={l} title={LOD_NAME[l]} className={`w-2 h-2 rounded-full mx-auto ${lodLabel.lod === l && !lodLabel.sub ? 'bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]' : 'bg-white/25'}`} />
             ))}
           </div>
           <button onClick={() => zoomStep(1)} title="Afastar (roda / -)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><ZoomOut className="w-4 h-4" /></button>
         </div>
       )}
-      {!loading && aquatic && (lodLabel.lod === 'local' || lodLabel.lod === 'far') && (
+      {!loading && aquatic && lodLabel.sub && (
         <div className={`absolute left-1/2 -translate-x-1/2 ${spectator ? 'bottom-[70px]' : 'bottom-[76px]'} pointer-events-none bg-[#031824]/75 border border-cyan-200/20 rounded-lg px-3 py-1.5 text-center`}>
-          <div className="text-cyan-50 font-bold text-sm tracking-wide">{lodLabel.lod === 'local' ? 'Gameplay aquático · submerso' : 'Regional aquático · superfície'}</div>
-          <div className="text-[11px] font-mono text-cyan-200/60">{lodLabel.lod === 'local' ? 'o fundo do mar e a coluna d\'água · roda para subir' : 'o mar visto de cima · roda para mergulhar'}</div>
+          <div className="text-cyan-50 font-bold text-sm tracking-wide">Visão aquática · submersa</div>
+          <div className="text-[11px] font-mono text-cyan-200/60">o fundo das águas · afaste o zoom para voltar à superfície</div>
         </div>
       )}
       {!loading && (lodLabel.lod === 'regional' || lodLabel.lod === 'world') && (

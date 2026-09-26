@@ -303,22 +303,26 @@ Four levels (owner's request; `lodOf`):
   screen, owner's request) at the waters of origin (a shallow sea point, `findOrigin`), known from the start; small
   overlay: % discovered, life-stage previews, "Recomeçar". City tools are hidden while `discovery` is on.
 
-## Aquatic zooms (`terrain/seabed.ts`, `Survival/underwater.ts`)
-- Two new zooms in the aquatic era (`SurvivalView` `aquatic`, set by the play mode): **gameplay aquático
-  (submerso)** = the local zooms (>= 1/2) look under the sea; **regional aquático (superfície)** = the far zoom (1/4)
-  is the sea's surface seen from above, swimmers as dark tinted shapes under it; the terrestrial zooms stay as they
-  are (land tiles look normal at every zoom).
-- `PlanetConfig.aquaticView` makes the terrain workers add a **seabed** to every row with sea pixels (`TerrainRow.bed`
-  / `bedAnim`, packed in the chunk texture): floors by deepness q (depth percentiles of that ocean: rippled sand on
-  the shelf, silt, boulders with lit crests / algae / cast shadows, abyssal ooze with living lights), corals on warm
-  shelves, seagrass / cold-water kelp that sway, animated caustic webs in the shallows, the planet's own water
-  colour baked in thicker with depth. Flat 2D pixel art.
-- The submerged view adds the water column (`Underwater.ambience`, weighted by the share of sea in view): slanted
-  sun shafts, marine snow in three parallax layers, bubble streams, a depth vignette; no rain/snow under water
-  (`NatureFx.underwater`); surface lily pads are hidden; swimmers are drawn whole with a shadow on the floor.
-- Crossing local <-> far over the sea plays `Underwater.transition` (0.95 s, chunky pixels): surfacing = bubbles
-  left behind, the wavy foam waterline sweeping down past the eye, droplets thrown up; diving = entry splash ring,
-  the waterline rising, bubbles.
+## Aquatic view (`terrain/seabed.ts`, `Survival/underwater.ts`)
+- Owner's rule: **the gameplay zooms stay the normal surface view**. In the aquatic era (`SurvivalView` `aquatic`),
+  zooming in **past the closest gameplay stop while over water (sea, river or swamp)** dives: `zoomIdx` -1..-3 are
+  the submerged stops (`SUB_ZOOMS`, their own scales; the transition hides the jump). There **everything above the
+  water turns dark** (land rows, cliffs, trees, land animals multiplied by `ABOVE`) and only what is under the water
+  shows. Zooming out of the lowest submerged stop surfaces. Over land one cannot dive.
+- `PlanetConfig.aquaticView` makes the terrain workers add a **bed** to every row with water pixels (`TerrainRow.bed`
+  / `bedAnim`, packed in the chunk texture), following each pixel's own liquid (so edges keep the jittered shape):
+  sea floors by deepness q (depth percentiles of that ocean: rippled sand on the shelf, silt, boulders with lit crests /
+  algae / cast shadows, abyssal ooze with living lights), **riverbeds of round pebbles**, swamp silt, corals on warm
+  shelves, seagrass / cold-water kelp that sway, animated caustic webs in the shallows, the planet's own water colour
+  baked in thicker with depth; non-water pixels of those rows are darkened in the worker. Flat 2D pixel art.
+- The submerged view adds the water column (`Underwater.ambience`, weighted by the share of water in view): slanted
+  sun shafts, marine snow in three parallax layers, bubble streams, a depth vignette; no rain/snow, falling leaves,
+  butterflies or cloud shadows under water; swimmers are drawn whole with a shadow on the floor. At the surface
+  zooms, submerged swimmers show as dark tinted shapes under the water.
+- Diving / surfacing plays `Underwater.transition` (0.95 s, chunky pixels): entry splash ring, the wavy foam waterline
+  rising, bubbles; surfacing = bubbles left behind, the waterline sweeping down past the eye, droplets.
+- A 5th (cyan) dot above the zoom dots marks the submerged view. Dev builds expose `window.__surv` (camera, session)
+  for browser tests.
 
 ## Play mode & the cellular era (`src/lib/cell/`, `src/components/Cell/`)
 Owner's rules - keep them:

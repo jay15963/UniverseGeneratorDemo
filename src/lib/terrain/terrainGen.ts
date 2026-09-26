@@ -145,6 +145,8 @@ export class TerrainGenerator {
   }
   /** deepness of a sea tile for the seabed: 0 shore .. 0.33 shelf edge .. 0.66 abyss edge .. 1 */
   private deepness(t: TileInfo): number {
+    if (t.g === Ground.RIVER_WATER) return 0.12 + Math.min(0.1, t.depth * 4);
+    if (t.g === Ground.SWAMP_WATER) return 0.2;
     if (!(t.g === Ground.DEEP_WATER || t.g === Ground.SHALLOW_WATER)) return 0;
     const dr = t.depth / Math.max(1e-4, this.sea), [q0, q1] = this.depthQ;
     if (dr < q0) return (dr / q0) * 0.33;
@@ -952,13 +954,15 @@ export class TerrainGenerator {
           buf[bk] = r * k; buf[bk + 1] = g * k; buf[bk + 2] = b * k; buf[bk + 3] = 255;
           const lq = liq[gk >> 2];
           if (lq) animPx.push(bk, wx0 + x, rowGroundY + y, lq, i);
-          if (qT && L === 0 && (t.g === Ground.DEEP_WATER || t.g === Ground.SHALLOW_WATER)) {
+          // the pixel's own liquid (the ground image jitters tile edges, so this follows the real water shape)
+          const inland = lq === 1 || (lq === 5 && t.g === Ground.RIVER_WATER) ? 1 : lq === 3 ? 2 : 0;
+          if (qT && lq && lq !== 4 && (inland || L === 0)) {
             // bilinear deepness between tile centres (shore pixels stay shallow)
             const fx = (x + 0.5) / TILE - 0.5, fy = (y + 0.5) / TILE - 0.5;
             const di = fx < 0 ? -1 : 1, dj = fy < 0 ? -1 : 1, ax = Math.abs(fx), ay = Math.abs(fy);
             const o = jj * N + i + B;
             const q = qT[o] * (1 - ax) * (1 - ay) + qT[o + di] * ax * (1 - ay) + qT[o + dj * N] * (1 - ax) * ay + qT[o + di + dj * N] * ax * ay;
-            bedPx.push(bk, wx0 + x, rowGroundY + y, Math.round(q * 1000), Math.round(t.temp * 1000), t.rock);
+            bedPx.push(bk, wx0 + x, rowGroundY + y, Math.round(q * 1000), Math.round(t.temp * 1000), t.rock + inland * 100);
           }
         }
         // --- south face ---
