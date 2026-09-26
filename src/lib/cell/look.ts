@@ -1,0 +1,173 @@
+// A cell species: its name, colour mode and the appearance sliders the player sets in the cell editor. Everything the
+// art needs is derived from these numbers, so a species always looks the same for the same (seed, look, mode).
+import { mulberry, seedToInt } from '../terrain/noise';
+import { speciesName } from '../creature/genome';
+import type { ColorMode } from '../creature/genome';
+
+export type CellShape = 'round' | 'oval' | 'rod' | 'egg' | 'star' | 'bean' | 'blob';
+export type CellPattern = 'none' | 'spots' | 'stripes' | 'rings' | 'speckles' | 'bands';
+
+export interface CellLook {
+  // colour (0..1)
+  hue: number; sat: number; light: number;       // membrane
+  hue2: number;                                   // cytoplasm / pattern
+  nucleusHue: number;
+  accentHue: number;                              // organelles, vesicles, eyespot
+  translucency: number;
+  glow: number;                                   // bioluminescent dots
+  pattern: CellPattern; patternScale: number;
+  // form (0..1 unless noted)
+  shape: CellShape;
+  size: number; elongation: number; wobble: number; membrane: number;
+  nucleusSize: number; organelles: number; vacuoles: number;
+  cilia: number; ciliaLength: number;
+  flagella: number;                               // 0..4 (integer)
+  flagellumLength: number;
+  spikes: number; eyespot: number;
+}
+
+export interface CellSpecies { seed: string; genus: string; species: string; mode: ColorMode; look: CellLook }
+
+export const SHAPES: [CellShape, string][] = [
+  ['round', 'Esférica'], ['oval', 'Ovalada'], ['rod', 'Bastonete'], ['egg', 'Gota'], ['star', 'Estrelada'], ['bean', 'Feijão'], ['blob', 'Ameboide'],
+];
+export const PATTERNS: [CellPattern, string][] = [
+  ['none', 'Nenhum'], ['spots', 'Pintas'], ['stripes', 'Listras'], ['rings', 'Anéis'], ['speckles', 'Salpicado'], ['bands', 'Faixas'],
+];
+
+type NumKey = { [K in keyof CellLook]: CellLook[K] extends number ? K : never }[keyof CellLook];
+export interface LookSlider { key: NumKey; label: string; group: 'Cor' | 'Forma' | 'Organelas' | 'Apêndices'; max?: number; step?: number }
+export const LOOK_SLIDERS: LookSlider[] = [
+  { key: 'hue', label: 'Cor da membrana', group: 'Cor' },
+  { key: 'sat', label: 'Saturação', group: 'Cor' },
+  { key: 'light', label: 'Luminosidade', group: 'Cor' },
+  { key: 'hue2', label: 'Cor do citoplasma', group: 'Cor' },
+  { key: 'nucleusHue', label: 'Cor do núcleo', group: 'Cor' },
+  { key: 'accentHue', label: 'Cor das organelas', group: 'Cor' },
+  { key: 'translucency', label: 'Translucidez', group: 'Cor' },
+  { key: 'glow', label: 'Bioluminescência', group: 'Cor' },
+  { key: 'patternScale', label: 'Escala do padrão', group: 'Cor' },
+  { key: 'size', label: 'Tamanho', group: 'Forma' },
+  { key: 'elongation', label: 'Alongamento', group: 'Forma' },
+  { key: 'wobble', label: 'Irregularidade', group: 'Forma' },
+  { key: 'membrane', label: 'Espessura da membrana', group: 'Forma' },
+  { key: 'nucleusSize', label: 'Tamanho do núcleo', group: 'Organelas' },
+  { key: 'organelles', label: 'Organelas', group: 'Organelas' },
+  { key: 'vacuoles', label: 'Vacúolos', group: 'Organelas' },
+  { key: 'eyespot', label: 'Mancha ocular', group: 'Organelas' },
+  { key: 'cilia', label: 'Cílios', group: 'Apêndices' },
+  { key: 'ciliaLength', label: 'Comprimento dos cílios', group: 'Apêndices' },
+  { key: 'flagella', label: 'Flagelos', group: 'Apêndices', max: 4, step: 1 },
+  { key: 'flagellumLength', label: 'Comprimento dos flagelos', group: 'Apêndices' },
+  { key: 'spikes', label: 'Espinhos', group: 'Apêndices' },
+];
+
+export function randomLook(seed: string): CellLook {
+  const r = mulberry(seedToInt(seed + ':look'));
+  const pick = <T,>(a: [T, string][]) => a[Math.floor(r() * a.length)][0];
+  return {
+    hue: r(), sat: 0.35 + r() * 0.6, light: 0.3 + r() * 0.45, hue2: r(), nucleusHue: r(), accentHue: r(),
+    translucency: r() * 0.8, glow: r() < 0.35 ? r() : 0, pattern: r() < 0.35 ? 'none' : pick(PATTERNS), patternScale: r(),
+    shape: pick(SHAPES), size: r(), elongation: r() * 0.7, wobble: r() * 0.6, membrane: r(),
+    nucleusSize: r(), organelles: r(), vacuoles: r(), cilia: r() < 0.45 ? 0.3 + r() * 0.7 : 0, ciliaLength: r(),
+    flagella: Math.floor(r() * 3.5), flagellumLength: r(), spikes: r() < 0.3 ? r() : 0, eyespot: r() < 0.6 ? r() : 0,
+  };
+}
+
+export const randomSeed = () => Math.random().toString(36).slice(2, 8).toUpperCase();
+
+export function makeSpecies(seed: string, mode: ColorMode = 'earth', look?: CellLook): CellSpecies {
+  const n = speciesName(seed);
+  return { seed, genus: n.genus, species: n.species, mode, look: look ?? randomLook(seed) };
+}
+/** a fresh random binomial name (the editor's dice next to the name) */
+export function randomName() { const n = speciesName(randomSeed()); return { genus: n.genus, species: n.species }; }
+
+// ---------------------------------------------------------------------------------------------------
+// Colours
+// ---------------------------------------------------------------------------------------------------
+export interface HSL { h: number; s: number; l: number }
+export interface CellColours { mem: HSL; cyto: HSL; nuc: HSL; acc: HSL; glow: number; glowHue: number }
+
+// Earth-like microbes: the hue sliders run over natural pigments (ambers, olives, greens, teal, grey-blue, lilac, rose)
+const NATURAL = [0.06, 0.1, 0.15, 0.22, 0.3, 0.4, 0.52, 0.58, 0.75, 0.93, 0.98];
+const natural = (t: number) => {
+  const x = Math.max(0, Math.min(0.9999, t)) * (NATURAL.length - 1), i = Math.floor(x), f = x - i;
+  return NATURAL[i] + (NATURAL[Math.min(NATURAL.length - 1, i + 1)] - NATURAL[i]) * f;
+};
+
+export function cellColours(look: CellLook, mode: ColorMode): CellColours {
+  if (mode === 'earth') {
+    const s = look.sat * 0.5;
+    return {
+      mem: { h: natural(look.hue), s, l: 0.32 + look.light * 0.36 },
+      cyto: { h: natural(look.hue2), s: s * 0.8, l: 0.5 + look.light * 0.22 },
+      nuc: { h: natural(look.nucleusHue), s: 0.35, l: 0.34 },
+      acc: { h: natural(look.accentHue), s: 0.55, l: 0.5 },
+      glow: look.glow * 0.25, glowHue: 0.45,
+    };
+  }
+  return {
+    mem: { h: look.hue, s: 0.3 + look.sat * 0.7, l: 0.28 + look.light * 0.42 },
+    cyto: { h: look.hue2, s: 0.25 + look.sat * 0.6, l: 0.5 + look.light * 0.2 },
+    nuc: { h: look.nucleusHue, s: 0.6, l: 0.38 },
+    acc: { h: look.accentHue, s: 0.8, l: 0.55 },
+    glow: look.glow, glowHue: look.accentHue,
+  };
+}
+
+/** a colony's team colour (biofilm, minimap, far zoom): the membrane, made a little louder */
+export function teamColour(sp: CellSpecies): [number, number, number] {
+  const c = cellColours(sp.look, sp.mode).mem;
+  return hslRgb(c.h, Math.min(1, c.s + 0.25), Math.max(0.42, Math.min(0.62, c.l + 0.08)));
+}
+export function hslRgb(h: number, s: number, l: number): [number, number, number] {
+  h = ((h % 1) + 1) % 1;
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+  const f = (t: number) => { t = ((t % 1) + 1) % 1; return t < 1 / 6 ? p + (q - p) * 6 * t : t < 0.5 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p; };
+  return [Math.round(f(h + 1 / 3) * 255), Math.round(f(h) * 255), Math.round(f(h - 1 / 3) * 255)];
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Unit kinds (shared by the art, the simulation and the HUD)
+// ---------------------------------------------------------------------------------------------------
+export enum Kind { WORKER = 0, SCOUT = 1, HUNTER = 2, PHOTO = 3, ARMOR = 4, SPITTER = 5, MOTHER = 6, NODE = 7, BACTERIA = 8, DIATOM = 9, AMOEBA = 10 }
+export const SPECIES_KINDS = 8;          // kinds drawn for every species (units + mother + node)
+
+export interface KindInfo {
+  name: string; short: string; blurb: string;
+  food: number; energy: number; time: number;  // division cost (s)
+  hp: number; armor: number; speed: number; r: number; sight: number;
+  dmg: number; range: number; cd: number;       // damage per hit, reach, seconds between hits
+  pop: number;                                  // population it takes
+}
+export const KINDS: KindInfo[] = [
+  { name: 'Coletora', short: 'COL', blurb: 'Colhe nutrientes e os leva ao biofilme. Pode virar um nódulo de biofilme.', food: 20, energy: 5, time: 4, hp: 30, armor: 0, speed: 46, r: 7, sight: 150, dmg: 2, range: 2, cd: 1.2, pop: 1 },
+  { name: 'Flagelada', short: 'FLA', blurb: 'Batedora veloz de visão longa. Aguenta mais tempo longe do biofilme.', food: 15, energy: 15, time: 4, hp: 22, armor: 0, speed: 92, r: 6, sight: 320, dmg: 2, range: 2, cd: 1, pop: 1 },
+  { name: 'Fagócita', short: 'FAG', blurb: 'Predadora: engole células feridas e se cura comendo restos.', food: 40, energy: 20, time: 7, hp: 70, armor: 1, speed: 52, r: 9, sight: 200, dmg: 9, range: 3, cd: 0.9, pop: 2 },
+  { name: 'Fotossintética', short: 'FOT', blurb: 'Gera energia no biofilme, o dobro sob os feixes de luz.', food: 30, energy: 0, time: 6, hp: 34, armor: 0, speed: 28, r: 7.5, sight: 140, dmg: 0, range: 0, cd: 1, pop: 1 },
+  { name: 'Encouraçada', short: 'ENC', blurb: 'Tanque lento de placas duras: segura a linha de frente.', food: 60, energy: 30, time: 10, hp: 160, armor: 4, speed: 30, r: 11, sight: 170, dmg: 5, range: 3, cd: 1.3, pop: 3 },
+  { name: 'Secretora', short: 'SEC', blurb: 'Dispara toxina à distância. Frágil de perto.', food: 45, energy: 35, time: 8, hp: 38, armor: 0, speed: 40, r: 8, sight: 230, dmg: 7, range: 150, cd: 1.6, pop: 2 },
+  { name: 'Célula-mãe', short: 'MÃE', blurb: 'O coração da colônia: divide-se para gerar as outras células e sustenta o biofilme.', food: 0, energy: 0, time: 0, hp: 700, armor: 3, speed: 9, r: 22, sight: 260, dmg: 6, range: 4, cd: 1, pop: 0 },
+  { name: 'Nódulo de biofilme', short: 'NÓD', blurb: 'Célula fixa que espalha biofilme: território, cura e mais população.', food: 50, energy: 20, time: 6, hp: 180, armor: 2, speed: 0, r: 12, sight: 180, dmg: 0, range: 0, cd: 1, pop: 0 },
+  { name: 'Bactéria', short: 'BAC', blurb: 'Presa selvagem. Vira nutriente.', food: 0, energy: 0, time: 0, hp: 8, armor: 0, speed: 30, r: 4, sight: 90, dmg: 0, range: 0, cd: 1, pop: 0 },
+  { name: 'Diatomácea', short: 'DIA', blurb: 'Alga de carapaça de vidro, quase parada. Rica em nutrientes.', food: 0, energy: 0, time: 0, hp: 60, armor: 3, speed: 3, r: 10, sight: 0, dmg: 0, range: 0, cd: 1, pop: 0 },
+  { name: 'Ameba selvagem', short: 'AME', blurb: 'Predadora solitária que devora qualquer célula.', food: 0, energy: 0, time: 0, hp: 260, armor: 1, speed: 34, r: 20, sight: 220, dmg: 14, range: 4, cd: 1.1, pop: 0 },
+];
+/** the kinds the mother cell can divide into */
+export const TRAINABLE = [Kind.WORKER, Kind.SCOUT, Kind.HUNTER, Kind.PHOTO, Kind.ARMOR, Kind.SPITTER];
+
+// ---------------------------------------------------------------------------------------------------
+// The player's species is kept in the browser (it carries into the later eras)
+// ---------------------------------------------------------------------------------------------------
+const STORE = 'player-cell-species';
+export function saveSpecies(sp: CellSpecies) { try { localStorage.setItem(STORE, JSON.stringify(sp)); } catch { /* private mode */ } }
+export function loadSpecies(): CellSpecies | null {
+  try {
+    const s = localStorage.getItem(STORE);
+    if (!s) return null;
+    const sp = JSON.parse(s) as CellSpecies;
+    if (!sp.seed || !sp.look) return null;
+    return { ...makeSpecies(sp.seed, sp.mode), ...sp, look: { ...randomLook(sp.seed), ...sp.look } };
+  } catch { return null; }
+}

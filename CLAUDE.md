@@ -269,3 +269,36 @@ Four levels (owner's request; `lodOf`):
   expands galaxies nearest first from the current one and lists worlds with life; filter Inteligente / Animal + /
   Vegetal + / Qualquer vida. Clicking a world jumps to its system (`jumpToSystem`) and focuses the planet.
   No real/known bodies (Earth, Milky Way) - the owner asked for procedural worlds only.
+
+## Play mode & the cellular era (`src/lib/cell/`, `src/components/Cell/`)
+Owner's rules - keep them:
+- Menu: **"Jogar"** opens the era selection (`EraSelect`; only the cellular era is open, the others are shown locked
+  with the lineage's portraits: aquática, terrestre, animal tardio, tribal ... espacial); **"Explorar"** is the universe
+  exploration (the old "Jogar"). `#jogar`, `#celula` (editor) and `#celula-jogo` (straight into a game) open them.
+- **Cell editor** (`CellEditor`): species name (genus + species, dice), seed (dice), colour mode Earth-like /
+  Alien-like as an option (it applies to the whole pool), shape, pattern and many appearance sliders (`look.ts`
+  `LOOK_SLIDERS`, "Aparência aleatória"). It previews every kind the colony divides into. The species is saved in
+  localStorage (`saveSpecies`) - it carries into the later eras; `speciesName(seed)` = the creature genome's name.
+- **The cellular era is NOT on the planet**: a generic microscopic pool (`world.ts`, 12288 px square) seen **top-down**
+  (like Spore's cell stage) with **parallax depth**: abyss, far particles, drifting silhouettes of big organisms below
+  (0.55), marine snow carried by the current, the play plane (caustics, light shafts, vents, sand grains), faint bokeh
+  above. Pixel art: everything is drawn into a low-res framebuffer (`gl.ts`, 1 art px = 2 css px at zoom 1) and
+  upscaled with nearest filtering; sprites rotate toward where the cell swims.
+- **Art** (`art.ts`, painted by `creature/raster.ts`, top view, faces +x, 8 frames): every kind shares the species'
+  colours / pattern / membrane / eyespot and adds its own anatomy so units read at a glance: Coletora (feeding cilia,
+  food vacuole), Flagelada (long flagella, big eyespot), Fagócita (pseudopods, mouth with trichocysts), Fotossintética
+  (chloroplasts), Encouraçada (armour plates), Secretora (toxin vesicles + pore), Célula-mãe (big, budding daughter,
+  rhizoids), Nódulo de biofilme (rooted slime tendrils). Wild: bacteria, diatoms, amoebas; props: motes, grains, vents.
+  Sprites are rendered by a worker pool (`art.worker.ts`) and packed into a texture array (`atlas.ts`).
+- **Scale**: thousands of cells, ~160 colonies of 16 rival species (homelands: neighbours tend to share a species, same
+  species = allies). The RTS runs in `sim.worker.ts` (`sim.ts`, 20 Hz, typed arrays, spatial hash); the view
+  (`Cell/engine.ts`) interpolates snapshots and draws everything instanced (engine FPS shown like the demo).
+- **Gameplay** (a gentle tutorial for grand strategy): nutrients (workers carry motes to the biofilm) + energy
+  (photosynthesisers on the biofilm, x2 under light); the mother divides into units (cost + time + population cap:
+  mother 8, +6 per node); **biofilm = territory and supply**: inside, cells heal and eat; outside they burn a reserve
+  and starve (units without direct orders go home when hungry); workers settle into nodes at the biofilm's edge.
+  Combat: melee, toxin at range, armour, hunters engulf wounded smaller cells, deaths drop motes, vents scald.
+  **Delegation**: stances Automático / Coletar / Defender / Caçar / Explorar + control groups ("tecidos", Ctrl+1..9).
+  Rival AI: economy -> nodes -> armies that raid weaker neighbours of other species; the player gets a **10-minute
+  grace** (`GRACE`) before raids or aggro. Objectives panel; victory = 80 cells + a node + a destroyed rival colony.
+- Next rounds (agreed with the owner): gene stealing, symbiosis as diplomacy, endosymbiosis, the move to multicellular.

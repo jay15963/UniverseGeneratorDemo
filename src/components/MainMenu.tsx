@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Rocket, Globe2, Sun, Sparkles, Orbit, Settings, Dna, Clapperboard, Film, Download, Castle, Swords, Ship } from 'lucide-react';
+import { Rocket, Telescope, Globe2, Sun, Sparkles, Orbit, Settings, Dna, Clapperboard, Film, Download, Castle, Swords, Ship } from 'lucide-react';
 import { MenuScene } from './MenuScene';
 import { LOCAL_SOUNDTRACK } from './Trailer/Trailer';
 
@@ -9,6 +9,7 @@ interface MainMenuProps {
   onGalaxyStart: () => void;
   onUniverseStart: () => void;
   onPlay: () => void;
+  onExplore: () => void;
   onCreatureStart: () => void;
   onStructureStart: () => void;
   onEquipmentStart: () => void;
@@ -19,7 +20,7 @@ interface MainMenuProps {
   onTrailerDownload: (soundtrack: string) => void;
 }
 
-export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onCreatureStart, onStructureStart, onEquipmentStart, onVehicleStart, onDemo, onTrailer, onTrailerDownload }: MainMenuProps) {
+export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onExplore, onCreatureStart, onStructureStart, onEquipmentStart, onVehicleStart, onDemo, onTrailer, onTrailerDownload }: MainMenuProps) {
   // the recording needs the music as a file: the one served with the site, or one the viewer picks
   const [localTrack, setLocalTrack] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -50,7 +51,8 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
         </div>
 
         <div className="flex flex-col gap-1.5 w-full max-w-[22rem]">
-          <MenuButton label="Jogar" hint="Explore um universo inteiro" icon={<Rocket className="w-5 h-5" />} onClick={onPlay} primary />
+          <MenuButton label="Jogar" hint="Da célula à era espacial" icon={<Rocket className="w-5 h-5" />} onClick={onPlay} primary />
+          <MenuButton label="Explorar" hint="Explore um universo inteiro" icon={<Telescope className="w-4 h-4" />} onClick={onExplore} />
           <div className="flex items-stretch gap-1.5">
             <div className="flex-1 min-w-0"><MenuButton label="Assistir trailer" icon={<Film className="w-4 h-4" />} onClick={onTrailer} /></div>
             <button onClick={download}

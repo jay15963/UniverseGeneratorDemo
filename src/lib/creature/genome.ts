@@ -96,6 +96,12 @@ function word(rnd: () => number, parts: number, end: string[]) {
   return w + end[Math.floor(rnd() * end.length)];
 }
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** the species' binomial name for a seed (the same one makeGenome gives, so a lineage keeps its name) */
+export function speciesName(seed: string) {
+  const nr = mulberry(seedToInt(seed + ':name'));
+  const genus = cap(word(nr, 2 + Math.floor(nr() * 2), END_G)), species = word(nr, 2, END_S), people = cap(word(nr, 2, END_P));
+  return { genus, species, people };
+}
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const smooth = (a: number, b: number, x: number) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
