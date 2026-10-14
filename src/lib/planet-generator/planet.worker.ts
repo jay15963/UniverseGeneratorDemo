@@ -133,7 +133,7 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       }
       case 'chunk': {
         const chunk = terrainFor(msg.sessionId).chunk(msg.cx, msg.cy);
-        post({ kind: 'chunk', id: msg.id, chunk }, [...chunk.rows.flatMap(r => [r.px.buffer, ...(r.anim ?? []).map(a => a.buffer), ...(r.bed ? [r.bed.buffer] : []), ...(r.bedAnim ?? []).map(a => a.buffer)]), chunk.ground.buffer, chunk.zone.buffer, chunk.biome.buffer, chunk.rock.buffer, chunk.temp.buffer, chunk.level.buffer, chunk.ramp.buffer, chunk.lava.buffer, chunk.mini.buffer]);
+        post({ kind: 'chunk', id: msg.id, chunk }, [...[...chunk.rows, ...(chunk.under?.rows ?? [])].flatMap(r => [r.px.buffer, ...(r.anim ?? []).map(a => a.buffer)]), ...(chunk.under ? [chunk.under.level.buffer] : []), chunk.ground.buffer, chunk.zone.buffer, chunk.biome.buffer, chunk.rock.buffer, chunk.temp.buffer, chunk.level.buffer, chunk.ramp.buffer, chunk.lava.buffer, chunk.mini.buffer]);
         break;
       }
       case 'spawn': {
@@ -175,7 +175,7 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         break;
       }
       case 'region': {
-        const px = terrainFor(msg.sessionId).region(msg.tx, msg.ty, msg.step, msg.n);
+        const px = terrainFor(msg.sessionId).region(msg.tx, msg.ty, msg.step, msg.n, !!msg.under);
         post({ kind: 'region', id: msg.id, px }, [px.buffer]);
         break;
       }

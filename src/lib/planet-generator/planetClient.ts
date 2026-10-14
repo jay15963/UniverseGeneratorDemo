@@ -160,7 +160,7 @@ export interface PlanetSession {
   /** Playable terrain chunk (32x32 tiles) */
   chunk(cx: number, cy: number): Promise<ChunkData>;
   /** Regional LOD block from the full-resolution session worker (anywhere on the planet) */
-  region(tx: number, ty: number, step: number, n: number): Promise<Uint8ClampedArray>;
+  region(tx: number, ty: number, step: number, n: number, under?: boolean): Promise<Uint8ClampedArray>;
   /** Nearest walkable tile to a map pixel */
   spawn(x: number, y: number): Promise<{ tx: number; ty: number }>;
   /** Parallel chunk generator (one worker per spare core) around a map point. */
@@ -242,8 +242,8 @@ export function openPlanetSession(
         if (res.kind !== 'chunk') throw new Error('unexpected response');
         return res.chunk;
       },
-      region: async (tx, ty, step, n) => {
-        const res = await call({ kind: 'region', id: nextId++, sessionId, tx, ty, step, n });
+      region: async (tx, ty, step, n, under) => {
+        const res = await call({ kind: 'region', id: nextId++, sessionId, tx, ty, step, n, under });
         if (res.kind !== 'region') throw new Error('unexpected response');
         return res.px;
       },
@@ -325,7 +325,7 @@ export class TerrainPool {
   readonly ready: Promise<void>;
   private workers: { w: Worker; busy: boolean }[] = [];
   private queue: { cx: number; cy: number; resolve: (c: ChunkData) => void; reject: (e: Error) => void }[] = [];
-  private regionQueue: { tx: number; ty: number; step: number; n: number; resolve: (px: Uint8ClampedArray) => void; reject: (e: Error) => void }[] = [];
+  private regionQueue: { tx: number; ty: number; step: number; n: number; under?: boolean; resolve: (px: Uint8ClampedArray) => void; reject: (e: Error) => void }[] = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private waiting = new Map<number, { resolve: (c: any) => void; reject: (e: Error) => void; slot: { busy: boolean } }>();
   private nextId = 1;
@@ -387,7 +387,7 @@ export class TerrainPool {
         const job = this.regionQueue.shift()!;
         slot.busy = true;
         this.waiting.set(id, { resolve: job.resolve, reject: job.reject, slot });
-        slot.w.postMessage({ kind: 'region', id, tx: job.tx, ty: job.ty, step: job.step, n: job.n });
+        slot.w.postMessage({ kind: 'region', id, tx: job.tx, ty: job.ty, step: job.step, n: job.n, under: job.under });
       }
     }
   }
@@ -401,8 +401,8 @@ export class TerrainPool {
   }
 
   /** Regional LOD block: n*n colours, one per `step` tiles, starting at tile (tx, ty). */
-  region(tx: number, ty: number, step: number, n: number): Promise<Uint8ClampedArray> {
-    return new Promise((resolve, reject) => { this.regionQueue.push({ tx, ty, step, n, resolve, reject }); this.pump(); });
+  region(tx: number, ty: number, step: number, n: number, under = false): Promise<Uint8ClampedArray> {
+    return new Promise((resolve, reject) => { this.regionQueue.push({ tx, ty, step, n, under, resolve, reject }); this.pump(); });
   }
   /** Drops queued (not yet started) regional jobs - used when the camera moves on. */
   clearRegions() { const q = this.regionQueue; this.regionQueue = []; for (const j of q) j.reject(new Error('cancelled')); }

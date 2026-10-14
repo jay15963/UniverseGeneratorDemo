@@ -34,7 +34,7 @@ export type WorkerRequest =
   | { kind: 'cityRemove'; sessionId: string; cityId: number }
   | { kind: 'cityZones'; sessionId: string; on: boolean }
   | { kind: 'citySites'; id: number; sessionId: string; count: number; seed: number }
-  | { kind: 'region'; id: number; sessionId: string; tx: number; ty: number; step: number; n: number }
+  | { kind: 'region'; id: number; sessionId: string; tx: number; ty: number; step: number; n: number; under?: boolean }
   | { kind: 'close'; sessionId: string };
 
 export type WorkerResponse =

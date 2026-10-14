@@ -15,7 +15,7 @@ ctx.onmessage = (ev: MessageEvent) => {
     if (m.kind === 'cityZones') { cityZones(m.on); return; }
     if (m.kind === 'init') { gen = new TerrainGenerator(m.fields as PlanetFields); ctx.postMessage({ kind: 'ready', id: m.id }); return; }
     if (m.kind === 'region' && gen) {
-      const px = gen.region(m.tx, m.ty, m.step, m.n);
+      const px = gen.region(m.tx, m.ty, m.step, m.n, !!m.under);
       ctx.postMessage({ kind: 'region', id: m.id, px }, [px.buffer]);
       return;
     }
@@ -23,7 +23,7 @@ ctx.onmessage = (ev: MessageEvent) => {
       const t0 = performance.now();
       const chunk = gen.chunk(m.cx, m.cy);
       ctx.postMessage({ kind: 'chunk', id: m.id, chunk, ms: performance.now() - t0 },
-        [...chunk.rows.flatMap(r => [r.px.buffer, ...(r.anim ?? []).map(a => a.buffer), ...(r.bed ? [r.bed.buffer] : []), ...(r.bedAnim ?? []).map(a => a.buffer)]), chunk.ground.buffer, chunk.zone.buffer, chunk.biome.buffer, chunk.rock.buffer,
+        [...[...chunk.rows, ...(chunk.under?.rows ?? [])].flatMap(r => [r.px.buffer, ...(r.anim ?? []).map(a => a.buffer)]), ...(chunk.under ? [chunk.under.level.buffer] : []), chunk.ground.buffer, chunk.zone.buffer, chunk.biome.buffer, chunk.rock.buffer,
           chunk.temp.buffer, chunk.level.buffer, chunk.ramp.buffer, chunk.lava.buffer, chunk.mini.buffer]);
     }
   } catch (e) {

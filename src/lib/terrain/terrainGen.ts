@@ -34,7 +34,7 @@ import { RockType, ROCK_RAMPS, GROUND_RAMPS, LEAF, RGB, shiftRamp, vegetationHue
 import { CZ, CityChunkData, isGraded, isRoad, isWallish, isZone, keepFeature } from '../city/codes';
 import { lifeStageOf, vegAmount, seaZone, SeaZone } from '../planet-generator/lifeStage';
 import { cityPixel, cityRegionColor } from '../city/paint';
-import { seabedRow, BedStyle } from './seabed';
+import { seabedRow, BedStyle, underLevel, LAND_U, bedPalette, bedColour, faceColour, ABOVE } from './seabed';
 
 // ---------------------------------------------------------------------------
 // Cities painted into the terrain (per worker). A city plan is a set of per-chunk tile codes with the
@@ -427,7 +427,8 @@ export class TerrainGenerator {
   // Regional LOD: one colour per sampled tile (no rasterising, no features) - cheap enough to cover
   // thousands of tiles around the player when the camera zooms out.
   // ---------------------------------------------------------------------------
-  region(tx0: number, ty0: number, step: number, n: number): Uint8ClampedArray {
+  region(tx0: number, ty0: number, step: number, n: number, under = false): Uint8ClampedArray {
+    if (under && this.bedStyle) return this.regionUnder(tx0, ty0, step, n);
     const M = n + 1; // one extra sample row/column for hill shading
     const lv = new Float32Array(M * M);
     const cols = new Float32Array(M * M * 3);
@@ -567,6 +568,7 @@ export class TerrainGenerator {
     const falls: ChunkData['falls'] = [];
     if (this.bedStyle) { const qT = this.qT ??= new Float32Array(N * N); for (let i = 0; i < N * N; i++) qT[i] = this.deepness(tiles[i]); }
     const rows = this.compose(cx, cy, tiles, pixels, falls, this.lastLiquid!);
+    const under = this.bedStyle ? this.composeUnder(cx, cy, tiles, pixels, this.lastLiquid!) : undefined;
     let features = this.place(cx, cy, tiles, nearWater);
     if (city) {
       // the city clears trees, rocks and logs in its way (lumber camps keep their woods)
@@ -599,7 +601,115 @@ export class TerrainGenerator {
       mini[mk] = pixels[gk] * lvl; mini[mk + 1] = pixels[gk + 1] * lvl; mini[mk + 2] = pixels[gk + 2] * lvl; mini[mk + 3] = 255;
       if (ramp[j * CHUNK + i]) { mini[mk] = 235; mini[mk + 1] = 215; mini[mk + 2] = 160; }
     }
-    return { cx, cy, rows, ground, biome, rock, temp, level, ramp, lava, falls, features, mini, zone };
+    return { cx, cy, rows, ground, biome, rock, temp, level, ramp, lava, falls, features, mini, zone, under };
+  }
+
+  /** regional block of the underwater layer: floors by depth with hill shading, the land dark */
+  private regionUnder(tx0: number, ty0: number, step: number, n: number): Uint8ClampedArray {
+    const st = this.bedStyle!, pal = bedPalette(st), R = this.ramps as Record<string, RGB[]>;
+    const M = n + 1, lv = new Float32Array(M * M), cols = new Float32Array(M * M * 3);
+    for (let j = 0; j < M; j++) for (let i = 0; i < M; i++) {
+      const tx = tx0 + (i - 1) * step + (step >> 1), ty = ty0 + (j - 1) * step + (step >> 1);
+      const t = this.tile(tx, ty), k = j * M + i;
+      const L = this.underLv(t, tx, ty);
+      lv[k] = L;
+      let c: RGB;
+      if (L < LAND_U || t.g === Ground.RIVER_WATER || t.g === Ground.SWAMP_WATER) {
+        c = bedColour(st, pal, tx * TILE + 7, ty * TILE + 7, this.deepness(t), t.temp, t.rock, L < LAND_U ? 0 : t.g === Ground.SWAMP_WATER ? 2 : 1);
+      } else {
+        const g = (R[t.g === Ground.SAND ? 'sand' : t.g === Ground.STONE ? 'gravel' : 'dirt'] ?? R.dirt)[3];
+        c = [g[0] * ABOVE[0], g[1] * ABOVE[1], g[2] * ABOVE[2]];
+      }
+      cols[k * 3] = c[0]; cols[k * 3 + 1] = c[1]; cols[k * 3 + 2] = c[2];
+    }
+    const out = new Uint8ClampedArray(n * n * 4);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const k = (j + 1) * M + i + 1, L = lv[k];
+      const slope = (lv[k - M] - L) + (lv[k - 1] - L) * 0.6;
+      const sh = slope > 0 ? Math.max(0.5, 1 - slope * 0.12) : Math.min(1.35, 1 - slope * 0.08);
+      const o = (j * n + i) * 4;
+      out[o] = cols[k * 3] * sh; out[o + 1] = cols[k * 3 + 1] * sh; out[o + 2] = cols[k * 3 + 2] * sh; out[o + 3] = 255;
+    }
+    return out;
+  }
+
+  /** underwater level of a tile (bathymetry; the land is the ceiling above every floor) */
+  private underLv(t: TileInfo, tx: number, ty: number): number {
+    if (t.g === Ground.DEEP_WATER || t.g === Ground.SHALLOW_WATER) return underLevel(this.deepness(t), 0, tx, ty, this.seed);
+    return LAND_U;   // land, rivers and swamps (their water shows as floor where the pixel is water)
+  }
+
+  /**
+   * The underwater layer of a chunk (aquatic view): the same 3/4 terraced rendering as `compose`, over the
+   * bathymetric levels. Floors are painted by `seabedRow` (sand, silt, ooze, pebbles, caustics, seagrass), cliff
+   * faces are underwater rock fogged by their depth, the land above is a dark ceiling.
+   */
+  private composeUnder(cx: number, cy: number, tiles: TileInfo[], G: Uint8ClampedArray, liq: Uint8Array): { rows: TerrainRow[]; level: Uint8Array } {
+    const st = this.bedStyle!, qT = this.qT!, pal = bedPalette(st);
+    const U = new Uint8Array(N * N);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) U[j * N + i] = this.underLv(tiles[j * N + i], cx * CHUNK - B + i, cy * CHUNK - B + j);
+    const rows: TerrainRow[] = [];
+    for (let j = 0; j < CHUNK; j++) {
+      const jj = j + B;
+      let maxL = 0, minL = LAND_U;
+      for (let i = 0; i < CHUNK; i++) {
+        const lv = U[jj * N + i + B];
+        maxL = Math.max(maxL, lv);
+        minL = Math.min(minL, lv, U[(jj + 1) * N + i + B]);
+      }
+      const H = TILE + (maxL - minL) * LIFT;
+      const buf = new Uint8ClampedArray(CHUNK_PX * H * 4);
+      const pts: number[] = [];
+      const rowGroundY = (cy * CHUNK + j) * TILE;
+      for (let i = 0; i < CHUNK; i++) {
+        const o = jj * N + i + B, t = tiles[o], L = U[o];
+        const north = U[o - N], south = U[o + N], west = U[o - 1], east = U[o + 1];
+        const top = (maxL - L) * LIFT, wx0 = (cx * CHUNK + i) * TILE, ceiling = L === LAND_U;
+        // --- surface: floor or dark land ---
+        for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) {
+          const gk = ((j * TILE + y) * CHUNK_PX + i * TILE + x) * 4;
+          const bk = ((top + y) * CHUNK_PX + i * TILE + x) * 4;
+          let k = 1;
+          if (north < L && y === 0) k *= 1.3;                       // lit crest of a terrace
+          if (north < L && y === 1) k *= 1.12;
+          if (north > L && y < 4) k *= [0.5, 0.62, 0.76, 0.9][y];  // under a cliff
+          if (west < L && x === 0) k *= 1.1;
+          if (east < L && x === TILE - 1) k *= 0.74;
+          if (west > L && x < 5) k *= [0.6, 0.7, 0.8, 0.88, 0.95][x];
+          const lq = liq[gk >> 2];
+          const floor = !ceiling || (lq !== 0 && lq !== 4);
+          if (floor) {
+            const fx = (x + 0.5) / TILE - 0.5, fy = (y + 0.5) / TILE - 0.5;
+            const di = fx < 0 ? -1 : 1, dj = fy < 0 ? -1 : 1, ax = Math.abs(fx), ay = Math.abs(fy);
+            const q = qT[o] * (1 - ax) * (1 - ay) + qT[o + di] * ax * (1 - ay) + qT[o + dj * N] * (1 - ax) * ay + qT[o + di + dj * N] * ax * ay;
+            const inland = ceiling ? (lq === 3 || t.g === Ground.SWAMP_WATER ? 2 : 1) : 0;
+            pts.push(bk, wx0 + x, rowGroundY + y, Math.round(q * 1000), Math.round(t.temp * 1000), t.rock + inland * 100, Math.round(k * 1000));
+            buf[bk + 3] = 255;
+          } else {
+            buf[bk] = G[gk] * ABOVE[0] * k; buf[bk + 1] = G[gk + 1] * ABOVE[1] * k; buf[bk + 2] = G[gk + 2] * ABOVE[2] * k; buf[bk + 3] = 255;
+          }
+        }
+        // --- south face: an underwater cliff down to the next floor ---
+        if (south >= L) continue;
+        const fh = (L - south) * LIFT, f0 = top + TILE;
+        for (let x = 0; x < TILE; x++) {
+          const wx = wx0 + x;
+          for (let y = 0; y < fh; y++) {
+            const bk = ((f0 + y) * CHUNK_PX + i * TILE + x) * 4;
+            const fy = y / Math.max(1, fh - 1);
+            let c = faceColour(st, pal, wx, rowGroundY + f0 + y, fy, L - y / LIFT, t.rock, ceiling);
+            if (y === 0) c = [c[0] * 0.7, c[1] * 0.72, c[2] * 0.76];
+            if (x === 0 && west < L) c = [c[0] * 1.12, c[1] * 1.12, c[2] * 1.1];
+            buf[bk] = c[0]; buf[bk + 1] = c[1]; buf[bk + 2] = c[2]; buf[bk + 3] = 255;
+          }
+        }
+      }
+      const b = seabedRow(st, buf, CHUNK_PX, pts);
+      rows.push({ y: rowGroundY - maxL * LIFT, h: H, px: b.bed, anim: b.anim });
+    }
+    const level = new Uint8Array(CHUNK * CHUNK);
+    for (let j = 0; j < CHUNK; j++) for (let i = 0; i < CHUNK; i++) level[j * CHUNK + i] = U[(j + B) * N + i + B];
+    return { rows, level };
   }
 
   /** Stamps the visible city tiles onto a chunk window (codes, graded levels, road ramps). */
@@ -914,8 +1024,6 @@ export class TerrainGenerator {
       const H = TILE + (maxL - minL) * LIFT; // buffer spans only this row's own relief
       const buf = new Uint8ClampedArray(CHUNK_PX * H * 4);
       const animPx: number[] = []; // [bufIndex, wx, wy, kind, tileCol] * n
-      const bedPx: number[] = [];  // aquatic view: [bufIndex, wx, wy, q*1000, temp*1000, rock] * n
-      const qT = this.bedStyle ? this.qT : null;
       const rowGroundY = (cy * CHUNK + j) * TILE;
       for (let i = 0; i < CHUNK; i++) {
         const t = tiles[jj * N + i + B];
@@ -954,16 +1062,6 @@ export class TerrainGenerator {
           buf[bk] = r * k; buf[bk + 1] = g * k; buf[bk + 2] = b * k; buf[bk + 3] = 255;
           const lq = liq[gk >> 2];
           if (lq) animPx.push(bk, wx0 + x, rowGroundY + y, lq, i);
-          // the pixel's own liquid (the ground image jitters tile edges, so this follows the real water shape)
-          const inland = lq === 1 || (lq === 5 && t.g === Ground.RIVER_WATER) ? 1 : lq === 3 ? 2 : 0;
-          if (qT && lq && lq !== 4 && (inland || L === 0)) {
-            // bilinear deepness between tile centres (shore pixels stay shallow)
-            const fx = (x + 0.5) / TILE - 0.5, fy = (y + 0.5) / TILE - 0.5;
-            const di = fx < 0 ? -1 : 1, dj = fy < 0 ? -1 : 1, ax = Math.abs(fx), ay = Math.abs(fy);
-            const o = jj * N + i + B;
-            const q = qT[o] * (1 - ax) * (1 - ay) + qT[o + di] * ax * (1 - ay) + qT[o + dj * N] * (1 - ax) * ay + qT[o + di + dj * N] * ax * ay;
-            bedPx.push(bk, wx0 + x, rowGroundY + y, Math.round(q * 1000), Math.round(t.temp * 1000), t.rock + inland * 100);
-          }
         }
         // --- south face ---
         if (south >= L) continue;
@@ -1016,9 +1114,7 @@ export class TerrainGenerator {
           }
         }
       }
-      const row: TerrainRow = { y: rowGroundY - maxL * LIFT, h: H, px: buf, anim: animPx.length ? this.animateLiquid(buf, animPx, tiles, jj) : undefined };
-      if (bedPx.length && this.bedStyle) { const b = seabedRow(this.bedStyle, buf, CHUNK_PX, bedPx); row.bed = b.bed; row.bedAnim = b.anim; }
-      rows.push(row);
+      rows.push({ y: rowGroundY - maxL * LIFT, h: H, px: buf, anim: animPx.length ? this.animateLiquid(buf, animPx, tiles, jj) : undefined });
     }
     return rows;
   }

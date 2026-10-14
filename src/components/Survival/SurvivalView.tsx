@@ -54,9 +54,11 @@ interface Props {
 
 /** A drawable image: a GPU texture region (WebGL path) or a canvas (Canvas2D fallback). */
 interface Img { reg?: TexRegion; c?: HTMLCanvasElement; w: number; h: number }
-interface LoadedRow { y: number; h: number; img: Img; anim: Img[] | null; bed?: Img | null; bedAnim?: Img[] | null }
+interface LoadedRow { y: number; h: number; img: Img; anim: Img[] | null }
 interface LoadedChunk {
   data: ChunkData; rows: LoadedRow[]; mini: HTMLCanvasElement; lastUsed: number;
+  /** aquatic era: the underwater layer (its own relief) and its levels */
+  under: { rows: LoadedRow[]; level: Uint8Array } | null;
   byRow: Feature[][];   // features bucketed by local tile row, pre-sorted by y
   tex: WebGLTexture | null;
 }
@@ -72,10 +74,12 @@ interface LoadedChunk {
 const ZOOMS = [6, 5, 4, 3, 2, 1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64, 1 / 128, 1 / 256, 1 / 512, 1 / 1024, 0];
 const MIN_LOCAL_ZOOM = 1 / 4;
 /**
- * Aquatic era: zooming in past the closest gameplay stop while over water (sea, river, swamp) dives under it.
- * zoomIdx -1, -2, -3 are these submerged stops (their own scales; the dive transition hides the jump).
+ * Aquatic era: the world under the water is a whole layer of its own, with its own gameplay and regional zooms.
+ * Zooming in past the closest surface stop while over water (sea, river, swamp) dives into it: zoomIdx -1 is the
+ * widest underwater view (aquatic regional), -SUB_ZOOMS.length the closest (aquatic gameplay); zooming out of the
+ * widest one surfaces at the closest surface stop. The dive / surfacing transition hides the jump in scale.
  */
-const SUB_ZOOMS = [3, 4, 6];
+const SUB_ZOOMS = [6, 5, 4, 3, 2, 1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64, 1 / 128];
 type Lod = 'local' | 'far' | 'regional' | 'world';
 const lodOf = (z: number): Lod => (z >= 1 / 2 - 1e-9 ? 'local' : z >= 1 / 4 - 1e-9 ? 'far' : z >= 1 / 128 - 1e-9 ? 'regional' : 'world');
 /** levels drawn from the gameplay chunks */
@@ -99,8 +103,6 @@ interface Painter {
   flushShadows(): void;
   /** a sprite multiplied by a colour (premultiplied ABGR on the GPU; alpha only on the canvas fallback) */
   tint(c: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, col: number, alpha: number): void;
-  /** an image multiplied by a colour (the world above the water, seen from below) */
-  blitTint(im: Img, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number, col: number): void;
 }
 function canvasPainter(ctx: CanvasRenderingContext2D): Painter {
   let any = false;
@@ -114,7 +116,6 @@ function canvasPainter(ctx: CanvasRenderingContext2D): Painter {
     },
     flushShadows: () => { if (any) { ctx.fillStyle = 'rgba(8,12,6,0.28)'; ctx.fill(); any = false; } },
     tint: (c, sx, sy, sw, sh, dx, dy, _col, alpha) => { ctx.globalAlpha = alpha * 0.6; ctx.drawImage(c, sx, sy, sw, sh, dx, dy, sw, sh); ctx.globalAlpha = 1; },
-    blitTint: (im, sx, sy, sw, sh, dx, dy, dw, dh) => { ctx.drawImage(im.c!, sx, sy, sw, sh, dx, dy, dw, dh); ctx.fillStyle = 'rgba(5,11,18,0.9)'; ctx.fillRect(dx, dy, dw, dh); },
   };
 }
 const SHADOW_COL = rgba(8, 12, 6, 0.28);
@@ -125,7 +126,6 @@ function glPainter(gl: GLWorld, shadowTex: HTMLCanvasElement): Painter {
     shadow: (x, y, rx) => { const r = gl.atlas(shadowTex); gl.quad(r, 0, 0, r.w, r.h, x - rx * 0.75, y - rx * 0.38, rx * 2, rx * 0.76, SHADOW_COL); },
     flushShadows: () => { /* drawn immediately */ },
     tint: (c, sx, sy, sw, sh, dx, dy, col) => { const r = gl.atlas(c); gl.quad(r, sx, sy, sw, sh, dx, dy, sw, sh, col); },
-    blitTint: (im, sx, sy, sw, sh, dx, dy, dw, dh, col) => gl.quad(im.reg!, sx, sy, sw, sh, dx, dy, dw, dh, col),
   };
 }
 /** Pixel-art ellipse used for contact shadows on the GPU path. */
@@ -148,14 +148,13 @@ function canvasImg(px: Uint8ClampedArray, w: number, h: number): Img {
   c.getContext('2d')!.putImageData(new ImageData(px as Uint8ClampedArray<ArrayBuffer>, w, h), 0, 0);
   return { c, w, h };
 }
-/** Packs all terrain rows (and liquid animation frames) of a chunk into the columns of a single texture. */
-function packChunkRows(gl: GLWorld, data: ChunkData): { rows: LoadedRow[]; tex: WebGLTexture } {
+/** Packs all terrain rows (and liquid animation frames, and the underwater layer's) of a chunk into one texture. */
+function packChunkRows(gl: GLWorld, data: ChunkData): { rows: LoadedRow[]; under: LoadedRow[] | null; tex: WebGLTexture } {
   const items: { px: Uint8ClampedArray; h: number; col: number; y: number }[] = [];
-  for (const r of data.rows) {
+  const all = [...data.rows, ...(data.under?.rows ?? [])];
+  for (const r of all) {
     items.push({ px: r.px, h: r.h, col: 0, y: 0 });
     if (r.anim) for (const a of r.anim) items.push({ px: a, h: r.h, col: 0, y: 0 });
-    if (r.bed) items.push({ px: r.bed, h: r.h, col: 0, y: 0 });
-    if (r.bedAnim) for (const a of r.bedAnim) items.push({ px: a, h: r.h, col: 0, y: 0 });
   }
   let colH = 2048, cols = 1, usedH = 1;
   for (;;) {
@@ -175,15 +174,16 @@ function packChunkRows(gl: GLWorld, data: ChunkData): { rows: LoadedRow[]; tex: 
   for (const it of items) gl.upload(tex, it.col * CHUNK_PX, it.y, CHUNK_PX, it.h, it.px);
   const region = (it: typeof items[number]): Img => ({ reg: { tex, x: it.col * CHUNK_PX, y: it.y, w: CHUNK_PX, h: it.h, tw: TW, th: usedH }, w: CHUNK_PX, h: it.h });
   let k = 0;
-  const rows = data.rows.map(r => {
+  const load = (r: ChunkData['rows'][number]): LoadedRow => {
     const img = region(items[k++]);
     const anim = r.anim ? r.anim.map(() => region(items[k++])) : null;
-    const bed = r.bed ? region(items[k++]) : null;
-    const bedAnim = r.bedAnim ? r.bedAnim.map(() => region(items[k++])) : null;
-    return { y: r.y, h: r.h, img, anim, bed, bedAnim };
-  });
-  return { rows, tex };
+    return { y: r.y, h: r.h, img, anim };
+  };
+  const rows = data.rows.map(load);
+  const under = data.under ? data.under.rows.map(load) : null;
+  return { rows, under, tex };
 }
+const canvasRows = (rows: ChunkData['rows']): LoadedRow[] => rows.map(r => ({ y: r.y, h: r.h, img: canvasImg(r.px, CHUNK_PX, r.h), anim: r.anim ? r.anim.map(a => canvasImg(a, CHUNK_PX, r.h)) : null }));
 
 const DRY_GROUND = new Set<Ground>([Ground.SAND, Ground.RED_SAND, Ground.DIRT, Ground.DRY_GRASS, Ground.GRAVEL, Ground.ASH, Ground.REGOLITH, Ground.SALT_FLAT]);
 
@@ -399,10 +399,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         const old = g.chunks.get(key);
         if (old?.tex) glRef.current?.deleteTexture(old.tex);
         const gl = glRef.current;
-        let rows: LoadedRow[], tex: WebGLTexture | null = null;
-        if (gl) ({ rows, tex } = packChunkRows(gl, data));
-        else rows = data.rows.map(r => ({ y: r.y, h: r.h, img: canvasImg(r.px, CHUNK_PX, r.h), anim: r.anim ? r.anim.map(a => canvasImg(a, CHUNK_PX, r.h)) : null,
-          bed: r.bed ? canvasImg(r.bed, CHUNK_PX, r.h) : null, bedAnim: r.bedAnim ? r.bedAnim.map(a => canvasImg(a, CHUNK_PX, r.h)) : null }));
+        let rows: LoadedRow[], underRows: LoadedRow[] | null = null, tex: WebGLTexture | null = null;
+        if (gl) ({ rows, under: underRows, tex } = packChunkRows(gl, data));
+        else { rows = canvasRows(data.rows); underRows = data.under ? canvasRows(data.under.rows) : null; }
+        const under = underRows && data.under ? { rows: underRows, level: data.under.level } : null;
+        if (data.under) data.under.rows = [];
         const byRow: Feature[][] = Array.from({ length: CHUNK }, () => []);
         for (const f of data.features) byRow[Math.max(0, Math.min(CHUNK - 1, Math.floor(f.y / TILE) - data.cy * CHUNK))].push(f);
         for (const b of byRow) b.sort((a, b2) => (a.t === Feat.LILY_PAD ? a.y - 100 : a.y) - (b2.t === Feat.LILY_PAD ? b2.y - 100 : b2.y));
@@ -410,7 +411,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         const mini = document.createElement('canvas');
         mini.width = CHUNK; mini.height = CHUNK;
         mini.getContext('2d')!.putImageData(new ImageData(data.mini as Uint8ClampedArray<ArrayBuffer>, CHUNK, CHUNK), 0, 0);
-        g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow, tex });
+        g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow, tex, under });
         if (!old) fauna.spawnChunk(data.cx, data.cy, world);
         const zv = Math.max(window.innerWidth, window.innerHeight) / 2 / Math.max(MIN_LOCAL_ZOOM, G.current.zoomView) / CHUNK_PX + 2;
         const cap = Math.max(cine ? 150 : 64, Math.ceil((2 * zv + 1) ** 2) + 16);
@@ -440,6 +441,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     if (!cc) return false;
     const gr = cc.c.data.ground[cc.k];
     return gr === Ground.DEEP_WATER || gr === Ground.SHALLOW_WATER || gr === Ground.RIVER_WATER || gr === Ground.SWAMP_WATER;
+  };
+  /** height (screen px) of the underwater floor at a world point (aquatic era) */
+  const underLiftAt = (wx: number, wy: number): number | null => {
+    const q = cellAt(wx, wy);
+    return q && q.c.under ? q.c.under.level[q.k] * LIFT : null;
   };
   const groundAt = (wx: number, wy: number): Ground | null => {
     const q = cellAt(wx, wy);
@@ -572,7 +578,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   /** Current zoom target in CSS px per world px (the last stop fits the whole planet on screen). */
   const zoomTarget = () => {
     const g = G.current;
-    if (g.zoomIdx < 0) return SUB_ZOOMS[Math.min(SUB_ZOOMS.length, -g.zoomIdx) - 1];
+    if (g.zoomIdx < 0) return SUB_ZOOMS[Math.max(0, SUB_ZOOMS.length + g.zoomIdx)];
     const z = ZOOMS[g.zoomIdx];
     if (z) return z;
     const c = canvasRef.current;
@@ -815,8 +821,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     let subNow = false, prevSub: boolean | null = null, seaFrac = 0, seaSampleT = 0;
     let waterRGB: [number, number, number] | null = null;
     const SILHOUETTE = rgba(10, 28, 44, 0.5);
-    /** multiplier that turns what is above the water into a dark shape (submerged view) */
-    const ABOVE = rgba(26, 44, 64, 1);
+    let subLift = 0;
     const regions = new Map<string, RegionBlock>();
     const regionPending = new Set<string>();
     const freeSlots: number[] = [];
@@ -831,7 +836,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       for (let by = Math.floor(y0 / spanPx); by <= Math.floor(y1 / spanPx); by++) {
         if (by * span >= worldTilesY || (by + 1) * span <= 0) continue;
         for (let bx = Math.floor(x0 / spanPx); bx <= Math.floor(x1 / spanPx); bx++) {
-          const k = `${step}:${bx}:${by}`;
+          const k = `${subNow ? 'u' : 's'}${step}:${bx}:${by}`;
           const hit = regions.get(k);
           if (hit) { hit.lastUsed = performance.now(); continue; }
           if (regionPending.has(k)) continue;
@@ -841,11 +846,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       want.sort((a, b) => a[2] - b[2]);
       for (const [bx, by] of want) {
         if (regionPending.size >= (pool ? pool.size * 2 : 2)) break;
-        const k = `${step}:${bx}:${by}`;
+        const k = `${subNow ? 'u' : 's'}${step}:${bx}:${by}`;
         regionPending.add(k);
         const gen0 = regionGen;
         // the parallel workers only hold a window of the planet: outside it, the session worker samples the block
-        const job = pool && pool.coversTile(bx * span + span / 2, by * span + span / 2) ? pool.region(bx * span, by * span, step, REGION_N) : session.region(bx * span, by * span, step, REGION_N);
+        const job = pool && pool.coversTile(bx * span + span / 2, by * span + span / 2) ? pool.region(bx * span, by * span, step, REGION_N, subNow) : session.region(bx * span, by * span, step, REGION_N, subNow);
         job.then(px => {
           regionPending.delete(k);
           if (!aliveRef.current || gen0 !== regionGen) return;
@@ -871,9 +876,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }).catch(() => regionPending.delete(k));
       }
     };
-    /** cities changed (plan, evolution, zone colours): sampled blocks are redrawn */
+    /** cities changed (plan, evolution, zone colours) or the layer changed (surface / underwater): blocks are redrawn */
     const refreshRegions = () => {
-      const sig = [...session.cities.values()].reduce((a, c) => a + c.p + c.plan.meta.id * 1000 + c.plan.meta.era * 7, session.cities.size * 13) + (zonesHiddenRef.current ? 0.5 : 0);
+      const sig = [...session.cities.values()].reduce((a, c) => a + c.p + c.plan.meta.id * 1000 + c.plan.meta.era * 7, session.cities.size * 13) + (zonesHiddenRef.current ? 0.5 : 0) + (subNow ? 0.25 : 0);
       if (sig === regionGenSeen) return;
       regionGenSeen = sig; regionGen++;
       for (const b of regions.values()) if (b.slot >= 0) freeSlots.push(b.slot);
@@ -885,7 +890,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       for (const c of G.current.chunks.values()) {
         const bx = c.data.cx * CHUNK_PX, by = c.data.cy * CHUNK_PX;
         if (bx > x1 || bx + CHUNK_PX < x0 || by > y1 + MAX_LEVEL * LIFT || by + CHUNK_PX < y0) continue;
-        for (const row of c.rows) p.blit(row.img, 0, 0, row.img.w, row.img.h, bx, row.y, row.img.w, row.img.h);
+        for (const row of (subNow && c.under ? c.under.rows : c.rows)) p.blit(row.img, 0, 0, row.img.w, row.img.h, bx, row.y, row.img.w, row.img.h);
       }
     };
     const drawRegions = (p: Painter, step: number, x0: number, y0: number, x1: number, y1: number) => {
@@ -933,14 +938,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const drawAnimal = (d: AnimalDraw) => {
         const sh = d.sheet;
         const swimmer = aquatic && d.a.sp.habitat === 'water';
-        if (subNow && !swimmer) {
-          // land animals and fliers: dark shapes above the water
-          p.tint(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.x - sh.ax), Math.round(d.y - sh.ay), ABOVE, 1);
-          return;
-        }
-        if (swimmer && subNow) {
-          // under the sea: the whole body, gliding a little above its shadow on the floor
-          p.sprite(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.x - sh.ax), Math.round(d.y - sh.ay - 6));
+        if (subNow) {
+          // under the water: the whole body, gliding above its shadow on the floor (land animals are not down here)
+          if (!swimmer) return;
+          const lift = underLiftAt(d.a.x, d.a.y) ?? 0;
+          p.sprite(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.a.x - sh.ax), Math.round(d.a.y - lift - sh.ay - 10));
           return;
         }
         if (swimmer && d.clip > 0.35) {
@@ -969,10 +971,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         for (let k = 0; k < rowChunks.length; k++) {
           const c = rowChunks[k];
           if (!c) continue;
-          const row = c.rows[j];
+          const row = subNow ? c.under?.rows[j] : c.rows[j];
           if (!row) continue;
-          if (subNow && !row.bed) { p.blitTint(row.img, 0, 0, row.img.w, row.img.h, (cx0 + k) * CHUNK_PX, row.y, row.img.w, row.img.h, ABOVE); continue; }
-          const im = subNow && row.bed ? (row.bedAnim ? row.bedAnim[liquidFrame] : row.bed) : row.anim ? row.anim[liquidFrame] : row.img;
+          const im = row.anim ? row.anim[liquidFrame] : row.img;
           p.blit(im, 0, 0, im.w, im.h, (cx0 + k) * CHUNK_PX, row.y, im.w, im.h);
         }
         // 2. contact shadows of this row
@@ -990,7 +991,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         const rowAnimals = animals.get(r);
         if (rowAnimals) for (const d of rowAnimals) {
           if (d.clip === 0 && !subNow) p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY, Math.max(3, d.sheet.cw * 0.28));
-          else if (subNow && aquatic && d.a.sp.habitat === 'water') p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY + 4, Math.max(3, d.sheet.cw * 0.24));
+          else if (subNow && aquatic && d.a.sp.habitat === 'water') p.shadow(d.a.x - d.sheet.cw * 0.05, d.a.y - (underLiftAt(d.a.x, d.a.y) ?? 0), Math.max(3, d.sheet.cw * 0.24));
         }
         p.flushShadows();
         let ai = 0;
@@ -1000,16 +1001,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           const c = rowChunks[k];
           if (!c) continue;
           for (const f of c.byRow[j]) {
-            if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id) || (farNow && SMALL_FEATS.has(f.t))) continue;
-            const aboveW = subNow && !waterAt(f.x, f.y);
-            if (subNow && !aboveW && f.t === Feat.LILY_PAD) continue;
+            if (subNow || f.x < fx0 || f.x > fx1 || g.taken.has(f.id) || (farNow && SMALL_FEATS.has(f.t))) continue;
             while (rowAnimals && ai < rowAnimals.length && rowAnimals[ai].a.y < f.y && f.t !== Feat.LILY_PAD) drawAnimal(rowAnimals[ai++]);
             if (!playerDone && f.y > g.y && f.t !== Feat.LILY_PAD) { drawPlayer(); playerDone = true; }
             if (stop && r === stop.row && f.y > stop.y) continue;
             const s = bank.get(f.t, f.v, g.picked.has(f.id));
             const W = s.c.width, H = s.c.height;
             const x = f.x - s.ax, y = f.y - f.l * LIFT - s.ay;
-            if (aboveW) { p.tint(s.c, 0, 0, W, H, x, y, ABOVE, 1); continue; }
             if (TREES.has(f.t)) {
               // canopy sways in the wind, trunk stays rooted
               const dx = Math.round(fx.sway(t, f.x, f.y, 1.4));
@@ -1026,7 +1024,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
         }
         if (rowAnimals) while (ai < rowAnimals.length) drawAnimal(rowAnimals[ai++]);
-        if (!playerDone) drawPlayer();
+        if (!playerDone && !subNow) drawPlayer();
+        if (subNow) continue;
         const rowCit = citRows.get(r);
         if (rowCit) for (const c of rowCit) p.sprite(c.sheet.canvas, c.frame * c.sheet.cw, c.row * c.sheet.ch, c.sheet.cw, c.sheet.ch, Math.round(c.x - c.sheet.ax), Math.round(c.y - c.sheet.ay));
         const rowVeh = vehRows.get(r);
@@ -1459,7 +1458,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const local = chunked(lod), far = lod === 'far', regional = lod === 'regional';
       farNow = far;
       subNow = aquatic && g.zoomIdx < 0 && !cine;
-      if (aquatic && prevSub !== null && subNow !== prevSub) uw.trans = { up: !subNow, t0: now / 1000 };
+      if (aquatic && prevSub !== null && subNow !== prevSub) { uw.trans = { up: !subNow, t0: now / 1000 }; if (subNow) subLift = underLiftAt(g.x, g.y) ?? subLift; }
       prevSub = subNow;
       fx.underwater = subNow && seaFrac > 0.5;
       if (standbyRef.current) { raf = requestAnimationFrame(frame); return; }
@@ -1479,7 +1478,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       // --- camera ---
       const S = Z * dpr;
       const [shx, shy] = local ? fx.shake() : [0, 0];
-      let camYw = g.y - g.lift - 8 + shy;
+      if (subNow) { const ul = underLiftAt(g.x, g.y); if (ul !== null) subLift += (ul - subLift) * Math.min(1, dt * 6); }
+      let camYw = g.y - (subNow ? subLift : g.lift) - 8 + shy;
       if (!local) {
         // keep the planet's surface filling the screen vertically (poles stay at the edges)
         const worldH = WORLD_PX * (session.height / session.width), halfH = H / Z / 2;
@@ -1908,7 +1908,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5">
           <button onClick={() => zoomStep(-1)} title="Aproximar (roda / +)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><ZoomIn className="w-4 h-4" /></button>
           <div className="flex flex-col gap-1 py-1">
-            {aquatic && <div title="Visão aquática (submersa)" className={`w-2 h-2 rounded-full mx-auto ${lodLabel.sub ? 'bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.9)]' : 'bg-cyan-200/25'}`} />}
+            {aquatic && (['local', 'regional'] as Lod[]).map(l => {
+              const on = !!lodLabel.sub && (l === 'regional' ? lodLabel.lod === 'regional' || lodLabel.lod === 'world' : chunked(lodLabel.lod));
+              return <div key={`u${l}`} title={l === 'local' ? 'Gameplay aquático (submerso)' : 'Regional aquático'} className={`w-2 h-2 rounded-full mx-auto ${on ? 'bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.9)]' : 'bg-cyan-200/25'}`} />;
+            })}
             {(['local', 'far', 'regional', 'world'] as Lod[]).map(l => (
               <div key={l} title={LOD_NAME[l]} className={`w-2 h-2 rounded-full mx-auto ${lodLabel.lod === l && !lodLabel.sub ? 'bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]' : 'bg-white/25'}`} />
             ))}
@@ -1918,11 +1921,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       )}
       {!loading && aquatic && lodLabel.sub && (
         <div className={`absolute left-1/2 -translate-x-1/2 ${spectator ? 'bottom-[70px]' : 'bottom-[76px]'} pointer-events-none bg-[#031824]/75 border border-cyan-200/20 rounded-lg px-3 py-1.5 text-center`}>
-          <div className="text-cyan-50 font-bold text-sm tracking-wide">Visão aquática · submersa</div>
-          <div className="text-[11px] font-mono text-cyan-200/60">o fundo das águas · afaste o zoom para voltar à superfície</div>
+          <div className="text-cyan-50 font-bold text-sm tracking-wide">{chunked(lodLabel.lod) ? 'Gameplay aquático · submerso' : 'Regional aquático'}</div>
+          <div className="text-[11px] font-mono text-cyan-200/60">{chunked(lodLabel.lod) ? 'o mundo sob as águas · afaste o zoom para o regional aquático' : 'o relevo do fundo · afaste mais para voltar à superfície'}</div>
         </div>
       )}
-      {!loading && (lodLabel.lod === 'regional' || lodLabel.lod === 'world') && (
+      {!loading && !lodLabel.sub && (lodLabel.lod === 'regional' || lodLabel.lod === 'world') && (
         <div className={`absolute left-1/2 -translate-x-1/2 ${spectator ? 'bottom-[70px]' : 'bottom-[76px]'} pointer-events-none bg-black/70 border border-white/15 rounded-lg px-3 py-1.5 text-center`}>
           <div className="text-white font-bold text-sm tracking-wide">{LOD_NAME[lodLabel.lod]}</div>
           <div className="text-[11px] font-mono text-neutral-400">
