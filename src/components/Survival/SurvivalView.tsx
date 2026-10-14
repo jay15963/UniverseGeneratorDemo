@@ -59,6 +59,8 @@ interface Props {
   noFauna?: boolean;
   /** zoom stop to start at (index in the surface ladder; negative = underwater) */
   startZoom?: number;
+  /** draw the cities' own name pills / territories (the campaign draws its own banners) */
+  cityLabels?: boolean;
 }
 
 /** A drawable image: a GPU texture region (WebGL path) or a canvas (Canvas2D fallback). */
@@ -209,7 +211,7 @@ const PLAYER_K = CITIZEN_K;
 const REACH = 26;
 const SPEED = 74;
 
-export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null, standby = false, discovery = null, aquatic = false, game = null, gameHud = null, noFauna = false, startZoom }: Props) {
+export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null, standby = false, discovery = null, aquatic = false, game = null, gameHud = null, noFauna = false, startZoom, cityLabels = true }: Props) {
   const cine = cinematic;
   const spectator = spectatorProp || !!cine;
   /** spectator mode can drop in as a citizen of one of its cities (and leave again) */
@@ -1434,7 +1436,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const DW = Math.round(W * dpr), DH = Math.round(H * dpr);
       if (canvas.width !== DW || canvas.height !== DH) { canvas.width = DW; canvas.height = DH; }
       if (overlay.width !== DW || overlay.height !== DH) { overlay.width = DW; overlay.height = DH; }
-      if (!freeRef.current || chunked(lodOf(g.zoomView))) requestChunks();
+      if (!freeRef.current || chunked(lodOf(g.zoomView)) || !g.ready) requestChunks();
       // keep the worker field window under the camera / player
       if (g.ready && Math.floor(now / 1000) !== Math.floor(last0 / 1000)) {
         const mpx = g.x / TILE / (WORLD_TILES_X / session.width), mpy = g.y / TILE / (WORLD_TILES_X / session.width);
@@ -1798,7 +1800,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         if (subNow) uw.ambience(octx, DW, DH, S, tx0, ty0, t, seaFrac, Math.max(0, Math.min(1, sun + 0.2)), dpr);
         fx.drawScreen(octx, DW, DH, S, fxc, toScreen);
         fogPass();
-        if (spectator && !cine && !avatarRef.current) drawCityLabels(toScreen, dpr, S, false, DW);
+        if (spectator && !cine && !avatarRef.current && cityLabels) drawCityLabels(toScreen, dpr, S, false, DW);
         else cityHits.current = [];
       } else if (g.ready && !cine) {
         if (regional) {
@@ -1829,7 +1831,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
           octx.stroke();
         }
-        if (spectator || regional) { drawLinks(toScreen, dpr); drawCityLabels(toScreen, dpr, S, true, DW, regional); }
+        if (spectator || regional) { drawLinks(toScreen, dpr); if (cityLabels) drawCityLabels(toScreen, dpr, S, true, DW, regional); else cityHits.current = []; }
       }
 
       if (gm && gf) { octx.setTransform(1, 0, 0, 1, 0, 0); gm.overlay(octx, gf); octx.setTransform(1, 0, 0, 1, 0, 0); }
@@ -2057,8 +2059,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           <span title="Workers de terreno em paralelo / tempo médio por chunk" className="hidden sm:inline">{perf.workers}× núcleos · {perf.chunkMs.toFixed(0)} ms/chunk</span>
         </div>
       )}
-      {/* Top-left: location */}
-      <div className="absolute top-3 left-3 pointer-events-none">
+      {/* Top-left: location (the play mode's eras have their own HUD there) */}
+      <div className={`absolute top-3 left-3 pointer-events-none ${game ? 'hidden' : ''}`}>
         <div className="bg-black/60 backdrop-blur-md border border-white/10 rounded-xl px-3 py-2 text-white min-w-[200px]">
           <div className="text-[10px] font-mono tracking-[0.2em] text-emerald-300/80 uppercase">{title}</div>
           <div className="font-bold text-sm">{hud.biome || hud.ground}</div>

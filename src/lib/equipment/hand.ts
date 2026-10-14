@@ -448,7 +448,7 @@ function shotFx(F: Forge, x: ItemCtx, a: number, f: number) {
     F.blade([[a + r * 0.8, f - r * 1.1], [a + r * 1.05, f], [a + r * 0.8, f + r * 1.1], [a + r * 0.55, f]], x.fire, 0.3, 0.061);
     F.ball([a + r * 0.7, f, 0], r * 0.55, x.fire2, 0.062);
   };
-  if (e === 3) { // musket: flash, then a big rolling cloud that drifts up and forward
+  if (e <= 2) { // musket: flash, then a big rolling cloud that drifts up and forward
     flash(age < 0.1 ? 1 : 0, 1.5);
     const n = 6;
     for (let i = 0; i < n; i++) {
@@ -474,11 +474,11 @@ function shotFx(F: Forge, x: ItemCtx, a: number, f: number) {
   if (age < 0.12) for (let i = 0; i < 6; i++) { const t = (i / 6) * Math.PI * 2; F.ball([a + U * 0.1, f + Math.cos(t) * U * 0.15, Math.sin(t) * U * 0.15], U * 0.04, x.G, 0.06); }
 }
 function rifle(x: ItemCtx): Built {
-  const U = x.U, e = x.e, L = U * (e === 3 ? 2.2 : 1.8);
+  const U = x.U, e = x.e, L = U * (e <= 2 ? 2.2 : e === 3 ? 2 : 1.8);
   return {
     g2: U * 0.55,
     draw: F => {
-      const body = e === 3 ? x.H : x.M, dark = e >= 5 ? x.dark : x.M2;
+      const body = e <= 3 ? x.H : x.M, dark = e >= 5 ? x.dark : x.M2;
       F.rod(-U * 0.1, U * 0.55, U * 0.075, U * 0.07, body, -U * 0.02);
       F.rod(U * 0.3, L, U * 0.03, U * 0.028, dark, U * 0.05);
       F.plate([[-U * 0.6, -U * 0.02, 0], [-U * 0.1, U * 0.04, 0], [-U * 0.1, -U * 0.1, 0], [-U * 0.62, -U * 0.2, 0]], body); // stock
@@ -517,7 +517,7 @@ export const HAND_TYPES: HandType[] = [
   { id: 'staff', slot: 'two', name: 'Cajado', blurb: 'Bordão de caminhada ou de ofício, com pedra ou núcleo de energia.', mats: ['wood', 'bone', 'metal', 'crystal', 'synthetic', 'energy'], hold: () => 'two-thrust', make: staff },
   { id: 'bow', slot: 'two', name: 'Arco e flecha', eraNames: ['Arco simples', 'Arco', 'Arco recurvo', 'Arco recurvo', 'Arco composto', 'Arco composto', 'Arco composto', 'Arco composto'], blurb: 'Combina com a aljava (auxiliar) para guardar as flechas.', mats: ['wood', 'bone', 'metal', 'synthetic'], hold: () => 'bow', make: bow },
   { id: 'crossbow', slot: 'two', name: 'Besta', blurb: 'Arco montado numa coronha, com trava.', mats: ['wood', 'metal', 'synthetic'], minEra: 1, hold: () => 'gun', make: crossbow },
-  { id: 'rifle', slot: 'two', name: 'Arma de fogo', eraNames: ['', '', '', 'Mosquete', 'Fuzil', 'Rifle', 'Rifle de pulso', 'Rifle de plasma'], blurb: 'Arma de disparo de cada época industrial em diante.', mats: ['wood', 'metal', 'synthetic', 'energy'], minEra: 3, hold: () => 'gun', make: rifle },
+  { id: 'rifle', slot: 'two', name: 'Arma de fogo', eraNames: ['', '', 'Mosquete', 'Fuzil de ferrolho', 'Fuzil', 'Rifle', 'Rifle de pulso', 'Rifle de plasma'], blurb: 'Arma de disparo das grandes navegações (mosquete) em diante.', mats: ['wood', 'metal', 'synthetic', 'energy'], minEra: 2, hold: () => 'gun', make: rifle },
 ];
 export const handById = (id: string) => HAND_TYPES.find(t => t.id === id);
 void frac;

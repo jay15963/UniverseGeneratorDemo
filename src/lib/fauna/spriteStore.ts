@@ -1,6 +1,8 @@
 // Main-thread cache of creature sprite sheets rendered by a small pool of workers.
 import { Genome, Stage } from '../creature/genome';
 import { Anim } from '../creature/pose';
+import type { Loadout } from '../equipment/loadout';
+import type { Death } from '../creature/death';
 
 export interface Sheet { canvas: HTMLCanvasElement; cw: number; ch: number; ax: number; ay: number; frames: number }
 
@@ -48,7 +50,21 @@ export class SpriteStore {
     }
     return null;
   }
+  /** a civilised creature of era `era` wearing / holding a loadout (soldiers); `death` renders that death (16 frames) */
+  getEquipped(key: string, genome: Genome, era: number, load: Loadout, anim: Anim, k: number, death: Death | null = null, urgent = false): Sheet | null {
+    const hit = this.sheets.get(key);
+    if (hit) return hit;
+    if (!this.queued.has(key)) {
+      this.queued.add(key);
+      const job = { key, msg: { genome, era, load, anim, k, death } };
+      if (urgent) this.queue.unshift(job); else this.queue.push(job);
+      this.pump();
+    }
+    return null;
+  }
   has(key: string) { return this.sheets.has(key); }
+  /** jobs waiting (loading screens) */
+  get waiting() { return this.queue.length + this.pending.size; }
 
   private pump() {
     if (!this.workers.length && this.queue.length) this.spawn();
