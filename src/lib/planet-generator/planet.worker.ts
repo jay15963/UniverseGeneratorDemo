@@ -179,6 +179,30 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
         post({ kind: 'region', id: msg.id, px }, [px.buffer]);
         break;
       }
+      case 'lifeStage': {
+        // the play mode pushes the planet's life stage (oxygen of the aquatic era): map colours and terrain follow
+        const gen = sessions.get(msg.sessionId);
+        if (gen) (gen.config as { lifeStage?: number }).lifeStage = msg.v;
+        const t = terrains.get(msg.sessionId);
+        if (t) t.vita = msg.v;
+        break;
+      }
+      case 'grid': {
+        const gen = sessions.get(msg.sessionId);
+        if (!gen) throw new Error('Unknown session ' + msg.sessionId);
+        const c = gen.config, n = c.width * c.height;
+        const river = new Uint8Array(n), temp = new Uint8Array(n), moist = new Uint8Array(n), fert = new Uint8Array(n);
+        for (let i = 0; i < n; i++) {
+          river[i] = gen.waterAccumulation[i] > 2 && gen.elevation[i] > c.seaLevel ? 1 : 0;
+          temp[i] = Math.max(0, Math.min(255, gen.temperature[i] * 255));
+          moist[i] = Math.max(0, Math.min(255, gen.moisture[i] * 255));
+          fert[i] = Math.max(0, Math.min(255, gen.fertility[i] * 255));
+        }
+        const elev = new Float32Array(gen.elevation), coast = gen.coast ? new Float32Array(gen.coast) : null;
+        post({ kind: 'grid', id: msg.id, grid: { w: c.width, h: c.height, sea: c.seaLevel, elev, river, temp, moist, fert, coast, depthQ: gen.depthQ ?? [0.3, 0.55] } },
+          [elev.buffer, river.buffer, temp.buffer, moist.buffer, fert.buffer, ...(coast ? [coast.buffer] : [])]);
+        break;
+      }
       case 'cityLevel': cityLevel(msg.cityId, msg.p); break;
       case 'cityZones': cityZones(msg.on); break;
       case 'cityRemove': cityRemove(msg.cityId); cityPlans.get(msg.sessionId)?.delete(msg.cityId); dropLinks(msg.sessionId, msg.cityId); break;

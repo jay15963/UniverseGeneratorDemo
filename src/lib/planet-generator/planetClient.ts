@@ -4,7 +4,7 @@
 //    priority queue and an LRU cache so revisiting a system is instant.
 //  - openPlanetSession(): a dedicated worker holding a full-resolution generator for the surface map.
 import type { LayerType, PlanetConfig } from './generator';
-import type { PlanetProbe, WorkerRequest, WorkerResponse } from './workerProtocol';
+import type { PlanetProbe, WorkerRequest, WorkerResponse, PlanetGrid } from './workerProtocol';
 import type { ChunkData } from '../terrain/types';
 import { CHUNK, WORLD_TILES_X } from '../terrain/types';
 import type { PlanetFields } from '../terrain/terrainGen';
@@ -12,7 +12,7 @@ import type { CityPlan } from '../city/codes';
 import type { CityLink } from '../city/links';
 import type { CitySite } from '../city/sites';
 
-export type { PlanetProbe };
+export type { PlanetProbe, PlanetGrid };
 
 export interface PlanetTexture {
   width: number;
@@ -178,6 +178,10 @@ export interface PlanetSession {
   /** show / hide the district colours of every city */
   setCityZones(on: boolean): void;
   config: PlanetConfig;
+  /** the whole planet at map resolution (play mode simulations) */
+  grid(): Promise<PlanetGrid>;
+  /** play mode: the planet's life stage changes live (terrain chunks and map colours follow; redraw them) */
+  setLifeStage(v: number): void;
   dispose(): void;
 }
 
@@ -220,6 +224,8 @@ export function openPlanetSession(
   };
   let nextCity = 1;
   let zonesOn = true;
+  let vita: number | null = null;
+  let gridP: Promise<PlanetGrid> | null = null;
   const ready = call({ kind: 'open', id: nextId++, sessionId, config }).then((msg) => {
     if (msg.kind !== 'opened') throw new Error('unexpected response');
     // eslint-disable-next-line prefer-const
@@ -258,6 +264,7 @@ export function openPlanetSession(
         const pool = new TerrainPool(res.fields, (cx, cy) => session.chunk(cx, cy));
         await pool.ready;
         pool.broadcast({ kind: 'cityZones', on: zonesOn });
+        if (vita !== null) pool.broadcast({ kind: 'lifeStage', v: vita });
         for (const [id, c] of cities) pool.broadcast({ kind: 'cityAdd', cityId: id, era: c.plan.meta.era, p: c.p, chunks: c.plan.chunks });
         for (const l of links.values()) if (l.chunks) pool.broadcast({ kind: 'cityAdd', cityId: l.id, era: cities.get(l.a)?.plan.meta.era ?? 0, p: 254, chunks: l.chunks });
         pools.add(pool);
@@ -308,6 +315,16 @@ export function openPlanetSession(
         for (const pool of pools) pool.broadcast({ kind: 'cityRemove', cityId: id });
       },
       config,
+      grid: () => (gridP ??= call({ kind: 'grid', id: nextId++, sessionId }).then(res => {
+        if (res.kind !== 'grid') throw new Error('unexpected response');
+        return res.grid;
+      })),
+      setLifeStage: (v) => {
+        vita = v;
+        config.lifeStage = v;
+        worker.postMessage({ kind: 'lifeStage', sessionId, v } satisfies WorkerRequest);
+        for (const pool of pools) pool.broadcast({ kind: 'lifeStage', v });
+      },
       dispose,
     };
     return session;

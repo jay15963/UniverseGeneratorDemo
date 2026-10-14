@@ -110,7 +110,8 @@ export class TerrainGenerator {
   readonly ramps: Record<string, RGB[]>;
   private lastLiquid: Uint8Array | null = null;
   /** the planet's life stage (0 bare land .. 1 green) and its ocean depth bands */
-  readonly vita: number;
+  /** the planet's life stage; the play mode updates it live (oxygen of the aquatic era) */
+  vita: number;
   readonly depthQ: [number, number];
   /** aquatic view: rows also carry the seabed */
   readonly bedStyle: BedStyle | null;

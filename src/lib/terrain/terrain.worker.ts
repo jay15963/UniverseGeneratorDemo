@@ -5,6 +5,7 @@ import { TerrainGenerator, PlanetFields, cityAdd, cityLevel, cityRemove, cityZon
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 let gen: TerrainGenerator | null = null;
+let pendingVita: number | null = null;
 
 ctx.onmessage = (ev: MessageEvent) => {
   const m = ev.data;
@@ -13,7 +14,8 @@ ctx.onmessage = (ev: MessageEvent) => {
     if (m.kind === 'cityLevel') { cityLevel(m.cityId, m.p); return; }
     if (m.kind === 'cityRemove') { cityRemove(m.cityId); return; }
     if (m.kind === 'cityZones') { cityZones(m.on); return; }
-    if (m.kind === 'init') { gen = new TerrainGenerator(m.fields as PlanetFields); ctx.postMessage({ kind: 'ready', id: m.id }); return; }
+    if (m.kind === 'lifeStage') { if (gen) gen.vita = m.v; else pendingVita = m.v; return; }
+    if (m.kind === 'init') { gen = new TerrainGenerator(m.fields as PlanetFields); if (pendingVita !== null) gen.vita = pendingVita; ctx.postMessage({ kind: 'ready', id: m.id }); return; }
     if (m.kind === 'region' && gen) {
       const px = gen.region(m.tx, m.ty, m.step, m.n, !!m.under);
       ctx.postMessage({ kind: 'region', id: m.id, px }, [px.buffer]);
