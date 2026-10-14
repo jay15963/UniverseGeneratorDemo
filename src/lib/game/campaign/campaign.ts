@@ -295,7 +295,8 @@ export function moveArmy(c: Campaign, w: CampaignWorld, a: Army, x: number, y: n
   const enemy = tgt.army && tgt.army.owner !== a.owner ? tgt.army : null;
   const town = tgt.settlement && tgt.settlement.owner !== a.owner ? tgt.settlement : null;
   const own = tgt.settlement && tgt.settlement.owner === a.owner ? tgt.settlement : null;
-  const tx = enemy ? enemy.x : town ? town.x : own ? own.x : x, ty = enemy ? enemy.y : town ? town.y : own ? own.y : y;
+  const friend = tgt.army && tgt.army.owner === a.owner && tgt.army !== a ? tgt.army : null;
+  const tx = enemy ? enemy.x : town ? town.x : own ? own.x : tgt.army ? tgt.army.x : x, ty = enemy ? enemy.y : town ? town.y : own ? own.y : tgt.army ? tgt.army.y : y;
   const p = planPath(c, w, a, tx, ty);
   if (!p) return { k: 'blocked', reason: 'Sem caminho até lá.' };
   const hostileTo = enemy ? enemy.owner : town ? town.owner : null;
@@ -314,6 +315,7 @@ export function moveArmy(c: Campaign, w: CampaignWorld, a: Army, x: number, y: n
     a.boat = !w.isLand(p.cells[last]);
   }
   if (own && w.dist(a.x, a.y, own.x, own.y) < 1.6) { a.x = own.x; a.y = own.y; a.at = own.id; a.dest = null; a.boat = false; mergeInto(c, a); return { k: 'moved' }; }
+  if (friend && w.dist(a.x, a.y, friend.x, friend.y) < 2.2) { a.dest = null; joinArmies(c, a, friend); return { k: 'moved' }; }
   a.dest = last < p.cells.length - 1 ? { x: tx, y: ty } : null;
   if ((enemy || town) && attack && hostileTo !== null && w.dist(a.x, a.y, tx, ty) <= 1.7) {
     if (a.mp < 0.5 && last === 0 && p.cells.length > 2) return { k: 'blocked', reason: 'Sem movimento neste turno.' };
@@ -325,6 +327,22 @@ export function moveArmy(c: Campaign, w: CampaignWorld, a: Army, x: number, y: n
   if (last === 0 && p.cells.length > 1) return { k: 'blocked', reason: 'Sem movimento neste turno.' };
   void f;
   return { k: 'moved' };
+}
+/** some regiments leave to form a new army on the same spot (same movement left) */
+export function splitArmy(c: Campaign, a: Army, idx: number[]): Army | null {
+  const pick = [...new Set(idx)].filter(i => i >= 0 && i < a.regs.length).sort((x, y) => y - x);
+  if (!pick.length || pick.length >= a.regs.length) return null;
+  const regs = pick.map(i => a.regs.splice(i, 1)[0]).reverse();
+  const n: Army = { id: c.nextId++, owner: a.owner, x: a.x, y: a.y, regs, mp: a.mp, at: a.at, boat: a.boat };
+  c.armies.push(n);
+  return n;
+}
+/** an army joins another of the same faction next to it (up to the limit) */
+export function joinArmies(c: Campaign, from: Army, into: Army): boolean {
+  if (from.owner !== into.owner || from === into) return false;
+  while (from.regs.length && into.regs.length < ARMY_MAX) into.regs.push(from.regs.shift()!);
+  if (!from.regs.length) c.armies = c.armies.filter(q => q !== from);
+  return true;
 }
 /** two armies of the same faction in the same settlement merge (up to the limit) */
 function mergeInto(c: Campaign, a: Army) {

@@ -2087,7 +2087,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       </div>
 
       {/* Prompt */}
-      {prompt && !loading && (
+      {prompt && !loading && !game && (
         <div className="absolute left-1/2 -translate-x-1/2 bottom-[92px] pointer-events-none bg-black/70 border border-white/15 rounded-lg px-3 py-1.5 text-center">
           <div className="text-white font-bold text-sm">{prompt.text}</div>
           {prompt.action && <div className={`text-[11px] font-mono ${prompt.action.startsWith('Requer') ? 'text-amber-300' : 'text-emerald-300'}`}>{prompt.action}</div>}

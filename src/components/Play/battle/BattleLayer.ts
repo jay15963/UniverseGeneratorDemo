@@ -80,34 +80,39 @@ export class BattleLayer implements GameLayer {
   // -------------------------------------------------------------------------------------------------
   private makeStamps() {
     const mk = (w: number, h: number, draw: (x: CanvasRenderingContext2D) => void) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d')!); return c; };
-    const trench = mk(26, 18, x => {
-      x.fillStyle = '#6b5236'; x.fillRect(0, 2, 26, 14);           // spoil
-      x.fillStyle = '#2b1f14'; x.fillRect(0, 5, 26, 8);            // the cut
-      x.fillStyle = '#3b2b1c'; x.fillRect(0, 11, 26, 2);
-      x.fillStyle = '#b7a37a';                                      // sandbags along the lip
-      for (let i = 0; i < 26; i += 5) { x.fillRect(i, 1, 4, 3); x.fillStyle = i % 10 ? '#a8946c' : '#c4b089'; }
-      x.fillStyle = '#5e4a32'; for (let i = 2; i < 26; i += 7) x.fillRect(i, 7, 1, 5); // duckboard posts
-    });
-    const wire = mk(22, 12, x => {
-      x.strokeStyle = '#5a5650'; x.lineWidth = 1;
-      for (let i = 0; i < 22; i += 7) { x.beginPath(); x.moveTo(i, 2); x.lineTo(i + 6, 10); x.moveTo(i + 6, 2); x.lineTo(i, 10); x.stroke(); }
-      x.strokeStyle = '#8b877f'; x.beginPath(); x.moveTo(0, 5); for (let i = 0; i <= 22; i += 2) x.lineTo(i, 5 + ((i / 2) % 2 ? -1.5 : 1.5)); x.stroke();
-    });
+    // trench and wire pieces drawn along a direction (4 orientations: -, \, |, /)
+    const ANG = [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4];
+    const trench = ANG.map(a => mk(30, 30, x => {
+      x.translate(15, 15); x.rotate(a); x.scale(1, 0.6);
+      x.fillStyle = '#6b5236'; x.fillRect(-15, -8, 30, 16);                 // spoil heaps
+      x.fillStyle = '#2b1f14'; x.fillRect(-15, -4, 30, 8);                  // the cut
+      x.fillStyle = '#4a3828'; x.fillRect(-15, 2, 30, 2);
+      for (let i = -15; i < 15; i += 5) { x.fillStyle = (i / 5) % 2 ? '#b7a37a' : '#c9b58c'; x.fillRect(i, -9, 4, 3); } // sandbags on the lip
+    }));
+    const wire = ANG.map(a => mk(26, 26, x => {
+      x.translate(13, 13); x.rotate(a); x.scale(1, 0.6);
+      x.strokeStyle = '#4c4842'; x.lineWidth = 1;
+      for (let i = -12; i < 12; i += 6) { x.beginPath(); x.moveTo(i, -4); x.lineTo(i + 5, 4); x.moveTo(i + 5, -4); x.lineTo(i, 4); x.stroke(); }
+      x.strokeStyle = '#8b877f'; x.beginPath(); x.moveTo(-13, 0); for (let i = -13; i <= 13; i += 2) x.lineTo(i, ((i + 13) / 2) % 2 ? -1.5 : 1.5); x.stroke();
+    }));
     const crater = [10, 18, 28].map(r => mk(r * 2 + 4, r + 4, x => {
       x.fillStyle = 'rgba(70,55,40,0.85)'; x.beginPath(); x.ellipse(r + 2, r / 2 + 2, r, r / 2, 0, 0, Math.PI * 2); x.fill();
       x.fillStyle = 'rgba(30,24,18,0.9)'; x.beginPath(); x.ellipse(r + 2, r / 2 + 3, r * 0.62, r * 0.3, 0, 0, Math.PI * 2); x.fill();
       x.fillStyle = 'rgba(120,100,76,0.7)'; x.beginPath(); x.ellipse(r + 2, r / 2, r * 0.8, r * 0.18, 0, Math.PI, Math.PI * 2); x.fill();
     }));
-    this.stamps = { trench, wire, crater };
-    const along = (line: [number, number][], c: HTMLCanvasElement, step: number) => {
+    this.stamps = { trench: trench[0], wire: wire[0], crater };
+    const along = (line: [number, number][], set: HTMLCanvasElement[], step: number) => {
       for (let i = 1; i < line.length; i++) {
         const [ax, ay] = line[i - 1], [bx, by] = line[i];
+        let a = Math.atan2(by - ay, bx - ax);
+        if (a < 0) a += Math.PI;
+        const c = set[Math.round(a / (Math.PI / 4)) % 4];
         const L = Math.hypot(bx - ax, by - ay), n = Math.max(1, Math.round(L / step));
         for (let k = 0; k < n; k++) this.stampList.push({ c, x: ax + ((bx - ax) * k) / n, y: ay + ((by - ay) * k) / n });
       }
     };
-    for (const l of this.sim.trenches) along(l, trench, 12);
-    for (const l of this.sim.wire) along(l, wire, 14);
+    for (const l of this.sim.trenches) along(l, trench, 9);
+    for (const l of this.sim.wire) along(l, wire, 12);
   }
 
   // -------------------------------------------------------------------------------------------------

@@ -60,7 +60,7 @@ export function BattleHud({ layer, title, onDone }: { layer: BattleLayer; title:
         )}
         {sim.phase === 'deploy' && (
           <div className="flex items-center gap-2 bg-black/75 border border-sky-300/40 rounded-xl px-3 py-2 text-xs max-w-[560px]">
-            <span className="text-sky-200">Posicione as tropas na zona azul: selecione e clique com o botão direito (arraste para formar a linha).{combined ? ' Compre unidades com pontos de comando nos cartões.' : ''}</span>
+            <span className="text-sky-200">Posicione as tropas na zona azul: selecione (clique ou arraste uma caixa) e use o botão direito — arrastando, você desenha a linha (largura e frente).{combined ? ' Compre unidades com pontos de comando nos cartões; conquiste setores para ganhar pontos e vencer.' : ''} Na batalha: botão direito num inimigo ataca; R corre, F fogo à vontade, G segura, espaço pausa.</span>
             <button onClick={() => { sim.start(); setTick(t => t + 1); }} className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-300 text-black font-bold">Iniciar batalha</button>
           </div>
         )}

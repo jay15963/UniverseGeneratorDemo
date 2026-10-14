@@ -7,7 +7,7 @@ import type { Campaign, Battle, Army, Settlement } from '../../../lib/game/campa
 import {
   PLAYER, REBELS, nameOf, colorOf, diplo, factionTotals, income, recruitable, buildable, orderBuild, orderRecruit, cancelRecruit, unitCost, buildCost,
   slotsUsed, recruitSlots, availableTechs, seasonOf, yearOf, armyById, settlementById, armyPower, defencePower, declareWar, makePeace, makeAlliance, accepts, gift,
-  answerOffer, ERA_NAMES, moveOf, popCap,
+  answerOffer, ERA_NAMES, moveOf, popCap, splitArmy,
 } from '../../../lib/game/campaign/campaign';
 import { unitById, CLASS_NAME } from '../../../lib/game/campaign/units';
 import { TECHS, techCost, buildingById, levelOf, LEVELS, slotsOf, SEASONS, ADVANCE_NEED } from '../../../lib/game/campaign/defs';
@@ -33,6 +33,7 @@ export function CampaignHud({ c, layer, art, genomes, tick, refresh, onEndTurn, 
   const army = sel.army !== undefined ? armyById(c, sel.army) : undefined;
   const town = sel.settlement !== undefined ? settlementById(c, sel.settlement) : undefined;
   const flash = (msg: string | null) => { if (msg) layer.api?.flash(msg); refresh(); };
+  const [help, setHelp] = useState(() => { try { return !localStorage.getItem('ugd:camphelp'); } catch { return true; } });
   void tick;
   return (
     <div className="pointer-events-none fixed inset-0 z-[320] text-white select-none">
@@ -103,6 +104,18 @@ export function CampaignHud({ c, layer, art, genomes, tick, refresh, onEndTurn, 
       {/* battle prompt */}
       {prompt && <BattlePrompt c={c} p={prompt} />}
       {toast && <div className="absolute top-20 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-lg bg-black/80 border border-white/15 text-sm">{toast}</div>}
+      {help && !prompt && (
+        <div className="pointer-events-auto absolute bottom-24 left-1/2 -translate-x-1/2 w-[520px] max-w-[94vw] rounded-2xl bg-black/85 border border-amber-300/40 p-4 text-sm">
+          <div className="font-black text-amber-200">Como jogar a campanha</div>
+          <ul className="mt-2 text-[12px] text-neutral-200 list-disc pl-4 space-y-0.5">
+            <li>Clique numa <b>bandeira</b> (exército) ou numa <b>povoação</b> para selecionar. Botão direito no mapa move o exército; sobre um inimigo ou uma povoação, ataca; sobre outro exército seu, junta.</li>
+            <li>Na povoação: <b>recrute</b> regimentos (ficam na guarnição — selecione-a para marchar) e <b>construa</b> (fazendas, mercado, quartel, muralhas, templo…).</li>
+            <li>Escolha uma <b>pesquisa</b>: {ADVANCE_NEED} tecnologias da era liberam a que leva à era seguinte. Na era espacial, a <b>nave colonial</b> vence o jogo.</li>
+            <li>As batalhas podem ser comandadas em tempo real (formações da era) ou resolvidas automaticamente. <b>Enter</b> encerra o turno.</li>
+          </ul>
+          <button onClick={() => { setHelp(false); try { localStorage.setItem('ugd:camphelp', '1'); } catch { /* ignore */ } }} className="mt-3 w-full py-1.5 rounded-lg bg-amber-300 text-black font-bold">Entendi</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -149,6 +162,8 @@ function Portrait({ art, g, era, unit, size = 40 }: { key?: React.Key; art: WarA
 
 function ArmyPanel({ c, a, art, genomes, layer, refresh }: { c: Campaign; a: Army; art: WarArt; genomes: Genome[]; layer: CampaignLayer; refresh: () => void }) {
   const mine = a.owner === PLAYER;
+  const [pick, setPick] = useState<number[]>([]);
+  useEffect(() => setPick([]), [a.id]);
   const g = genomes[a.owner] ?? genomes[0];
   const era = a.owner >= 0 ? c.factions[a.owner].era : 0;
   const town = a.at !== null ? settlementById(c, a.at) : null;
@@ -165,8 +180,10 @@ function ArmyPanel({ c, a, art, genomes, layer, refresh }: { c: Campaign; a: Arm
       <div className="mt-2 grid grid-cols-2 gap-1">
         {a.regs.map((r, i) => {
           const u = unitById(r.u);
+          const on = pick.includes(i);
           return (
-            <div key={i} title={`${u.name} — ${u.blurb}`} className="flex items-center gap-1.5 rounded-lg bg-white/5 border border-white/5 p-1">
+            <div key={i} title={`${u.name} — ${u.blurb}${mine ? '\nClique para marcar (dividir o exército)' : ''}`} onClick={() => mine && setPick(q => (q.includes(i) ? q.filter(k => k !== i) : [...q, i]))}
+              className={`flex items-center gap-1.5 rounded-lg border p-1 ${mine ? 'cursor-pointer' : ''} ${on ? 'bg-sky-500/25 border-sky-300/60' : 'bg-white/5 border-white/5'}`}>
               <Portrait art={art} g={g} era={era} unit={r.u} size={32} />
               <div className="min-w-0 flex-1">
                 <div className="text-[10px] leading-tight truncate">{u.name}</div>
@@ -177,7 +194,12 @@ function ArmyPanel({ c, a, art, genomes, layer, refresh }: { c: Campaign; a: Arm
           );
         })}
       </div>
-      {mine && <div className="text-[10px] text-neutral-500 mt-2">Botão direito no mapa: mover · sobre um inimigo ou povoação: atacar.</div>}
+      {mine && pick.length > 0 && pick.length < a.regs.length && (
+        <button onClick={() => { const n = splitArmy(c, a, pick); setPick([]); if (n) layer.sel = { army: n.id }; refresh(); }} className="mt-2 w-full py-1.5 rounded-lg text-xs font-bold bg-sky-400 text-black">
+          Formar novo exército com {pick.length} {pick.length > 1 ? 'unidades' : 'unidade'}
+        </button>
+      )}
+      {mine && <div className="text-[10px] text-neutral-500 mt-2">Botão direito no mapa: mover · sobre um inimigo ou povoação: atacar · sobre outro exército seu: juntar. Clique nas unidades para dividir.</div>}
     </div>
   );
 }
@@ -333,7 +355,7 @@ function BattlePrompt({ c, p }: { c: Campaign; p: { b: Battle; resolve: (how: 'f
     <div className="pointer-events-auto absolute inset-0 bg-black/55 flex items-center justify-center p-4">
       <div className="w-[440px] rounded-2xl bg-[#0f0c0a]/95 border border-amber-300/40 p-5">
         <div className="text-[10px] font-mono tracking-[0.3em] text-amber-200/70">{town ? 'CERCO' : 'BATALHA'}{town ? ` · ${town.name.toUpperCase()}` : ''}</div>
-        <div className="text-xl font-black mt-0.5">{mineAtt ? 'Atacar?' : 'Seu exército foi atacado!'}</div>
+        <div className="text-xl font-black mt-0.5">{mineAtt ? 'Atacar?' : town ? `${town.name} está sob ataque!` : 'Seu exército foi atacado!'}</div>
         <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
           <div className="rounded-lg bg-white/5 p-2"><div className="text-xs font-bold" style={{ color: colorOf(c, b.attacker) }}>{nameOf(c, b.attacker)}</div><div className="text-[11px] text-neutral-300">{att?.regs.length ?? 0} unidades · {men(att)} soldados</div></div>
           <div className="rounded-lg bg-white/5 p-2"><div className="text-xs font-bold" style={{ color: colorOf(c, b.defender) }}>{b.defender === REBELS ? 'Independentes' : nameOf(c, b.defender)}</div><div className="text-[11px] text-neutral-300">{defs.reduce((q, a) => q + a.regs.length, 0) + b.militia.length} unidades · {defs.reduce((q, a) => q + men(a), 0) + b.militia.reduce((q, r) => q + r.men, 0)} soldados</div></div>

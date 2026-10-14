@@ -258,7 +258,8 @@ export class BattleSim {
     const flankL = groups.flank.filter((_, i) => i % 2 === 0), flankR = groups.flank.filter((_, i) => i % 2 === 1);
     const front = this.style === 'line' || this.style === 'trench' || this.style === 'combined' ? [] : groups.front;
     const main = this.style === 'line' || this.style === 'trench' || this.style === 'combined' ? [...groups.main, ...groups.front] : groups.main;
-    place(main, z.hl * 0.1);
+    // in the trench war both lines start in their trenches
+    place(main, this.style === 'trench' ? z.hl * 0.87 : z.hl * 0.1);
     if (front.length) place(front, z.hl * 0.55);
     place(groups.back, -z.hl * 0.6);
     // flanks beyond the ends of the main line
@@ -792,8 +793,9 @@ export class BattleSim {
     if (isMech(u) || s.isPiece) { this.fx.push({ k: 'boom', x: s.x, y: s.y, t: 0, r: 30 }); this.fx.push({ k: 'smoke', x: s.x, y: s.y, t: 0, r: 24, dark: true }); }
     if (s.isPiece) for (const c of u.men) if (c.piece === s && c.alive && this.rnd() < 0.6) this.kill(c, from, 'blast');
     // morale: every loss hurts, the more so the faster they come
-    u.lossT += 1 / Math.max(1, u.start);
-    u.morale -= (100 / Math.max(4, u.start)) * (0.45 + u.lossT * 1.6);
+    const size = u.men.length;   // crews count: losing one gunner is not losing a quarter of the unit
+    u.lossT += 1 / Math.max(1, size);
+    u.morale -= (100 / Math.max(4, size)) * (0.45 + u.lossT * 1.6) * (s.isPiece ? 2 : 1);
     if (from && from.side !== u.side) from.morale = Math.min(from.mor0 + 10, from.morale + 0.3);
   }
 
