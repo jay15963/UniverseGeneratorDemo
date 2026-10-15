@@ -6,7 +6,11 @@ const FONT = '"Inter", "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-s
 const INTRO = 6, END = 137;
 const lin = (t: number, a: number, d = 1.2) => Math.max(0, Math.min(1, (t - a) / d));
 
-function line(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, weight: number, alpha: number, spacing = 0) {
+/** a soundtrack: credited by the badge; its beat grid drives the equaliser */
+export interface Track { title: string; artist: string; bpm: number; first: number }
+export const LEAF: Track = { title: 'Leaf', artist: 'Infraction', bpm: 100, first: 0.45 };
+
+export function line(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, weight: number, alpha: number, spacing = 0) {
   if (alpha <= 0) return;
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -25,20 +29,30 @@ export function drawTitles(ctx: CanvasRenderingContext2D, w: number, h: number, 
   if (t < 0) {
     line(ctx, 'Claude gave me $100', w / 2, h / 2 - big * 0.62, big, 300, lin(t, -INTRO + 0.6));
     line(ctx, 'and I cooked.', w / 2, h / 2 + big * 0.62, big, 600, lin(t, -INTRO + 2.4));
-  } else if (t >= END) {
-    const s = big * 0.78;
-    line(ctx, 'Made with Claude Opus 5.5', w / 2, h / 2 - s * 0.55, s, 300, lin(t, END + 0.3));
-    line(ctx, 'running in a web browser at 500+ FPS', w / 2, h / 2 + s * 0.6, s * 0.5, 300, lin(t, END + 1.6) * 0.78);
-    line(ctx, '@jaayyyy.ay', w / 2, h * 0.86, s * 0.42, 400, lin(t, END + 2.9) * 0.9, s * 0.06);
-  }
+  } else if (t >= END) drawEndCard(ctx, w, h, t, END);
+}
+
+/** The end card, its lines fading in one after the other from `at`; `credit` adds the music's credit line. */
+export function drawEndCard(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, at: number, credit?: string, step = 1.3) {
+  const big = Math.min(w * 0.058, h * 0.1, 76), s = big * 0.78;
+  line(ctx, 'Made with Claude Opus 5.5', w / 2, h / 2 - s * 0.55, s, 300, lin(t, at + 0.3));
+  line(ctx, 'running in a web browser at 500+ FPS', w / 2, h / 2 + s * 0.6, s * 0.5, 300, lin(t, at + 0.3 + step) * 0.78);
+  if (credit) line(ctx, credit, w / 2, h * 0.79, s * 0.36, 400, lin(t, at + 0.3 + step * 2) * 0.7, s * 0.03);
+  line(ctx, '@jaayyyy.ay', w / 2, h * 0.86, s * 0.42, 400, lin(t, at + 0.3 + step * (credit ? 3 : 2)) * 0.9, s * 0.06);
+}
+
+/** Title cards on black: each line fades in at its time (linear, like the first film). */
+export function drawCards(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, cards: { text: string; at: number; weight: number; dy: number }[]) {
+  const big = Math.min(w * 0.058, h * 0.1, 76);
+  for (const c of cards) line(ctx, c.text, w / 2, h / 2 + big * c.dy, big, c.weight, lin(t, c.at));
 }
 
 /** A "now playing" pill, bottom-left: a spinning record, the track, and an equaliser that pulses on the beat (100 BPM). */
-export function drawNowPlaying(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, alpha: number) {
+export function drawNowPlaying(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, alpha: number, track: Track = LEAF) {
   if (alpha <= 0) return;
   const k = Math.max(0.7, Math.min(1.4, Math.min(w, h) / 820));
   const H = 50 * k, pad = 9 * k, R = H / 2 - pad * 0.55;
-  const title = 'Leaf', artist = 'Infraction';
+  const { title, artist } = track;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.font = `600 ${14 * k}px ${FONT}`;
@@ -90,7 +104,7 @@ export function drawNowPlaying(ctx: CanvasRenderingContext2D, w: number, h: numb
   ctx.fillText(`· ${artist}`, tx + tw1, cy + 12 * k);
 
   // equaliser: five bars, each with its own sway, all kicked by the beat
-  const beat = (((t - 0.45) / 0.6) % 1 + 1) % 1, kick = Math.exp(-beat * 5);
+  const beat = (((t - track.first) / (60 / track.bpm)) % 1 + 1) % 1, kick = Math.exp(-beat * 5);
   const bx = x + W - pad * 1.4 - 26 * k, bw = 3.2 * k, maxH = H * 0.46;
   const grad = ctx.createLinearGradient(0, cy + maxH / 2, 0, cy - maxH / 2);
   grad.addColorStop(0, '#22d3ee'); grad.addColorStop(1, '#a78bfa');
@@ -114,10 +128,10 @@ const VIDEO: [string, 'avc' | 'vp9'][] = [['avc1.640033', 'avc'], ['avc1.640032'
 const MR_TYPES = ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
 const FPS = 60;
 
-function save(blob: Blob, ext: string) {
+function save(blob: Blob, ext: string, name: string) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `claude-cooked-trailer.${ext}`;
+  a.download = `${name}.${ext}`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -143,7 +157,7 @@ export class FilmRecorder {
   private type = '';
 
   /** @param lead seconds of picture before the music starts (the title cards) */
-  constructor(private soundtrack: string, private lead: number) {
+  constructor(private soundtrack: string, private lead: number, private name = 'claude-cooked-trailer') {
     this.prepare().catch(e => { console.warn('WebCodecs indisponível, usando MediaRecorder', e); this.failed = true; this.ready = true; });
   }
 
@@ -228,7 +242,7 @@ export class FilmRecorder {
       this.rec = null;
       await new Promise<void>(res => { rec.onstop = () => res(); rec.stop(); });
       const mime = this.type.split(';')[0] || 'video/webm';
-      save(new Blob(this.chunks, { type: mime }), mime.includes('mp4') ? 'mp4' : 'webm');
+      save(new Blob(this.chunks, { type: mime }), mime.includes('mp4') ? 'mp4' : 'webm', this.name);
       return;
     }
     if (!this.venc || !this.muxer || !this.music) return;
@@ -250,7 +264,7 @@ export class FilmRecorder {
     }
     await aenc.flush();
     this.muxer.finalize();
-    save(new Blob([this.muxer.target.buffer], { type: 'video/mp4' }), 'mp4');
+    save(new Blob([this.muxer.target.buffer], { type: 'video/mp4' }), 'mp4', this.name);
     this.venc.close(); aenc.close();
     this.venc = null;
   }

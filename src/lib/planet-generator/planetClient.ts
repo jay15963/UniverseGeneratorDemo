@@ -165,6 +165,8 @@ export interface PlanetSession {
   spawn(x: number, y: number): Promise<{ tx: number; ty: number }>;
   /** Parallel chunk generator (one worker per spare core) around a map point. */
   terrainPool(x: number, y: number): Promise<TerrainPool>;
+  /** the planet's fields in a window of `size` map px around a map point (a TerrainGenerator can run on them) */
+  fields(x: number, y: number, size: number): Promise<PlanetFields>;
   /** Cities planned this session (kept only for the session), with their current evolution p (0..254). */
   cities: Map<number, { plan: CityPlan; p: number }>;
   /** Plans a city around a tile (replacing city `cityId` when given) and paints it into every terrain worker. */
@@ -257,6 +259,11 @@ export function openPlanetSession(
         const res = await call({ kind: 'spawn', id: nextId++, sessionId, x, y });
         if (res.kind !== 'spawn') throw new Error('unexpected response');
         return { tx: res.tx, ty: res.ty };
+      },
+      fields: async (x, y, size) => {
+        const res = await call({ kind: 'fields', id: nextId++, sessionId, x, y, size });
+        if (res.kind !== 'fields') throw new Error('unexpected response');
+        return res.fields;
       },
       terrainPool: async (x, y) => {
         const res = await call({ kind: 'fields', id: nextId++, sessionId, x, y, size: 256 });

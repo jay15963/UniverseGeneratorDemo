@@ -32,6 +32,8 @@ export class CampaignLayer implements GameLayer {
   /** bumped when ownership changes (the province canvas is redrawn) */
   version = 0;
   busy = false;
+  /** films (trailer): everything known and in sight, no settlement banners on the whole-planet map */
+  cinematic = false;
 
   constructor(public c: Campaign, readonly w: CampaignWorld, readonly art: WarArt, readonly genomes: Genome[], readonly fog: Discovery) {}
 
@@ -49,10 +51,11 @@ export class CampaignLayer implements GameLayer {
   }
   /** can the player see this point now (armies of others are shown only in sight) */
   seesNow(x: number, y: number) {
+    if (this.cinematic) return true;
     for (const s of this.sight()) if (this.w.dist(s.x, s.y, x, y) * this.w.CELL < s.r) return true;
     return false;
   }
-  knownAt(x: number, y: number) { return this.fog.known(x / this.w.CELL, y / this.w.CELL); }
+  knownAt(x: number, y: number) { return this.cinematic || this.fog.known(x / this.w.CELL, y / this.w.CELL); }
   /** factions met: their land seen */
   updateMet() {
     const me = this.c.factions[PLAYER];
@@ -248,7 +251,7 @@ export class CampaignLayer implements GameLayer {
       if (turns > 1) this.pill(o, sx, sy - 16 * dpr, `${turns} turnos`, '#fde68a', dpr);
     }
     // settlements
-    for (const s of this.c.settlements) {
+    if (!(this.cinematic && f.lod === 'world')) for (const s of this.c.settlements) {
       if (!this.knownAt(s.x, s.y)) continue;
       const [sx, sy] = this.screen(f, s.x, s.y);
       if (sx < -200 || sx > f.DW + 200 || sy < -100 || sy > f.DH + 100) continue;
@@ -310,7 +313,7 @@ export class CampaignLayer implements GameLayer {
     o.beginPath(); o.roundRect(x, y - H - 8 * dpr, W, H * 0.62, 3 * dpr); o.fill(); o.stroke();
     o.fillStyle = 'rgba(0,0,0,0.75)'; o.font = `800 ${10 * dpr}px ui-monospace, monospace`; o.textAlign = 'center';
     o.fillText(String(a.regs.length), x + W / 2, y - H - 8 * dpr + H * 0.42);
-    if (strategic && a.regs[0]) {
+    if (strategic && a.regs[0] && !this.cinematic) {
       const u = unitById(a.regs[0].u), g = this.genomes[a.owner] ?? this.genomes[0];
       const era = a.owner >= 0 ? this.c.factions[a.owner].era : u.era[0];
       const sh = u.el === 'soldier' || u.el === 'mounted' ? this.art.soldier(g, era, u, 'idle') : null;

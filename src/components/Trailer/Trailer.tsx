@@ -37,7 +37,8 @@ const T = {
   creatures: 110.85, lineup: 120.85, evolution: 122, spaceAge: 134, end: 137, final: 142,
 };
 const HYPER_IN = 0.6, HYPER_OUT = 0.5;
-const MUSIC = { title: 'Leaf', artist: 'Infraction', youtube: 'oeCvq6VbtmY' };
+export interface Music { title: string; artist: string; youtube: string }
+const MUSIC: Music = { title: 'Leaf', artist: 'Infraction', youtube: 'oeCvq6VbtmY' };
 /** the soundtrack served with the site, when present (it is not in the repository: see CLAUDE.md) */
 export const LOCAL_SOUNDTRACK = `${import.meta.env.BASE_URL}trailer/leaf.mp3`;
 
@@ -94,7 +95,7 @@ const MONTAGE: PlanetConfig[] = [
 interface YTPlayer { playVideo(): void; pauseVideo(): void; seekTo(s: number, a: boolean): void; getCurrentTime(): number; getPlayerState(): number; destroy(): void }
 declare global { interface Window { YT?: { Player: new (el: HTMLElement, o: object) => YTPlayer }; onYouTubeIframeAPIReady?: () => void } }
 
-class Soundtrack {
+export class Soundtrack {
   private audio: HTMLAudioElement | null = null;
   private yt: YTPlayer | null = null;
   private startPerf = 0;
@@ -106,9 +107,9 @@ class Soundtrack {
   private tap: MediaStreamAudioDestinationNode | null = null;
 
   /** `file`: a soundtrack the viewer picked (always used, and recordable) */
-  constructor(private host: HTMLElement, private seek: number, file?: string) {
+  constructor(private host: HTMLElement, private seek: number, file?: string, private music: Music = MUSIC, local = LOCAL_SOUNDTRACK) {
     if (file) { this.audio = new Audio(file); this.audio.preload = 'auto'; return; }
-    const url = LOCAL_SOUNDTRACK;
+    const url = local;
     fetch(url, { method: 'HEAD' }).then(r => {
       if (r.ok && (r.headers.get('content-type') ?? '').startsWith('audio')) {
         this.audio = new Audio(url);
@@ -122,7 +123,7 @@ class Soundtrack {
       const el = document.createElement('div');
       this.host.appendChild(el);
       this.yt = new window.YT!.Player(el, {
-        videoId: MUSIC.youtube, width: 200, height: 200,
+        videoId: this.music.youtube, width: 200, height: 200,
         playerVars: { controls: 0, disablekb: 1, playsinline: 1, rel: 0, start: Math.max(0, Math.floor(this.seek)) },
         events: { onReady: () => { if (this.started) this.playNow(); } },
       });

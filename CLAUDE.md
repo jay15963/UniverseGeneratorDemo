@@ -83,6 +83,37 @@ These were set by the project owner — keep them:
   sheets through `SpriteStore` workers. `#trailer=S` starts at second S; `#trailer=S,0.0333` runs a silent fixed-step
   clock (for slow test machines).
 
+## Trailer II (`src/components/Trailer/war/`)
+- Menu -> "Assistir trailer II" (+ "Baixar"), `#trailer2=S` / `#trailer2=S,STEP` like the first film. Same machinery:
+  the music is the clock (`Soundtrack` with `WAR_MUSIC`, local `public/trailer/war.mp3` - gitignored, licence = use
+  with credit - else the hidden YouTube player `wYGH0xdfrTo`), every text drawn on the film's canvas, recordable
+  (`FilmRecorder`, file `claude-cooked-trailer-2`). The "now playing" badge and the end card credit
+  **"WAR" by @Makai-symphony** (owner's request).
+- Locked to "WAR" (98 BPM: beat 0.612 s, bar 2.449 s, first beat 0.01 s; drop 9.8, drum fill 15.3-17.2, breakdown
+  68.6-83.3, climax 98, finale 137.2, dead stop 152.2, last hit 153.07 = end card). Times live in `timeline.ts` (`S`).
+- Script: silent title cards -> the home world from orbit -> the microscopic pool (one division per beat) -> the
+  drop dives into the deep sea layer (reef, abyss) -> the lineage on the fill's hits -> ashore, herds -> the species
+  stands up -> **one city of the same culture through all 8 eras** -> the nations spreading on the strategic map ->
+  battles of every age (war bands at dawn, the clash, knights against pikes, a siege with trebuchets, line infantry
+  volleys and cannon, the soldier through the eras, trenches at dawn, barrage and over the top, the first tanks, WW2
+  armour, combined arms with an air strike, helicopters, the war machines, a futurist battle) -> the space-age
+  capital -> lineage recap -> the colony ship leaves -> warp -> the universe -> flashes on the last hits -> end card.
+- `stage.ts` prepares everything before the title cards: the first film's home world (`WAR_WORLD`, underwater layer
+  on), 8 cities (`planCity`, one culture seed) on one cluster of city sites, the battles (`battles.ts`: the real
+  battle engine, both sides AI, started at fixed soundtrack times tuned headless so the clashes land on the music,
+  advanced deterministically with the clock, `BattleLayer.cinematic`), the reef / abyss / coast / herd spots and the
+  campaign map (`CampaignLayer.cinematic`, turns precomputed and shown two per beat). `director.ts` (`WarCine`) films
+  exact places (zoom, drift, hour, weather, underwater `sub`, `fauna`, battle `focus`, drum `shake`) and waits on
+  the next place between ground shots (which also warms that place's building designs). `scenes.ts` draws the rest.
+- City shots are framed on each city's densest block (`EraCity.view` / `wide`), zone tints are off
+  (`setCityZones(false)`), and every building in the city shots' frames is rendered before the film rolls
+  (`Cinematic.warm` / `CineApi.warming`; the view keeps up to 900 designs in cinematic mode). The stage runs the
+  chunks' own `TerrainGenerator` on the region's fields (`session.fields`) to judge ground tile by tile: battles
+  are fought on open, dry, flat grassland clear of every town and of each other (the siege by its city, the
+  besiegers on dry ground), and the battle sims use that same terrain from the first step; the reef / abyss frames
+  are all water of the right sea zone. The herds shot avoids the cities; the coast shot frames the shoreline.
+  `swim.ts` puts the lineage's sea forms (larvae, aquatic, a leviathan) in the underwater shots.
+
 ## Structure generator (`src/lib/structure/`, `src/components/Structure/`)
 Owner's rules - keep them:
 - **Pure 2D pixel art, exactly like the creatures - never 3D.** No meshes, no z-buffer, no faceted volumes. Every piece

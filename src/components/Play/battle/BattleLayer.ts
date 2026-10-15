@@ -32,6 +32,11 @@ export class BattleLayer implements GameLayer {
   /** strike / barrage target mode (air units, artillery) */
   aim: 'fire' | null = null;
   private lastClick = { t: 0, u: null as Unit | null };
+  /** films (trailer): no field edge, zones, sectors, banners or orders; every unit visible; the clock is driven
+   *  from outside (`advanceTo`) */
+  cinematic = false;
+  /** sim time the battle has been run to (cinematic) */
+  private simAt = 0;
 
   constructor(readonly sim: BattleSim, readonly art: WarArt, readonly genomes: [Genome, Genome], readonly cultures: [Culture, Culture], readonly me: 0 | 1) {
     this.makeStamps();
@@ -118,8 +123,23 @@ export class BattleLayer implements GameLayer {
   // -------------------------------------------------------------------------------------------------
   // Frame
   // -------------------------------------------------------------------------------------------------
+  /** cinematic: run the battle up to sim time `t` (deterministic; at most `budgetMs` of work per call) */
+  advanceTo(t: number, budgetMs = 6) {
+    const t0 = performance.now();
+    while (this.simAt < t - 1e-4 && performance.now() - t0 < budgetMs) {
+      const d = Math.min(0.05, t - this.simAt);
+      this.sim.step(d);
+      this.simAt += d;
+    }
+    while (this.craterN < this.sim.craters.length && this.stamps) {
+      const c = this.sim.craters[this.craterN++];
+      if (c.k === 'crater') this.stampList.push({ c: this.stamps.crater[c.r < 12 ? 0 : c.r < 20 ? 1 : 2], x: c.x, y: c.y });
+    }
+    return this.simAt >= t - 0.06;
+  }
   update(f: GameFrame) {
     this.lastF = f;
+    if (this.cinematic) return;
     if (!this.paused) {
       let left = Math.min(0.25, f.dt) * this.speed;
       while (left > 1e-4) { const d = Math.min(0.05, left); this.sim.step(d); left -= d; }
@@ -133,7 +153,7 @@ export class BattleLayer implements GameLayer {
     for (const u of [...this.sel]) if (u.gone || u.shattered || this.sim.count(u) === 0) this.sel.delete(u);
   }
 
-  private visible(u: Unit) { return this.sim.style !== 'combined' || u.side === this.me || u.seen[this.me]; }
+  private visible(u: Unit) { return this.cinematic || this.sim.style !== 'combined' || u.side === this.me || u.seen[this.me]; }
   private lift(x: number, y: number) { return this.api ? this.api.liftAt(x, y) : 0; }
 
   collect(f: GameFrame): GameDraw[] {
@@ -202,6 +222,7 @@ export class BattleLayer implements GameLayer {
     const sim = this.sim, dpr = f.dpr, S = f.S;
     const P = (x: number, y: number) => f.toScreen(x, y - this.lift(x, y));
     o.save();
+    if (this.cinematic) { this.effects(o, f); o.restore(); return; }
     // battlefield edge
     const corner = (a: number, b: number) => { const [x, y] = sim.at(a, b); return f.toScreen(x, y); };
     const hl = sim.setup.hl, hw = sim.setup.hw;
@@ -266,6 +287,26 @@ export class BattleLayer implements GameLayer {
       o.beginPath(); o.moveTo(ax, ay); o.lineTo(bx, by); o.stroke();
       for (const p of this.lineSlots(L.x0, L.y0, L.x1, L.y1)) this.ghost(o, f, p.u, p.x, p.y, p.fa, 'rgba(120,230,255,0.4)');
     }
+    this.effects(o, f);
+    // unit banners
+    for (const u of sim.units) {
+      if (!u.deployed || u.gone || (u.shattered && sim.count(u) === 0) || !this.visible(u)) continue;
+      const n = sim.count(u);
+      if (!n) continue;
+      const [cx, cy] = sim.centre(u);
+      const men = sim.alive(u);
+      let top = cy;
+      for (const s of men) top = Math.min(top, s.y - s.z);
+      const [x, y] = P(cx, top);
+      this.banner(o, x, y - 30 * Math.max(0.6, S) - 4 * dpr, u, n, dpr);
+    }
+    // aiming mode hint
+    if (this.aim) { o.fillStyle = 'rgba(255,170,60,0.9)'; o.font = `700 ${12 * dpr}px ui-sans-serif`; o.textAlign = 'center'; o.fillText('Clique no alvo do bombardeio (botão direito cancela)', f.DW / 2, 70 * dpr); }
+    o.restore();
+  }
+  /** missiles in flight, muzzle flashes, tracers, explosions, smoke and dust */
+  private effects(o: CanvasRenderingContext2D, f: GameFrame) {
+    const sim = this.sim, S = f.S;
     // missiles
     for (const p of sim.shots) {
       const k = p.t / p.dur;
@@ -326,21 +367,6 @@ export class BattleLayer implements GameLayer {
         o.fillStyle = `rgba(150,125,90,${0.5 * (1 - k)})`; o.beginPath(); o.ellipse(x, y, 10 * S * (1 + k), 5 * S * (1 + k), 0, 0, Math.PI * 2); o.fill();
       }
     }
-    // unit banners
-    for (const u of sim.units) {
-      if (!u.deployed || u.gone || (u.shattered && sim.count(u) === 0) || !this.visible(u)) continue;
-      const n = sim.count(u);
-      if (!n) continue;
-      const [cx, cy] = sim.centre(u);
-      const men = sim.alive(u);
-      let top = cy;
-      for (const s of men) top = Math.min(top, s.y - s.z);
-      const [x, y] = P(cx, top);
-      this.banner(o, x, y - 30 * Math.max(0.6, S) - 4 * dpr, u, n, dpr);
-    }
-    // aiming mode hint
-    if (this.aim) { o.fillStyle = 'rgba(255,170,60,0.9)'; o.font = `700 ${12 * dpr}px ui-sans-serif`; o.textAlign = 'center'; o.fillText('Clique no alvo do bombardeio (botão direito cancela)', f.DW / 2, 70 * dpr); }
-    o.restore();
   }
   private tag(o: CanvasRenderingContext2D, x: number, y: number, text: string, col: string, dpr: number) {
     o.font = `700 ${10 * dpr}px ui-sans-serif, system-ui`;

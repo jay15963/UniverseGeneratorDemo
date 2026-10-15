@@ -14,6 +14,8 @@ export interface CineApi {
   pending(): number;
   /** wildlife currently alive around the camera */
   animals(): readonly { x: number; y: number; state: string }[];
+  /** city building designs asked for by `Cinematic.warm` that are still rendering */
+  warming?(): number;
 }
 export interface CineCam {
   /** world px */
@@ -27,7 +29,13 @@ export interface CineCam {
   weather?: Weather;
   /** terrain to load ahead of a hard cut (world px) */
   preload?: { x: number; y: number } | null;
+  /** the underwater layer (aquatic views only): the camera films the sea floor */
+  sub?: boolean;
+  /** false: no wildlife on screen (battles, cities) */
+  fauna?: boolean;
 }
 export interface Cinematic {
   update(dt: number, api: CineApi): CineCam;
+  /** world rectangles whose city buildings are rendered ahead of the film (once the cities are planned) */
+  warm?(): { x0: number; x1: number; y0: number; y1: number }[];
 }

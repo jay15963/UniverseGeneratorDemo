@@ -1153,7 +1153,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     const loadDesign = (key: string, plan: CityPlan, b: CityBuilding, prio: number) => {
       spool ??= new StructPool();
       const job = spool.request(key, { culture: plan.meta.culture, type: b.type, size: b.size, era: plan.meta.era, variant: b.variant, night: false }, b.dir, CITY_K, CITY_FRAMES, prio);
-      if (!job) return;
+      if (!job) return null;
       const d: Design = { img: null, tex: null, fw: 0, fh: 0, ax: 0, ay: 0, cols: 1, used: performance.now() };
       designs.set(key, d);
       job.then(sd => {
@@ -1175,6 +1175,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }
         d.fw = sd.w; d.fh = sd.h; d.ax = sd.ax; d.ay = sd.ay; d.cols = cols;
       });
+      return job;
     };
     /** Buildings in view, bucketed by the row that paints them; missing designs are queued nearest first. */
     const collectBuildings = (x0: number, x1: number, y0: number, y1: number, cx: number, cy: number) => {
@@ -1205,14 +1206,53 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }
       for (const l of cityRows.values()) l.sort((a, c) => a.b.x - c.b.x);
       // forget designs nobody looked at for a while (their textures are big)
-      if (now - evictT > 2000 && designs.size > 140) {
+      // (a film keeps the designs it rendered ahead for its later shots)
+      const cap = cine ? 900 : 140;
+      if (now - evictT > 2000 && designs.size > cap) {
         evictT = now;
-        for (const [k, d] of [...designs.entries()].sort((a, c) => a[1].used - c[1].used).slice(0, designs.size - 120)) {
+        for (const [k, d] of [...designs.entries()].sort((a, c) => a[1].used - c[1].used).slice(0, designs.size - (cap - 20))) {
           if (now - d.used < 3000) continue;
           if (d.tex) gl?.deleteTexture(d.tex);
           designs.delete(k);
         }
       }
+    };
+
+    /** a scripted camera's next place: its buildings' designs start rendering before the cut */
+    const warmBuildings = (x0: number, x1: number, y0: number, y1: number, cx: number, cy: number) => {
+      if (!session.cities.size) return;
+      reindex();
+      const now = performance.now(), g = G.current;
+      for (let qy = Math.floor(y0 / CHUNK_PX); qy <= Math.floor(y1 / CHUNK_PX); qy++)
+        for (let qx = Math.floor(x0 / CHUNK_PX); qx <= Math.floor(x1 / CHUNK_PX); qx++) {
+          const list = bIndex.get(`${qx},${qy}`);
+          if (!list || !g.chunks.has(`${qx},${qy}`)) continue;
+          for (const { b, id, plan } of list) {
+            const p = session.cities.get(id)?.p;
+            if (p === undefined || b.stage > p) continue;
+            const key = `${plan.meta.culture.seed}|${plan.meta.era}|${b.type}|${b.size}|${b.variant}|${b.dir}`;
+            const d = designs.get(key);
+            const prio = 4000 + Math.hypot(b.x - cx, b.y - cy);
+            if (!d) loadDesign(key, plan, b, prio); else d.used = now;
+          }
+        }
+    };
+
+    /** a film's city shots: every building in their frames is rendered before it rolls (no chunk needed) */
+    let warmLeft = 0, warmAsked = false;
+    const warmCine = () => {
+      if (warmAsked || !cine?.warm || !session.cities.size) return;
+      warmAsked = true;
+      const rects = cine.warm();
+      rects.forEach((r, i) => {
+        for (const [, c] of session.cities) for (const b of c.plan.buildings) {
+          if (b.stage > c.p || b.x < r.x0 || b.x > r.x1 || b.y < r.y0 || b.y > r.y1) continue;
+          const key = `${c.plan.meta.culture.seed}|${c.plan.meta.era}|${b.type}|${b.size}|${b.variant}|${b.dir}`;
+          if (designs.has(key)) continue;
+          const job = loadDesign(key, c.plan, b, 6000 + i * 1500 + Math.hypot(b.x - (r.x0 + r.x1) / 2, b.y - (r.y0 + r.y1) / 2));
+          if (job) { warmLeft++; job.finally(() => { warmLeft--; }); }
+        }
+      });
     };
 
     const maskCache = new Map<number, HTMLCanvasElement>();
@@ -1367,7 +1407,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
 
     // --- demo reel: the director drives camera, clock and weather ---
     fx.lantern = !cine;
-    let cineFade = cine ? 1 : 0, cineZoom = 3, cineWeather = '';
+    let cineFade = cine ? 1 : 0, cineZoom = 3, cineWeather = '', cineSub = false, cineFauna = true;
     const cineApi: CineApi = {
       loaded: (x, y, zoom) => {
         if (!chunked(lodOf(zoom))) return !!mapImg;
@@ -1385,6 +1425,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       },
       animals: () => fauna.all,
       pending: () => G.current.pending.size,
+      warming: () => { warmCine(); return warmLeft; },
       get worldZoom() {
         return Math.min(canvas.clientWidth / WORLD_PX, canvas.clientHeight / (WORLD_PX * (session.height / session.width))) * 0.92;
       },
@@ -1453,7 +1494,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
 
       if (cine && (g.x || g.y)) {
         const cam = cine.update(dt, cineApi);
-        g.x = cam.x; g.y = cam.y; cineZoom = cam.zoom; cineFade = cam.fade;
+        g.x = cam.x; g.y = cam.y; cineZoom = cam.zoom; cineFade = cam.fade; cineSub = !!cam.sub; cineFauna = cam.fauna !== false;
         preloadRef.current = cam.preload ?? null;
         if (cam.hour !== undefined) g.time = ((((cam.hour / 24) % 1) + 1) % 1) * DAY_SECONDS;
         // hard cuts: the new weather is there at once
@@ -1530,8 +1571,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       if (lod !== lodShown || (!cine && zt !== zoomShown)) { lodShown = lod; zoomShown = zt; setLodLabel({ lod, zoom: zt, sub: aquatic && g.zoomIdx < 0 }); }
       const local = chunked(lod), far = lod === 'far', regional = lod === 'regional';
       farNow = far;
-      subNow = aquatic && g.zoomIdx < 0 && !cine;
-      if (aquatic && prevSub !== null && subNow !== prevSub) { uw.trans = { up: !subNow, t0: now / 1000 }; if (subNow) subLift = underLiftAt(g.x, g.y) ?? subLift; }
+      // a scripted camera picks the layer itself (hard cuts: no dive animation)
+      subNow = aquatic && (cine ? cineSub : g.zoomIdx < 0);
+      if (aquatic && prevSub !== null && subNow !== prevSub) { if (!cine) uw.trans = { up: !subNow, t0: now / 1000 }; if (subNow) subLift = underLiftAt(g.x, g.y) ?? subLift; }
       prevSub = subNow;
       fx.underwater = subNow && seaFrac > 0.5;
       if (standbyRef.current) { raf = requestAnimationFrame(frame); return; }
@@ -1666,8 +1708,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const lensX = g.x, lensY = g.y - g.lift - 10;
       const lensStop = { row: Math.floor(g.y / TILE), y: g.y };
 
-      animalDraws = local && g.ready ? fauna.collect(x0, y0, x1, y1) : [];
+      animalDraws = local && g.ready && cineFauna ? fauna.collect(x0, y0, x1, y1) : [];
       if (local && g.ready) collectBuildings(x0, x1, y0, y1, g.x, g.y); else { cityRows = new Map(); cityRowMax = -1e9; }
+      const pre = preloadRef.current;
+      if (cine && pre && g.ready) { const hw = (x1 - x0) / 2, hh = (y1 - y0) / 2; warmBuildings(pre.x - hw, pre.x + hw, pre.y - hh, pre.y + hh, pre.x, pre.y); }
       citRows = new Map();
       if (local && g.ready && session.cities.size) {
         citizens.update(dt, session.cities, { x0, y0, x1, y1 }, (x, y) => !!chunkAt(x, y), Math.random);

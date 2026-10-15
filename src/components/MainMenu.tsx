@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Rocket, Telescope, Globe2, Sun, Sparkles, Orbit, Settings, Dna, Clapperboard, Film, Download, Castle, Swords, Ship } from 'lucide-react';
 import { MenuScene } from './MenuScene';
 import { LOCAL_SOUNDTRACK } from './Trailer/Trailer';
+import { WAR_SOUNDTRACK } from './Trailer/war/WarTrailer';
 
 interface MainMenuProps {
   onStart: () => void;
@@ -18,9 +19,12 @@ interface MainMenuProps {
   onTrailer: () => void;
   /** record the trailer into a video file, with this soundtrack URL */
   onTrailerDownload: (soundtrack: string) => void;
+  /** the second film (the eras of war) */
+  onTrailer2: () => void;
+  onTrailer2Download: (soundtrack: string) => void;
 }
 
-export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onExplore, onCreatureStart, onStructureStart, onEquipmentStart, onVehicleStart, onDemo, onTrailer, onTrailerDownload }: MainMenuProps) {
+export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUniverseStart, onPlay, onExplore, onCreatureStart, onStructureStart, onEquipmentStart, onVehicleStart, onDemo, onTrailer, onTrailerDownload, onTrailer2, onTrailer2Download }: MainMenuProps) {
   // the recording needs the music as a file: the one served with the site, or one the viewer picks
   const [localTrack, setLocalTrack] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -30,6 +34,14 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
       .catch(() => setLocalTrack(false));
   }, []);
   const download = () => { if (localTrack) onTrailerDownload(LOCAL_SOUNDTRACK); else fileRef.current?.click(); };
+  const [localWar, setLocalWar] = useState(false);
+  const warRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    fetch(WAR_SOUNDTRACK, { method: 'HEAD' })
+      .then(r => setLocalWar(r.ok && (r.headers.get('content-type') ?? '').startsWith('audio')))
+      .catch(() => setLocalWar(false));
+  }, []);
+  const download2 = () => { if (localWar) onTrailer2Download(WAR_SOUNDTRACK); else warRef.current?.click(); };
   // A different showcase world every time the menu opens
   const sceneSeed = useMemo(() => 'menu-' + Math.random().toString(36).slice(2, 8), []);
 
@@ -63,6 +75,17 @@ export function MainMenu({ onStart, onSolarSystemStart, onGalaxyStart, onUnivers
             </button>
             <input ref={fileRef} type="file" accept="audio/*" className="hidden"
               onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onTrailerDownload(URL.createObjectURL(f)); }} />
+          </div>
+          <div className="flex items-stretch gap-1.5">
+            <div className="flex-1 min-w-0"><MenuButton label="Assistir trailer II" hint="As eras da guerra" icon={<Swords className="w-4 h-4" />} onClick={onTrailer2} badge="NOVO" /></div>
+            <button onClick={download2}
+              title={localWar ? 'Baixar o trailer II em vídeo (grava enquanto ele passa, ~2:45)' : 'Baixar o trailer II em vídeo: escolha o arquivo da música "WAR" (@Makai-symphony); ele é gravado enquanto passa (~2:45)'}
+              className="group flex items-center gap-1.5 px-3 rounded-xl border border-white/10 bg-white/[0.04] hover:bg-white/[0.1] hover:border-white/25 text-amber-200/80 hover:text-amber-100 transition-all">
+              <Download className="w-4 h-4 group-hover:translate-y-0.5 transition-transform" />
+              <span className="text-xs font-bold tracking-wide whitespace-nowrap">Baixar</span>
+            </button>
+            <input ref={warRef} type="file" accept="audio/*" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onTrailer2Download(URL.createObjectURL(f)); }} />
           </div>
           <MenuButton label="Assistir demo" icon={<Clapperboard className="w-4 h-4" />} onClick={onDemo} />
           <MenuButton label="Gerador de Criaturas" icon={<Dna className="w-4 h-4" />} onClick={onCreatureStart} />

@@ -60,43 +60,7 @@ export class CreatureMontage {
   private sheet(s: Specimen): Sheet | null { return this.store.get(s.key, s.g, s.stage, s.anim, K, 0); }
   dispose() { this.store.dispose(); }
 
-  private backdrop(ctx: CanvasRenderingContext2D, w: number, h: number, stage: Stage, t: number, hue: number) {
-    const sea = stage <= Stage.AQUA_LEVIATHAN, cell = stage === Stage.CELL;
-    const g = ctx.createLinearGradient(0, 0, 0, h);
-    if (cell) { g.addColorStop(0, '#0b2a26'); g.addColorStop(1, '#03110f'); }
-    else if (sea) { g.addColorStop(0, '#0d4a6e'); g.addColorStop(0.55, '#062840'); g.addColorStop(1, '#020c16'); }
-    else if (stage >= Stage.TRIBAL) { g.addColorStop(0, `hsl(${hue},28%,12%)`); g.addColorStop(1, `hsl(${hue},30%,4%)`); }
-    else { g.addColorStop(0, '#1b1530'); g.addColorStop(0.62, '#4a2f3c'); g.addColorStop(0.63, '#231a1c'); g.addColorStop(1, '#0c0909'); }
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, w, h);
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    if (sea) {
-      // light shafts from the surface
-      for (let i = 0; i < 6; i++) {
-        const x = ((i * 0.19 + Math.sin(t * 0.3 + i) * 0.03) % 1) * w;
-        const lg = ctx.createLinearGradient(x, 0, x + w * 0.1, h);
-        lg.addColorStop(0, 'rgba(140,210,255,0.13)'); lg.addColorStop(1, 'rgba(140,210,255,0)');
-        ctx.fillStyle = lg;
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + w * 0.06, 0); ctx.lineTo(x + w * 0.22, h); ctx.lineTo(x + w * 0.1, h); ctx.fill();
-      }
-    }
-    // drifting motes (plankton, pollen, dust)
-    const r = mulberry(7);
-    for (let i = 0; i < 60; i++) {
-      const x = ((r() + t * 0.01 * (r() - 0.5)) % 1 + 1) % 1 * w, y = ((r() - t * 0.015 * r()) % 1 + 1) % 1 * h;
-      ctx.fillStyle = cell ? 'rgba(120,255,200,0.18)' : sea ? 'rgba(180,230,255,0.2)' : 'rgba(255,220,180,0.12)';
-      const s = 1 + r() * 2.5;
-      ctx.fillRect(x, y, s, s);
-    }
-    // spotlight on the stage
-    const sg = ctx.createRadialGradient(w / 2, h * 0.55, 0, w / 2, h * 0.55, Math.min(w, h) * 0.55);
-    sg.addColorStop(0, cell ? 'rgba(120,255,210,0.12)' : sea ? 'rgba(120,200,255,0.12)' : 'rgba(255,220,170,0.12)');
-    sg.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = sg;
-    ctx.fillRect(0, 0, w, h);
-    ctx.restore();
-  }
+  private backdrop(ctx: CanvasRenderingContext2D, w: number, h: number, stage: Stage, t: number, hue: number) { drawBackdrop(ctx, w, h, stage, t, hue); }
 
   /** One specimen, big, centred, animated; `sizeFrac` of the short side. */
   private hero(ctx: CanvasRenderingContext2D, w: number, h: number, s: Specimen, t: number, sizeFrac: number, cx = w / 2, cy = h * 0.55) {
@@ -160,4 +124,43 @@ export class CreatureMontage {
     const size = s.stage === Stage.CELL ? 0.55 : s.stage <= Stage.AQUA ? 0.62 : s.stage >= Stage.TRIBAL ? 0.78 : 0.66;
     this.hero(ctx, w, h, s, t, size, w / 2, s.stage >= Stage.TRIBAL ? h * 0.72 : h * 0.58);
   }
+}
+
+/** The montage's stage set: water with light shafts for the sea, a dusk for the land, dark for the civilisations. */
+export function drawBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number, stage: Stage, t: number, hue: number) {
+  const sea = stage <= Stage.AQUA_LEVIATHAN, cell = stage === Stage.CELL;
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  if (cell) { g.addColorStop(0, '#0b2a26'); g.addColorStop(1, '#03110f'); }
+  else if (sea) { g.addColorStop(0, '#0d4a6e'); g.addColorStop(0.55, '#062840'); g.addColorStop(1, '#020c16'); }
+  else if (stage >= Stage.TRIBAL) { g.addColorStop(0, `hsl(${hue},28%,12%)`); g.addColorStop(1, `hsl(${hue},30%,4%)`); }
+  else { g.addColorStop(0, '#1b1530'); g.addColorStop(0.62, '#4a2f3c'); g.addColorStop(0.63, '#231a1c'); g.addColorStop(1, '#0c0909'); }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  if (sea) {
+    // light shafts from the surface
+    for (let i = 0; i < 6; i++) {
+      const x = ((i * 0.19 + Math.sin(t * 0.3 + i) * 0.03) % 1) * w;
+      const lg = ctx.createLinearGradient(x, 0, x + w * 0.1, h);
+      lg.addColorStop(0, 'rgba(140,210,255,0.13)'); lg.addColorStop(1, 'rgba(140,210,255,0)');
+      ctx.fillStyle = lg;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + w * 0.06, 0); ctx.lineTo(x + w * 0.22, h); ctx.lineTo(x + w * 0.1, h); ctx.fill();
+    }
+  }
+  // drifting motes (plankton, pollen, dust)
+  const r = mulberry(7);
+  for (let i = 0; i < 60; i++) {
+    const x = ((r() + t * 0.01 * (r() - 0.5)) % 1 + 1) % 1 * w, y = ((r() - t * 0.015 * r()) % 1 + 1) % 1 * h;
+    ctx.fillStyle = cell ? 'rgba(120,255,200,0.18)' : sea ? 'rgba(180,230,255,0.2)' : 'rgba(255,220,180,0.12)';
+    const s = 1 + r() * 2.5;
+    ctx.fillRect(x, y, s, s);
+  }
+  // spotlight on the stage
+  const sg = ctx.createRadialGradient(w / 2, h * 0.55, 0, w / 2, h * 0.55, Math.min(w, h) * 0.55);
+  sg.addColorStop(0, cell ? 'rgba(120,255,210,0.12)' : sea ? 'rgba(120,200,255,0.12)' : 'rgba(255,220,170,0.12)');
+  sg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
 }

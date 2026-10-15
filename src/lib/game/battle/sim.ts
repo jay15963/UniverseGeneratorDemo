@@ -473,6 +473,8 @@ export class BattleSim {
   }
   /** the player's units are run by the AI too (when the player hands over command) */
   autoPlayer = false;
+  /** trench war: seconds of barrage before the attacker goes over the top */
+  trenchWait = 50;
   private idleAnims(dt: number) { for (const s of this.soldiers) { s.ph += dt; s.anim = 'idle'; } }
   private ageFx(dt: number) {
     for (const f of this.fx) if ('t' in f) f.t += dt;
@@ -1097,7 +1099,7 @@ export class BattleSim {
       }
       if (siegeDef && nearest.d > 260) { const S = this.setup.siege!; if (Math.hypot(cx - S.x, cy - S.y) > 200) this.orderMove(u, S.x, S.y, u.fa, false); continue; }
       if (trenchDef && nearest.d > 200) continue;
-      if (trenchAtt && this.t < 50 && this.units.some(v => v.side === k && v.def.indirect)) continue; // wait for the barrage
+      if (trenchAtt && this.t < this.trenchWait && this.units.some(v => v.side === k && v.def.indirect)) continue; // wait for the barrage
       // cavalry and armour go for the flanks and the shooters
       let t = nearest.u;
       if (u.def.cls === 'cav' || u.def.cls === 'cavgun' || u.def.cls === 'tank' || u.def.cls === 'recon' || u.def.cls === 'heli') {
