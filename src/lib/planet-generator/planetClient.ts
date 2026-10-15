@@ -4,7 +4,7 @@
 //    priority queue and an LRU cache so revisiting a system is instant.
 //  - openPlanetSession(): a dedicated worker holding a full-resolution generator for the surface map.
 import type { LayerType, PlanetConfig } from './generator';
-import type { PlanetProbe, WorkerRequest, WorkerResponse } from './workerProtocol';
+import type { PlanetProbe, WorkerRequest, WorkerResponse, PlanetGrid } from './workerProtocol';
 import type { ChunkData } from '../terrain/types';
 import { CHUNK, WORLD_TILES_X } from '../terrain/types';
 import type { PlanetFields } from '../terrain/terrainGen';
@@ -12,7 +12,7 @@ import type { CityPlan } from '../city/codes';
 import type { CityLink } from '../city/links';
 import type { CitySite } from '../city/sites';
 
-export type { PlanetProbe };
+export type { PlanetProbe, PlanetGrid };
 
 export interface PlanetTexture {
   width: number;
@@ -160,15 +160,17 @@ export interface PlanetSession {
   /** Playable terrain chunk (32x32 tiles) */
   chunk(cx: number, cy: number): Promise<ChunkData>;
   /** Regional LOD block from the full-resolution session worker (anywhere on the planet) */
-  region(tx: number, ty: number, step: number, n: number): Promise<Uint8ClampedArray>;
+  region(tx: number, ty: number, step: number, n: number, under?: boolean): Promise<Uint8ClampedArray>;
   /** Nearest walkable tile to a map pixel */
   spawn(x: number, y: number): Promise<{ tx: number; ty: number }>;
   /** Parallel chunk generator (one worker per spare core) around a map point. */
   terrainPool(x: number, y: number): Promise<TerrainPool>;
+  /** the planet's fields in a window of `size` map px around a map point (a TerrainGenerator can run on them) */
+  fields(x: number, y: number, size: number): Promise<PlanetFields>;
   /** Cities planned this session (kept only for the session), with their current evolution p (0..254). */
   cities: Map<number, { plan: CityPlan; p: number }>;
   /** Plans a city around a tile (replacing city `cityId` when given) and paints it into every terrain worker. */
-  planCity(tx: number, ty: number, era: number, p: number, cityId?: number, name?: string, species?: string): Promise<CityPlan>;
+  planCity(tx: number, ty: number, era: number, p: number, cityId?: number, name?: string, species?: string, seed?: number): Promise<CityPlan>;
   setCityLevel(cityId: number, p: number): void;
   /** where the cities of the whole planet should go (clusters, habitability) */
   citySites(count: number, seed: number): Promise<CitySite[]>;
@@ -178,6 +180,10 @@ export interface PlanetSession {
   /** show / hide the district colours of every city */
   setCityZones(on: boolean): void;
   config: PlanetConfig;
+  /** the whole planet at map resolution (play mode simulations) */
+  grid(): Promise<PlanetGrid>;
+  /** play mode: the planet's life stage changes live (terrain chunks and map colours follow; redraw them) */
+  setLifeStage(v: number): void;
   dispose(): void;
 }
 
@@ -220,6 +226,8 @@ export function openPlanetSession(
   };
   let nextCity = 1;
   let zonesOn = true;
+  let vita: number | null = null;
+  let gridP: Promise<PlanetGrid> | null = null;
   const ready = call({ kind: 'open', id: nextId++, sessionId, config }).then((msg) => {
     if (msg.kind !== 'opened') throw new Error('unexpected response');
     // eslint-disable-next-line prefer-const
@@ -242,8 +250,8 @@ export function openPlanetSession(
         if (res.kind !== 'chunk') throw new Error('unexpected response');
         return res.chunk;
       },
-      region: async (tx, ty, step, n) => {
-        const res = await call({ kind: 'region', id: nextId++, sessionId, tx, ty, step, n });
+      region: async (tx, ty, step, n, under) => {
+        const res = await call({ kind: 'region', id: nextId++, sessionId, tx, ty, step, n, under });
         if (res.kind !== 'region') throw new Error('unexpected response');
         return res.px;
       },
@@ -252,12 +260,18 @@ export function openPlanetSession(
         if (res.kind !== 'spawn') throw new Error('unexpected response');
         return { tx: res.tx, ty: res.ty };
       },
+      fields: async (x, y, size) => {
+        const res = await call({ kind: 'fields', id: nextId++, sessionId, x, y, size });
+        if (res.kind !== 'fields') throw new Error('unexpected response');
+        return res.fields;
+      },
       terrainPool: async (x, y) => {
         const res = await call({ kind: 'fields', id: nextId++, sessionId, x, y, size: 256 });
         if (res.kind !== 'fields') throw new Error('unexpected response');
         const pool = new TerrainPool(res.fields, (cx, cy) => session.chunk(cx, cy));
         await pool.ready;
         pool.broadcast({ kind: 'cityZones', on: zonesOn });
+        if (vita !== null) pool.broadcast({ kind: 'lifeStage', v: vita });
         for (const [id, c] of cities) pool.broadcast({ kind: 'cityAdd', cityId: id, era: c.plan.meta.era, p: c.p, chunks: c.plan.chunks });
         for (const l of links.values()) if (l.chunks) pool.broadcast({ kind: 'cityAdd', cityId: l.id, era: cities.get(l.a)?.plan.meta.era ?? 0, p: 254, chunks: l.chunks });
         pools.add(pool);
@@ -266,10 +280,11 @@ export function openPlanetSession(
       },
       cities,
       links,
-      planCity: async (tx, ty, era, p, cityId, name, species) => {
+      planCity: async (tx, ty, era, p, cityId, name, species, seed0) => {
         const id = cityId ?? nextCity++;
+        if (cityId !== undefined && cityId >= nextCity) nextCity = cityId + 1;
         const prev = cities.get(id);
-        const seed = prev?.plan.meta.seed ?? ((Math.random() * 2 ** 31) | 0);
+        const seed = seed0 ?? prev?.plan.meta.seed ?? ((Math.random() * 2 ** 31) | 0);
         const res = await call({ kind: 'city', id: nextId++, sessionId, cityId: id, tx, ty, era, seed, p, name: name ?? prev?.plan.meta.name, species: species ?? prev?.plan.meta.species });
         if (res.kind !== 'city') throw new Error('unexpected response');
         cities.set(id, { plan: res.plan, p });
@@ -308,6 +323,16 @@ export function openPlanetSession(
         for (const pool of pools) pool.broadcast({ kind: 'cityRemove', cityId: id });
       },
       config,
+      grid: () => (gridP ??= call({ kind: 'grid', id: nextId++, sessionId }).then(res => {
+        if (res.kind !== 'grid') throw new Error('unexpected response');
+        return res.grid;
+      })),
+      setLifeStage: (v) => {
+        vita = v;
+        config.lifeStage = v;
+        worker.postMessage({ kind: 'lifeStage', sessionId, v } satisfies WorkerRequest);
+        for (const pool of pools) pool.broadcast({ kind: 'lifeStage', v });
+      },
       dispose,
     };
     return session;
@@ -325,7 +350,7 @@ export class TerrainPool {
   readonly ready: Promise<void>;
   private workers: { w: Worker; busy: boolean }[] = [];
   private queue: { cx: number; cy: number; resolve: (c: ChunkData) => void; reject: (e: Error) => void }[] = [];
-  private regionQueue: { tx: number; ty: number; step: number; n: number; resolve: (px: Uint8ClampedArray) => void; reject: (e: Error) => void }[] = [];
+  private regionQueue: { tx: number; ty: number; step: number; n: number; under?: boolean; resolve: (px: Uint8ClampedArray) => void; reject: (e: Error) => void }[] = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private waiting = new Map<number, { resolve: (c: any) => void; reject: (e: Error) => void; slot: { busy: boolean } }>();
   private nextId = 1;
@@ -387,7 +412,7 @@ export class TerrainPool {
         const job = this.regionQueue.shift()!;
         slot.busy = true;
         this.waiting.set(id, { resolve: job.resolve, reject: job.reject, slot });
-        slot.w.postMessage({ kind: 'region', id, tx: job.tx, ty: job.ty, step: job.step, n: job.n });
+        slot.w.postMessage({ kind: 'region', id, tx: job.tx, ty: job.ty, step: job.step, n: job.n, under: job.under });
       }
     }
   }
@@ -401,8 +426,8 @@ export class TerrainPool {
   }
 
   /** Regional LOD block: n*n colours, one per `step` tiles, starting at tile (tx, ty). */
-  region(tx: number, ty: number, step: number, n: number): Promise<Uint8ClampedArray> {
-    return new Promise((resolve, reject) => { this.regionQueue.push({ tx, ty, step, n, resolve, reject }); this.pump(); });
+  region(tx: number, ty: number, step: number, n: number, under = false): Promise<Uint8ClampedArray> {
+    return new Promise((resolve, reject) => { this.regionQueue.push({ tx, ty, step, n, under, resolve, reject }); this.pump(); });
   }
   /** Drops queued (not yet started) regional jobs - used when the camera moves on. */
   clearRegions() { const q = this.regionQueue; this.regionQueue = []; for (const j of q) j.reject(new Error('cancelled')); }

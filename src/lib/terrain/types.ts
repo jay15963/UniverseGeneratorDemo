@@ -78,9 +78,6 @@ export interface TerrainRow {
   h: number;   // buffer height in px
   px: Uint8ClampedArray; // CHUNK_PX x h RGBA
   anim?: Uint8ClampedArray[]; // looping animation frames (flowing water / lava), same size as px
-  /** aquatic view: the row with the seabed instead of the sea's surface (and its caustic / seagrass frames) */
-  bed?: Uint8ClampedArray;
-  bedAnim?: Uint8ClampedArray[];
 }
 
 export interface ChunkData {
@@ -98,6 +95,8 @@ export interface ChunkData {
   temp: Float32Array;        // CHUNK² local temperature 0..1
   zone: Uint8Array;          // CHUNK² bits 0-1 SeaZone of water (1 coast, 2 open sea, 3 abyss), bit 2 = plants have reached it
   features: Feature[];
+  /** aquatic view: the underwater layer (its own terraced relief) and its levels (CHUNK²) */
+  under?: { rows: TerrainRow[]; level: Uint8Array };
 }
 
 export const TREES = new Set<Feat>([Feat.OAK, Feat.BIRCH, Feat.MAPLE, Feat.PINE, Feat.SPRUCE, Feat.ACACIA, Feat.KAPOK, Feat.PALM, Feat.WILLOW, Feat.DEAD_TREE]);

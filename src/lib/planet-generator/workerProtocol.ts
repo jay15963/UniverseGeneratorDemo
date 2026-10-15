@@ -34,7 +34,9 @@ export type WorkerRequest =
   | { kind: 'cityRemove'; sessionId: string; cityId: number }
   | { kind: 'cityZones'; sessionId: string; on: boolean }
   | { kind: 'citySites'; id: number; sessionId: string; count: number; seed: number }
-  | { kind: 'region'; id: number; sessionId: string; tx: number; ty: number; step: number; n: number }
+  | { kind: 'region'; id: number; sessionId: string; tx: number; ty: number; step: number; n: number; under?: boolean }
+  | { kind: 'lifeStage'; sessionId: string; v: number }
+  | { kind: 'grid'; id: number; sessionId: string }
   | { kind: 'close'; sessionId: string };
 
 export type WorkerResponse =
@@ -49,4 +51,23 @@ export type WorkerResponse =
   | { kind: 'city'; id: number; plan: CityPlan; links: CityLink[] }
   | { kind: 'region'; id: number; px: Uint8ClampedArray }
   | { kind: 'citySites'; id: number; sites: CitySite[] }
+  | { kind: 'grid'; id: number; grid: PlanetGrid }
   | { kind: 'error'; id: number; message: string };
+
+/**
+ * The whole planet at map resolution, for the play mode's simulations (where the sea is, how deep, how warm...):
+ * one cell = one map px = WORLD_TILES_X / w tiles.
+ */
+export interface PlanetGrid {
+  w: number; h: number; sea: number;
+  /** elevation 0..1 (the sea is below `sea`) */
+  elev: Float32Array;
+  /** river / lake water accumulation flag: 1 = fresh water */
+  river: Uint8Array;
+  /** temperature, moisture, fertility 0..255 */
+  temp: Uint8Array; moist: Uint8Array; fert: Uint8Array;
+  /** distance to the nearest water (ref px of a 2048 map, see lifeStage.ts) */
+  coast: Float32Array | null;
+  /** depth percentiles of the ocean [shelf edge, abyss edge] as depth ratios */
+  depthQ: [number, number];
+}

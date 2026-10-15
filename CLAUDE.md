@@ -83,6 +83,37 @@ These were set by the project owner — keep them:
   sheets through `SpriteStore` workers. `#trailer=S` starts at second S; `#trailer=S,0.0333` runs a silent fixed-step
   clock (for slow test machines).
 
+## Trailer II (`src/components/Trailer/war/`)
+- Menu -> "Assistir trailer II" (+ "Baixar"), `#trailer2=S` / `#trailer2=S,STEP` like the first film. Same machinery:
+  the music is the clock (`Soundtrack` with `WAR_MUSIC`, local `public/trailer/war.mp3` - gitignored, licence = use
+  with credit - else the hidden YouTube player `wYGH0xdfrTo`), every text drawn on the film's canvas, recordable
+  (`FilmRecorder`, file `claude-cooked-trailer-2`). The "now playing" badge and the end card credit
+  **"WAR" by @Makai-symphony** (owner's request).
+- Locked to "WAR" (98 BPM: beat 0.612 s, bar 2.449 s, first beat 0.01 s; drop 9.8, drum fill 15.3-17.2, breakdown
+  68.6-83.3, climax 98, finale 137.2, dead stop 152.2, last hit 153.07 = end card). Times live in `timeline.ts` (`S`).
+- Script: silent title cards -> the home world from orbit -> the microscopic pool (one division per beat) -> the
+  drop dives into the deep sea layer (reef, abyss) -> the lineage on the fill's hits -> ashore, herds -> the species
+  stands up -> **one city of the same culture through all 8 eras** -> the nations spreading on the strategic map ->
+  battles of every age (war bands at dawn, the clash, knights against pikes, a siege with trebuchets, line infantry
+  volleys and cannon, the soldier through the eras, trenches at dawn, barrage and over the top, the first tanks, WW2
+  armour, combined arms with an air strike, helicopters, the war machines, a futurist battle) -> the space-age
+  capital -> lineage recap -> the colony ship leaves -> warp -> the universe -> flashes on the last hits -> end card.
+- `stage.ts` prepares everything before the title cards: the first film's home world (`WAR_WORLD`, underwater layer
+  on), 8 cities (`planCity`, one culture seed) on one cluster of city sites, the battles (`battles.ts`: the real
+  battle engine, both sides AI, started at fixed soundtrack times tuned headless so the clashes land on the music,
+  advanced deterministically with the clock, `BattleLayer.cinematic`), the reef / abyss / coast / herd spots and the
+  campaign map (`CampaignLayer.cinematic`, turns precomputed and shown two per beat). `director.ts` (`WarCine`) films
+  exact places (zoom, drift, hour, weather, underwater `sub`, `fauna`, battle `focus`, drum `shake`) and waits on
+  the next place between ground shots (which also warms that place's building designs). `scenes.ts` draws the rest.
+- City shots are framed on each city's densest block (`EraCity.view` / `wide`), zone tints are off
+  (`setCityZones(false)`), and every building in the city shots' frames is rendered before the film rolls
+  (`Cinematic.warm` / `CineApi.warming`; the view keeps up to 900 designs in cinematic mode). The stage runs the
+  chunks' own `TerrainGenerator` on the region's fields (`session.fields`) to judge ground tile by tile: battles
+  are fought on open, dry, flat grassland clear of every town and of each other (the siege by its city, the
+  besiegers on dry ground), and the battle sims use that same terrain from the first step; the reef / abyss frames
+  are all water of the right sea zone. The herds shot avoids the cities; the coast shot frames the shoreline.
+  `swim.ts` puts the lineage's sea forms (larvae, aquatic, a leviathan) in the underwater shots.
+
 ## Structure generator (`src/lib/structure/`, `src/components/Structure/`)
 Owner's rules - keep them:
 - **Pure 2D pixel art, exactly like the creatures - never 3D.** No meshes, no z-buffer, no faceted volumes. Every piece
@@ -138,6 +169,7 @@ Owner's rules - keep them:
   pieces (head/torso/arms/hands/legs/feet/cloak) switch off one by one. Closed helms are drawn over the face.
 - New types = one builder + one catalogue entry in `hand.ts` / `aux.ts` / `wear.ts`.
 - **Shields are big** (a round one ~half the bearer's height, viking style); no small shields/bucklers.
+- Firearms exist from the classic era (age of sail: muskets, era 2; bolt-action rifles in the industrial era).
 - Guns show their shot: black-powder smoke clouds (muskets), star flashes, smoke wisps and spent casings (modern,
   bursts), bolts / plasma balls (future); loosed arrows and crossbow bolts fly off. The shot lands on the loop's
   frames 4-5 (8-frame loops: time windows must contain a frame).
@@ -303,31 +335,27 @@ Four levels (owner's request; `lodOf`):
   screen, owner's request) at the waters of origin (a shallow sea point, `findOrigin`), known from the start; small
   overlay: % discovered, life-stage previews, "Recomeçar". City tools are hidden while `discovery` is on.
 
-## Aquatic view (`terrain/seabed.ts`, `Survival/underwater.ts`)
-- Owner's rule: **the gameplay zooms stay the normal surface view**. In the aquatic era (`SurvivalView` `aquatic`),
-  zooming in **past the closest gameplay stop while over water (sea, river or swamp)** dives: `zoomIdx` -1..-3 are
-  the submerged stops (`SUB_ZOOMS`, their own scales; the transition hides the jump). There **everything above the
-  water turns dark** (land rows, cliffs, trees, land animals multiplied by `ABOVE`) and only what is under the water
-  shows. Zooming out of the lowest submerged stop surfaces. Over land one cannot dive.
-- `PlanetConfig.aquaticView` makes the terrain workers add a **bed** to every row with water pixels (`TerrainRow.bed`
-  / `bedAnim`, packed in the chunk texture), following each pixel's own liquid (so edges keep the jittered shape):
-  sea floors by deepness q (depth percentiles of that ocean: rippled sand on the shelf, silt, boulders with lit crests /
-  algae / cast shadows, abyssal ooze with living lights), **riverbeds of round pebbles**, swamp silt, corals on warm
-  shelves, seagrass / cold-water kelp that sway, animated caustic webs in the shallows, the planet's own water colour
-  baked in thicker with depth; non-water pixels of those rows are darkened in the worker. Flat 2D pixel art.
-- The submerged view adds the water column (`Underwater.ambience`, weighted by the share of water in view): slanted
-  sun shafts, marine snow in three parallax layers, bubble streams, a depth vignette; no rain/snow, falling leaves,
-  butterflies or cloud shadows under water; swimmers are drawn whole with a shadow on the floor. At the surface
-  zooms, submerged swimmers show as dark tinted shapes under the water.
-- Diving / surfacing plays `Underwater.transition` (0.95 s, chunky pixels): entry splash ring, the wavy foam waterline
-  rising, bubbles; surfacing = bubbles left behind, the waterline sweeping down past the eye, droplets.
-- A 5th (cyan) dot above the zoom dots marks the submerged view. Dev builds expose `window.__surv` (camera, session)
-  for browser tests.
+## Aquatic view (`terrain/seabed.ts`, `terrainGen.ts` `composeUnder`, `Survival/underwater.ts`)
+- Owner's rule: **the surface gameplay zooms stay the normal surface view**. In the aquatic era (`SurvivalView`
+  `aquatic`), zooming in **past the closest surface stop while over water (sea, river or swamp)** dives into **a whole
+  layer below the surface with its own relief and its own zoom ladder**: `zoomIdx` < 0 walks `SUB_ZOOMS` (13 stops:
+  the dive lands on the widest *regional aquatic* stop 1/128 and zooming in goes down to the *aquatic gameplay* stops,
+  up to 6); zooming out of the widest one surfaces. Everything above the water turns dark (`ABOVE`). Over land one
+  cannot dive.
+- The planet has **real elevation below the surface**: `composeUnder` gives every water pixel a bathymetric level
+  (`underLevel`, depth percentiles of its ocean; `LAND_U` = the shore, `LIFT` px per level) and paints terraced sea
+  floors with lit faces (`seabed.ts`: rippled shelf sand, silt, boulders with crests / algae / cast shadows, abyssal ooze
+  with living lights, **riverbeds of round pebbles**, swamp silt, warm-shelf corals, swaying seagrass / kelp, animated
+  caustics, the planet's water colour thicker with depth). Chunks carry it in `ChunkData.under` (rows + levels);
+  the regional aquatic blocks come from `region(..., under = true)`. Flat 2D pixel art.
+- The submerged view adds the water column (`Underwater.ambience`): sun shafts, marine snow in parallax, bubbles, a
+  depth vignette; swimmers drawn whole with a floor shadow; at the surface zooms submerged swimmers are dark shapes.
+  Diving / surfacing plays `Underwater.transition` (0.95 s). Two cyan dots mark the aquatic stops. Dev builds expose
+  `window.__surv` (camera, session, the game layer) for browser tests.
 
 ## Play mode & the cellular era (`src/lib/cell/`, `src/components/Cell/`)
 Owner's rules - keep them:
-- Menu: **"Jogar"** opens the era selection (`EraSelect`; only the cellular era is open, the others are shown locked
-  with the lineage's portraits: aquática, terrestre, animal tardio, tribal ... espacial); **"Explorar"** is the universe
+- Menu: **"Jogar"** opens the era screen (`EraSelect`, see "Play mode: the eras" below); **"Explorar"** is the universe
   exploration (the old "Jogar"). `#jogar`, `#celula` (editor) and `#celula-jogo` (straight into a game) open them.
 - **Cell editor** (`CellEditor`): species name (genus + species, dice), seed (dice), colour mode Earth-like /
   Alien-like as an option (it applies to the whole pool), shape, pattern and many appearance sliders (`look.ts`
@@ -425,3 +453,69 @@ Owner's rules - keep them:
   1.6 energy/s. The AI researches and builds them. **Wild titans** (neutral sets `NEUTRAL_SET + 7..11`) appear from
   ~2.5 min (up to 3), roam and attack any cell nearby; killing any titan gives 25 DNA. Titans get a health bar, a name
   tag and a minimap diamond (wild ones orange); power effects are sent as `fx` rings.
+
+## Play mode: the eras (`src/lib/game/`, `src/components/Play/`)
+Owner's rules - keep them:
+- **One lineage, one home planet, every era**: cell -> aquatic -> land -> tribal -> medieval -> classic -> industrial ->
+  modern -> contemporary -> futurist -> space (`game/eras.ts`). Winning an era moves the save on (`game/save.ts`
+  `advance`, localStorage `ugd:game`); `EraPlay` mounts the save's era (`#era` opens it). The cell era's victory
+  ("Era aquática ->") leads into the aquatic era; the land era's (sapience) into the campaign at the den.
+- Era screen (`EraSelect`): the save's progress (reached = check, current = star); the current era continues, any other
+  starts a new game there ("Começar aqui", to try every era); the cell card starts a new lineage (editor).
+- **Battle styles by era** (owner's design): after the tribal era the battles are **Total War style with formations**;
+  in the age of sail and muskets (classic) **line infantry** is the standard formation; from the industrial era
+  **trench warfare**; from the modern / WW2 era **Steel Division / WARNO** combined arms (`eras.ts` `battle`).
+- Every era is played in the planet's own view through the `GameLayer` plugin of `SurvivalView` (`game/layer.ts`:
+  sprites per terrain row, overlay, input, sight for the discovery fog, HUD); `cityLabels={false}` lets the campaign
+  draw its own banners. The planet is never named (home planet rules above).
+
+### Creature eras (`game/rts/`, `Play/CreatureEra.tsx`, `Play/rts/`)
+- RTS in a worker (`rts.worker.ts`, `sim.ts`) over the planet grid (`session.grid()`): the player's nation and 11 rival
+  species, castes drawn from the lineage genome (`lineageGenome` with param overrides), nests / dens that train,
+  sentinels, research, wild fauna from the planet (`wild.ts`, leviathans included), discovery fog from sight circles.
+- Aquatic: played in the underwater layer (start zoom aquatic gameplay); the nations' oxygen pushes the planet's life
+  stage live (`session.setLifeStage` + `refreshTerrain`); victory: the walking-fin research, a green coast and
+  amphibian sentinels on the shores -> land era. Land: dens, seasons, giants, sapience research -> tribal campaign.
+
+### Grand campaign (`game/campaign/`, `Play/campaign/`)
+- Turn based (one season per turn) on the home planet at the regional zooms (`CampaignLayer` in a `LayerHost`, which
+  swaps in the battle layer on the same view). **Nations of the one species**: the player's and up to 7 rivals, each
+  with a colour (dyed into the soldiers' clothes, `factionGenome`) and a structure culture (`factionCulture`: their war
+  machines); free towns to conquer. The capital is the city site (`citySites`) nearest to where the lineage lived,
+  preferring a landmass shared with other sites.
+- **Settlements are city-generator cities** (`planCity` with the settlement's own seed; re-planned when the owner's era
+  changes, `setCityLevel` follows the population), planned only once discovered (the planner shares the planet worker
+  with the terrain). Provinces: each land cell belongs to the settlement it is cheapest to reach from
+  (`CampaignWorld.buildRegions`), painted as a soft tint with vector borders, discovered cells only.
+- Armies (up to 12 regiments, `units.ts`) move per turn by A* over the planet grid (relief, forest, ice, desert, fords)
+  and over the sea (boats from the start, cheaper with canoes / navigation); hostile armies and settlements block their
+  surroundings; right click on an own army joins it; regiments split off from the army panel. Garrisons are armies
+  `at` a settlement; recruits join them.
+- Economy: gold from population and buildings minus upkeep, growth to a cap, research per era (`defs.ts`: six techs
+  and the advance, which needs `ADVANCE_NEED` of them): an advance moves the nation's era, **re-equips its regiments**
+  (`upgradeOf`) and re-plans its cities; the save's era follows the player's nation. Buildings carry era names.
+- **The end is the space era's colony ship** (tech "Nave colonial" -> shipyard in the capital -> 6 turns): the first
+  nation to launch it wins. Diplomacy: war / peace / alliance, relations, gifts, AI offers (peace, alliance,
+  tribute); allies join wars. AI turns (`aiTurn`): research, buildings, balanced recruiting, attacks on weaker
+  targets, defence, diplomacy; AI-vs-AI battles auto-resolve; an attack on the player opens the battle prompt.
+
+### Battles (`game/battle/sim.ts`, `Play/battle/`)
+- Real time on the terrain where the armies met (a siege is fought in the settlement's generated city, the attacker
+  must rout the defenders or hold the central square), the attack axis snapped to the 8 sprite facings. Units are the
+  campaign regiments; survivors (including those who fled) go back to the campaign (`battleOutcome`).
+- Soldiers stand in formation slots and march with an anchor that waits for them; melee locks soldier to soldier,
+  missiles fly as projectiles (arrows, javelins, bolts, musket balls, tracers, shells, bouncing round shot, rockets,
+  plasma, bombs); morale falls with losses, flanking, charges and suppression -> rout -> rally (or shatter).
+- Per style: **warband** (loose, wedge); **formation** (line, shield wall, wedge, pike brace - charges into braced pikes
+  fail - loose); **line** (two-rank volleys by rank with smoke, column, square against cavalry, skirmish, cannon round
+  shot); **trench** (both lines start in zigzag trenches behind barbed wire: cover, MG suppression, barrages that leave
+  craters, the assault formation going over the top); **combined** (a deck bought with command points during
+  deployment and as reinforcements, sectors A-E that give points and victory, fog of war by sight and recon, armour
+  penetration, indirect fire on a point, helicopters, air strikes crossing the enemy's AA).
+- Art: soldiers are the species wearing / holding their unit's loadout for the era (`units.ts` `load` -> equipment
+  generator; the sprite worker renders equipped sheets, `SpriteStore.getEquipped`) at the citizens' scale
+  (`SOLDIER_K` 0.32), with death animations (five kinds per battle, prefetched); mounts are the planet's biggest plain
+  land herbivore; guns, vehicles and aircraft come from the vehicle generator with the nation's culture (`WarArt`).
+- Controls (Total War): click / box / double click to select, right click to move or attack, right drag to draw the
+  line (width and facing), R run, F fire at will, G hold, H stop, space pause, speed 1-3x, automatic command, withdraw.
+

@@ -8,7 +8,7 @@ import type { Genome } from '../creature/genome';
 import { Stage } from '../creature/genome';
 import { Sketch, V3, ik3, FACINGS, DIR_SRC, Dir8, DIRS, Anim } from '../creature/pose';
 import type { Body, LoadHooks, Outfit } from '../creature/civ';
-import { spriteData, SpriteData } from '../creature/render';
+import { spriteData, SpriteData, type SheetData } from '../creature/render';
 import { makeKit } from '../creature/kit';
 import { makeDeath, Death, DEATH_FRAMES } from '../creature/death';
 import { mulberry, seedToInt } from '../terrain/noise';
@@ -231,6 +231,22 @@ export const loadKey = (L: Loadout) => JSON.stringify(L);
 export function equippedData(g: Genome, e: number, L: Loadout, dir: Dir8, anim: Anim, frames = 8, k = 1, death?: Death): SpriteData {
   if (death) return spriteData(g, eraStage(e), dir, 0, DEATH_FRAMES, 'die', k, hooksFor(g, e, L, death));
   return spriteData(g, eraStage(e), dir, 0, frames, anim, k, hooksFor(g, e, L));
+}
+
+/** a whole sheet of the equipped creature (rows = DIRS, like `spriteSheet`); deaths have DEATH_FRAMES frames */
+export function equippedSheet(g: Genome, e: number, L: Loadout, anim: Anim, k = 1, death?: Death, frames = 8): SheetData {
+  const sps = DIRS.map(d => equippedData(g, e, L, d, anim, frames, k, death));
+  const n = sps[0].frames.length;
+  const ax = Math.max(...sps.map(s => s.ax)), right = Math.max(...sps.map(s => s.w - s.ax));
+  const ay = Math.max(...sps.map(s => s.ay)), below = Math.max(...sps.map(s => s.h - s.ay));
+  const cw = ax + right, ch = ay + below;
+  const W = cw * n, H = ch * DIRS.length;
+  const data = new Uint8ClampedArray(W * H * 4);
+  sps.forEach((sp, row) => sp.frames.forEach((f, col) => {
+    const ox = col * cw + ax - sp.ax, oy = row * ch + ay - sp.ay;
+    for (let y = 0; y < sp.h; y++) data.set(f.subarray(y * sp.w * 4, (y + 1) * sp.w * 4), ((oy + y) * W + ox) * 4);
+  }));
+  return { data, cw, ch, ax, ay, frames: n, grounded: true };
 }
 
 /** display frame of an item alone (like an inventory icon) */

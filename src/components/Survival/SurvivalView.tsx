@@ -31,6 +31,7 @@ import { ERAS } from '../../lib/structure/genome';
 import type { Discovery } from '../../lib/play/discovery';
 import { drawFog } from '../../lib/play/fogPaint';
 import { Underwater } from './underwater';
+import type { GameLayer, GameDraw, GameFrame, WorldApi, PointerInfo } from '../../lib/game/layer';
 
 interface Props {
   session: PlanetSession;
@@ -48,15 +49,27 @@ interface Props {
   standby?: boolean;
   /** play mode: discovery fog over the unknown; `sight` = radius (tiles) revealed around the camera at gameplay zoom */
   discovery?: { fog: Discovery; sight: number } | null;
-  /** play mode, aquatic era: the local zooms look under the sea (seabed, water column), the far zoom is the surface */
+  /** play mode, aquatic era: zooming in past the closest surface stop over water dives into the underwater layer */
   aquatic?: boolean;
+  /** play mode: an era's game on top of the planet (units, buildings, orders, overlay, sight) */
+  game?: GameLayer | null;
+  /** play mode: the era's HUD, drawn over the view */
+  gameHud?: React.ReactNode;
+  /** no wild fauna of the planet (the era's game brings its own creatures) */
+  noFauna?: boolean;
+  /** zoom stop to start at (index in the surface ladder; negative = underwater) */
+  startZoom?: number;
+  /** draw the cities' own name pills / territories (the campaign draws its own banners) */
+  cityLabels?: boolean;
 }
 
 /** A drawable image: a GPU texture region (WebGL path) or a canvas (Canvas2D fallback). */
 interface Img { reg?: TexRegion; c?: HTMLCanvasElement; w: number; h: number }
-interface LoadedRow { y: number; h: number; img: Img; anim: Img[] | null; bed?: Img | null; bedAnim?: Img[] | null }
+interface LoadedRow { y: number; h: number; img: Img; anim: Img[] | null }
 interface LoadedChunk {
   data: ChunkData; rows: LoadedRow[]; mini: HTMLCanvasElement; lastUsed: number;
+  /** aquatic era: the underwater layer (its own relief) and its levels */
+  under: { rows: LoadedRow[]; level: Uint8Array } | null;
   byRow: Feature[][];   // features bucketed by local tile row, pre-sorted by y
   tex: WebGLTexture | null;
 }
@@ -72,10 +85,12 @@ interface LoadedChunk {
 const ZOOMS = [6, 5, 4, 3, 2, 1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64, 1 / 128, 1 / 256, 1 / 512, 1 / 1024, 0];
 const MIN_LOCAL_ZOOM = 1 / 4;
 /**
- * Aquatic era: zooming in past the closest gameplay stop while over water (sea, river, swamp) dives under it.
- * zoomIdx -1, -2, -3 are these submerged stops (their own scales; the dive transition hides the jump).
+ * Aquatic era: the world under the water is a whole layer of its own, with its own gameplay and regional zooms.
+ * Zooming in past the closest surface stop while over water (sea, river, swamp) dives into it: zoomIdx -1 is the
+ * widest underwater view (aquatic regional), -SUB_ZOOMS.length the closest (aquatic gameplay); zooming out of the
+ * widest one surfaces at the closest surface stop. The dive / surfacing transition hides the jump in scale.
  */
-const SUB_ZOOMS = [3, 4, 6];
+const SUB_ZOOMS = [6, 5, 4, 3, 2, 1, 1 / 2, 1 / 4, 1 / 8, 1 / 16, 1 / 32, 1 / 64, 1 / 128];
 type Lod = 'local' | 'far' | 'regional' | 'world';
 const lodOf = (z: number): Lod => (z >= 1 / 2 - 1e-9 ? 'local' : z >= 1 / 4 - 1e-9 ? 'far' : z >= 1 / 128 - 1e-9 ? 'regional' : 'world');
 /** levels drawn from the gameplay chunks */
@@ -99,8 +114,6 @@ interface Painter {
   flushShadows(): void;
   /** a sprite multiplied by a colour (premultiplied ABGR on the GPU; alpha only on the canvas fallback) */
   tint(c: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, col: number, alpha: number): void;
-  /** an image multiplied by a colour (the world above the water, seen from below) */
-  blitTint(im: Img, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number, col: number): void;
 }
 function canvasPainter(ctx: CanvasRenderingContext2D): Painter {
   let any = false;
@@ -114,7 +127,6 @@ function canvasPainter(ctx: CanvasRenderingContext2D): Painter {
     },
     flushShadows: () => { if (any) { ctx.fillStyle = 'rgba(8,12,6,0.28)'; ctx.fill(); any = false; } },
     tint: (c, sx, sy, sw, sh, dx, dy, _col, alpha) => { ctx.globalAlpha = alpha * 0.6; ctx.drawImage(c, sx, sy, sw, sh, dx, dy, sw, sh); ctx.globalAlpha = 1; },
-    blitTint: (im, sx, sy, sw, sh, dx, dy, dw, dh) => { ctx.drawImage(im.c!, sx, sy, sw, sh, dx, dy, dw, dh); ctx.fillStyle = 'rgba(5,11,18,0.9)'; ctx.fillRect(dx, dy, dw, dh); },
   };
 }
 const SHADOW_COL = rgba(8, 12, 6, 0.28);
@@ -125,7 +137,6 @@ function glPainter(gl: GLWorld, shadowTex: HTMLCanvasElement): Painter {
     shadow: (x, y, rx) => { const r = gl.atlas(shadowTex); gl.quad(r, 0, 0, r.w, r.h, x - rx * 0.75, y - rx * 0.38, rx * 2, rx * 0.76, SHADOW_COL); },
     flushShadows: () => { /* drawn immediately */ },
     tint: (c, sx, sy, sw, sh, dx, dy, col) => { const r = gl.atlas(c); gl.quad(r, sx, sy, sw, sh, dx, dy, sw, sh, col); },
-    blitTint: (im, sx, sy, sw, sh, dx, dy, dw, dh, col) => gl.quad(im.reg!, sx, sy, sw, sh, dx, dy, dw, dh, col),
   };
 }
 /** Pixel-art ellipse used for contact shadows on the GPU path. */
@@ -148,14 +159,13 @@ function canvasImg(px: Uint8ClampedArray, w: number, h: number): Img {
   c.getContext('2d')!.putImageData(new ImageData(px as Uint8ClampedArray<ArrayBuffer>, w, h), 0, 0);
   return { c, w, h };
 }
-/** Packs all terrain rows (and liquid animation frames) of a chunk into the columns of a single texture. */
-function packChunkRows(gl: GLWorld, data: ChunkData): { rows: LoadedRow[]; tex: WebGLTexture } {
+/** Packs all terrain rows (and liquid animation frames, and the underwater layer's) of a chunk into one texture. */
+function packChunkRows(gl: GLWorld, data: ChunkData): { rows: LoadedRow[]; under: LoadedRow[] | null; tex: WebGLTexture } {
   const items: { px: Uint8ClampedArray; h: number; col: number; y: number }[] = [];
-  for (const r of data.rows) {
+  const all = [...data.rows, ...(data.under?.rows ?? [])];
+  for (const r of all) {
     items.push({ px: r.px, h: r.h, col: 0, y: 0 });
     if (r.anim) for (const a of r.anim) items.push({ px: a, h: r.h, col: 0, y: 0 });
-    if (r.bed) items.push({ px: r.bed, h: r.h, col: 0, y: 0 });
-    if (r.bedAnim) for (const a of r.bedAnim) items.push({ px: a, h: r.h, col: 0, y: 0 });
   }
   let colH = 2048, cols = 1, usedH = 1;
   for (;;) {
@@ -175,15 +185,16 @@ function packChunkRows(gl: GLWorld, data: ChunkData): { rows: LoadedRow[]; tex: 
   for (const it of items) gl.upload(tex, it.col * CHUNK_PX, it.y, CHUNK_PX, it.h, it.px);
   const region = (it: typeof items[number]): Img => ({ reg: { tex, x: it.col * CHUNK_PX, y: it.y, w: CHUNK_PX, h: it.h, tw: TW, th: usedH }, w: CHUNK_PX, h: it.h });
   let k = 0;
-  const rows = data.rows.map(r => {
+  const load = (r: ChunkData['rows'][number]): LoadedRow => {
     const img = region(items[k++]);
     const anim = r.anim ? r.anim.map(() => region(items[k++])) : null;
-    const bed = r.bed ? region(items[k++]) : null;
-    const bedAnim = r.bedAnim ? r.bedAnim.map(() => region(items[k++])) : null;
-    return { y: r.y, h: r.h, img, anim, bed, bedAnim };
-  });
-  return { rows, tex };
+    return { y: r.y, h: r.h, img, anim };
+  };
+  const rows = data.rows.map(load);
+  const under = data.under ? data.under.rows.map(load) : null;
+  return { rows, under, tex };
 }
+const canvasRows = (rows: ChunkData['rows']): LoadedRow[] => rows.map(r => ({ y: r.y, h: r.h, img: canvasImg(r.px, CHUNK_PX, r.h), anim: r.anim ? r.anim.map(a => canvasImg(a, CHUNK_PX, r.h)) : null }));
 
 const DRY_GROUND = new Set<Ground>([Ground.SAND, Ground.RED_SAND, Ground.DIRT, Ground.DRY_GRASS, Ground.GRAVEL, Ground.ASH, Ground.REGOLITH, Ground.SALT_FLAT]);
 
@@ -200,7 +211,7 @@ const PLAYER_K = CITIZEN_K;
 const REACH = 26;
 const SPEED = 74;
 
-export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null, standby = false, discovery = null, aquatic = false }: Props) {
+export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: spectatorProp = false, playerCreature = null, cinematic = null, standby = false, discovery = null, aquatic = false, game = null, gameHud = null, noFauna = false, startZoom, cityLabels = true }: Props) {
   const cine = cinematic;
   const spectator = spectatorProp || !!cine;
   /** spectator mode can drop in as a citizen of one of its cities (and leave again) */
@@ -255,7 +266,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   // wildlife: 200+ species for living worlds, sprites rendered by workers on demand
   const store = useMemo(() => new SpriteStore(), []);
   useEffect(() => () => store.dispose(), [store]);
-  const fauna = useMemo(() => new Fauna(planetFauna(cfg), store, cfg.seed, lifeStageOf(cfg)), [cfg, store]);
+  const fauna = useMemo(() => new Fauna(noFauna ? [] : planetFauna(cfg), store, cfg.seed, lifeStageOf(cfg)), [cfg, store, noFauna]);
+  const gameRef = useRef(game);
+  gameRef.current = game;
+  /** the underwater layer is on screen (read by the input handlers) */
+  const subRef = useRef(false);
   const citizens = useMemo(() => new Citizens(store), [store]);
   // vehicles and ships (rendered by a small pool of vehicle workers, created on first use)
   const vpoolRef = useRef<StructPool | null>(null);
@@ -338,8 +353,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       poolCenter.current = { x: mapX, y: mapY };
       G.current.x = tx * TILE + TILE / 2;
       G.current.y = ty * TILE + TILE / 2;
-      G.current.zoomIdx = ZOOMS.indexOf(window.innerWidth < 700 ? 2 : 3);
-      G.current.zoomView = ZOOMS[G.current.zoomIdx];
+      G.current.zoomIdx = startZoom ?? ZOOMS.indexOf(window.innerWidth < 700 ? 2 : 3);
+      G.current.zoomView = zoomTarget();
       setLoading('Gerando terreno…');
       // spin up one terrain worker per spare CPU core
       session.terrainPool(mapX, mapY).then(pool => {
@@ -399,10 +414,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         const old = g.chunks.get(key);
         if (old?.tex) glRef.current?.deleteTexture(old.tex);
         const gl = glRef.current;
-        let rows: LoadedRow[], tex: WebGLTexture | null = null;
-        if (gl) ({ rows, tex } = packChunkRows(gl, data));
-        else rows = data.rows.map(r => ({ y: r.y, h: r.h, img: canvasImg(r.px, CHUNK_PX, r.h), anim: r.anim ? r.anim.map(a => canvasImg(a, CHUNK_PX, r.h)) : null,
-          bed: r.bed ? canvasImg(r.bed, CHUNK_PX, r.h) : null, bedAnim: r.bedAnim ? r.bedAnim.map(a => canvasImg(a, CHUNK_PX, r.h)) : null }));
+        let rows: LoadedRow[], underRows: LoadedRow[] | null = null, tex: WebGLTexture | null = null;
+        if (gl) ({ rows, under: underRows, tex } = packChunkRows(gl, data));
+        else { rows = canvasRows(data.rows); underRows = data.under ? canvasRows(data.under.rows) : null; }
+        const under = underRows && data.under ? { rows: underRows, level: data.under.level } : null;
+        if (data.under) data.under.rows = [];
         const byRow: Feature[][] = Array.from({ length: CHUNK }, () => []);
         for (const f of data.features) byRow[Math.max(0, Math.min(CHUNK - 1, Math.floor(f.y / TILE) - data.cy * CHUNK))].push(f);
         for (const b of byRow) b.sort((a, b2) => (a.t === Feat.LILY_PAD ? a.y - 100 : a.y) - (b2.t === Feat.LILY_PAD ? b2.y - 100 : b2.y));
@@ -410,7 +426,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         const mini = document.createElement('canvas');
         mini.width = CHUNK; mini.height = CHUNK;
         mini.getContext('2d')!.putImageData(new ImageData(data.mini as Uint8ClampedArray<ArrayBuffer>, CHUNK, CHUNK), 0, 0);
-        g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow, tex });
+        g.chunks.set(key, { data, rows, mini, lastUsed: performance.now(), byRow, tex, under });
         if (!old) fauna.spawnChunk(data.cx, data.cy, world);
         const zv = Math.max(window.innerWidth, window.innerHeight) / 2 / Math.max(MIN_LOCAL_ZOOM, G.current.zoomView) / CHUNK_PX + 2;
         const cap = Math.max(cine ? 150 : 64, Math.ceil((2 * zv + 1) ** 2) + 16);
@@ -440,6 +456,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     if (!cc) return false;
     const gr = cc.c.data.ground[cc.k];
     return gr === Ground.DEEP_WATER || gr === Ground.SHALLOW_WATER || gr === Ground.RIVER_WATER || gr === Ground.SWAMP_WATER;
+  };
+  /** height (screen px) of the underwater floor at a world point (aquatic era) */
+  const underLiftAt = (wx: number, wy: number): number | null => {
+    const q = cellAt(wx, wy);
+    return q && q.c.under ? q.c.under.level[q.k] * LIFT : null;
   };
   const groundAt = (wx: number, wy: number): Ground | null => {
     const q = cellAt(wx, wy);
@@ -550,6 +571,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
+      const gm = gameRef.current;
+      if (gm?.key && gm.key(e.key.toLowerCase(), true, e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
       if (e.key === 'Escape') { e.stopImmediatePropagation(); e.preventDefault(); if (bagOpen) setBagOpen(false); else if (cityPickRef.current) setCityPick(false); else if (avatarRef.current) setAvatar(null); else onExit(); return; }
       if (cine) return;
       const k = e.key.toLowerCase();
@@ -562,7 +585,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       if (k === '=' || k === '+' || k === 'z') zoomStep(-1);
       e.stopImmediatePropagation();
     };
-    const up = (e: KeyboardEvent) => { G.current.keys.delete(e.key.toLowerCase()); };
+    const up = (e: KeyboardEvent) => { G.current.keys.delete(e.key.toLowerCase()); gameRef.current?.key?.(e.key.toLowerCase(), false, e); };
     window.addEventListener('keydown', down, true);
     window.addEventListener('keyup', up, true);
     return () => { window.removeEventListener('keydown', down, true); window.removeEventListener('keyup', up, true); };
@@ -572,7 +595,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   /** Current zoom target in CSS px per world px (the last stop fits the whole planet on screen). */
   const zoomTarget = () => {
     const g = G.current;
-    if (g.zoomIdx < 0) return SUB_ZOOMS[Math.min(SUB_ZOOMS.length, -g.zoomIdx) - 1];
+    if (g.zoomIdx < 0) return SUB_ZOOMS[Math.max(0, SUB_ZOOMS.length + g.zoomIdx)];
     const z = ZOOMS[g.zoomIdx];
     if (z) return z;
     const c = canvasRef.current;
@@ -652,6 +675,20 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       if (w.y >= top && w.y < top + TILE) return { tx, ty: r };
     }
     return { tx, ty: r0 };
+  };
+  /** ground point under a screen point (CSS px) in the layer on screen (surface terraces or the underwater relief) */
+  const groundAtScreen = (sx: number, sy: number) => {
+    const w = screenToWorld(sx, sy);
+    if (!chunked(lodOf(G.current.zoomView))) return { x: w.x, y: w.y };
+    const sub = subRef.current, r0 = Math.floor(w.y / TILE);
+    for (let r = r0 + MAX_LEVEL; r >= r0; r--) {
+      const q = cellAt(w.x, r * TILE + TILE / 2);
+      if (!q) continue;
+      const L = sub ? (q.c.under ? q.c.under.level[q.k] : 0) : q.c.data.level[q.k];
+      const top = r * TILE - L * LIFT;
+      if (w.y >= top && w.y < top + TILE) return { x: w.x, y: r * TILE + (w.y - top) };
+    }
+    return { x: w.x, y: w.y };
   };
   const generateCity = async (tx: number, ty: number, era: number, evo: number, id?: number) => {
     const prev = id !== undefined ? session.cities.get(id)?.plan.meta.bbox : undefined;
@@ -761,7 +798,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
   // ---------------------------------------------------------------------------
   useEffect(() => {
     aliveRef.current = true;
-    if (import.meta.env.DEV) (window as unknown as { __surv?: unknown }).__surv = { G, waterAt, session };   // browser tests
+    if (import.meta.env.DEV) (window as unknown as { __surv?: unknown }).__surv = { G, waterAt, session, game };   // browser tests
     const canvas = canvasRef.current!;
     const overlay = overlayRef.current!;
     // WebGL2 batched renderer; Canvas2D only as a fallback for browsers without it
@@ -815,8 +852,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     let subNow = false, prevSub: boolean | null = null, seaFrac = 0, seaSampleT = 0;
     let waterRGB: [number, number, number] | null = null;
     const SILHOUETTE = rgba(10, 28, 44, 0.5);
-    /** multiplier that turns what is above the water into a dark shape (submerged view) */
-    const ABOVE = rgba(26, 44, 64, 1);
+    let subLift = 0;
     const regions = new Map<string, RegionBlock>();
     const regionPending = new Set<string>();
     const freeSlots: number[] = [];
@@ -831,7 +867,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       for (let by = Math.floor(y0 / spanPx); by <= Math.floor(y1 / spanPx); by++) {
         if (by * span >= worldTilesY || (by + 1) * span <= 0) continue;
         for (let bx = Math.floor(x0 / spanPx); bx <= Math.floor(x1 / spanPx); bx++) {
-          const k = `${step}:${bx}:${by}`;
+          const k = `${subNow ? 'u' : 's'}${step}:${bx}:${by}`;
           const hit = regions.get(k);
           if (hit) { hit.lastUsed = performance.now(); continue; }
           if (regionPending.has(k)) continue;
@@ -841,11 +877,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       want.sort((a, b) => a[2] - b[2]);
       for (const [bx, by] of want) {
         if (regionPending.size >= (pool ? pool.size * 2 : 2)) break;
-        const k = `${step}:${bx}:${by}`;
+        const k = `${subNow ? 'u' : 's'}${step}:${bx}:${by}`;
         regionPending.add(k);
         const gen0 = regionGen;
         // the parallel workers only hold a window of the planet: outside it, the session worker samples the block
-        const job = pool && pool.coversTile(bx * span + span / 2, by * span + span / 2) ? pool.region(bx * span, by * span, step, REGION_N) : session.region(bx * span, by * span, step, REGION_N);
+        const job = pool && pool.coversTile(bx * span + span / 2, by * span + span / 2) ? pool.region(bx * span, by * span, step, REGION_N, subNow) : session.region(bx * span, by * span, step, REGION_N, subNow);
         job.then(px => {
           regionPending.delete(k);
           if (!aliveRef.current || gen0 !== regionGen) return;
@@ -871,9 +907,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }).catch(() => regionPending.delete(k));
       }
     };
-    /** cities changed (plan, evolution, zone colours): sampled blocks are redrawn */
+    /** cities changed (plan, evolution, zone colours) or the layer changed (surface / underwater): blocks are redrawn */
     const refreshRegions = () => {
-      const sig = [...session.cities.values()].reduce((a, c) => a + c.p + c.plan.meta.id * 1000 + c.plan.meta.era * 7, session.cities.size * 13) + (zonesHiddenRef.current ? 0.5 : 0);
+      const sig = [...session.cities.values()].reduce((a, c) => a + c.p + c.plan.meta.id * 1000 + c.plan.meta.era * 7, session.cities.size * 13) + (zonesHiddenRef.current ? 0.5 : 0) + (subNow ? 0.25 : 0);
       if (sig === regionGenSeen) return;
       regionGenSeen = sig; regionGen++;
       for (const b of regions.values()) if (b.slot >= 0) freeSlots.push(b.slot);
@@ -885,7 +921,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       for (const c of G.current.chunks.values()) {
         const bx = c.data.cx * CHUNK_PX, by = c.data.cy * CHUNK_PX;
         if (bx > x1 || bx + CHUNK_PX < x0 || by > y1 + MAX_LEVEL * LIFT || by + CHUNK_PX < y0) continue;
-        for (const row of c.rows) p.blit(row.img, 0, 0, row.img.w, row.img.h, bx, row.y, row.img.w, row.img.h);
+        for (const row of (subNow && c.under ? c.under.rows : c.rows)) p.blit(row.img, 0, 0, row.img.w, row.img.h, bx, row.y, row.img.w, row.img.h);
       }
     };
     const drawRegions = (p: Painter, step: number, x0: number, y0: number, x1: number, y1: number) => {
@@ -933,14 +969,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const drawAnimal = (d: AnimalDraw) => {
         const sh = d.sheet;
         const swimmer = aquatic && d.a.sp.habitat === 'water';
-        if (subNow && !swimmer) {
-          // land animals and fliers: dark shapes above the water
-          p.tint(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.x - sh.ax), Math.round(d.y - sh.ay), ABOVE, 1);
-          return;
-        }
-        if (swimmer && subNow) {
-          // under the sea: the whole body, gliding a little above its shadow on the floor
-          p.sprite(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.x - sh.ax), Math.round(d.y - sh.ay - 6));
+        if (subNow) {
+          // under the water: the whole body, gliding above its shadow on the floor (land animals are not down here)
+          if (!swimmer) return;
+          const lift = underLiftAt(d.a.x, d.a.y) ?? 0;
+          p.sprite(sh.canvas, d.frame * sh.cw, d.row * sh.ch, sh.cw, sh.ch, Math.round(d.a.x - sh.ax), Math.round(d.a.y - lift - sh.ay - 10));
           return;
         }
         if (swimmer && d.clip > 0.35) {
@@ -969,10 +1002,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         for (let k = 0; k < rowChunks.length; k++) {
           const c = rowChunks[k];
           if (!c) continue;
-          const row = c.rows[j];
+          const row = subNow ? c.under?.rows[j] : c.rows[j];
           if (!row) continue;
-          if (subNow && !row.bed) { p.blitTint(row.img, 0, 0, row.img.w, row.img.h, (cx0 + k) * CHUNK_PX, row.y, row.img.w, row.img.h, ABOVE); continue; }
-          const im = subNow && row.bed ? (row.bedAnim ? row.bedAnim[liquidFrame] : row.bed) : row.anim ? row.anim[liquidFrame] : row.img;
+          const im = row.anim ? row.anim[liquidFrame] : row.img;
           p.blit(im, 0, 0, im.w, im.h, (cx0 + k) * CHUNK_PX, row.y, im.w, im.h);
         }
         // 2. contact shadows of this row
@@ -987,10 +1019,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
         }
         if (r === prow) p.shadow(g.x - 0.5, g.y - g.lift, 6);
+        const rowGame = gameRows.get(r);
+        if (rowGame) for (const d of rowGame) if (d.shadow) p.shadow(d.x, d.shadowY ?? d.y, d.shadow);
         const rowAnimals = animals.get(r);
         if (rowAnimals) for (const d of rowAnimals) {
           if (d.clip === 0 && !subNow) p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY, Math.max(3, d.sheet.cw * 0.28));
-          else if (subNow && aquatic && d.a.sp.habitat === 'water') p.shadow(d.x - d.sheet.cw * 0.05, d.shadowY + 4, Math.max(3, d.sheet.cw * 0.24));
+          else if (subNow && aquatic && d.a.sp.habitat === 'water') p.shadow(d.a.x - d.sheet.cw * 0.05, d.a.y - (underLiftAt(d.a.x, d.a.y) ?? 0), Math.max(3, d.sheet.cw * 0.24));
         }
         p.flushShadows();
         let ai = 0;
@@ -1000,16 +1034,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           const c = rowChunks[k];
           if (!c) continue;
           for (const f of c.byRow[j]) {
-            if (f.x < fx0 || f.x > fx1 || g.taken.has(f.id) || (farNow && SMALL_FEATS.has(f.t))) continue;
-            const aboveW = subNow && !waterAt(f.x, f.y);
-            if (subNow && !aboveW && f.t === Feat.LILY_PAD) continue;
+            if (subNow || f.x < fx0 || f.x > fx1 || g.taken.has(f.id) || (farNow && SMALL_FEATS.has(f.t))) continue;
             while (rowAnimals && ai < rowAnimals.length && rowAnimals[ai].a.y < f.y && f.t !== Feat.LILY_PAD) drawAnimal(rowAnimals[ai++]);
             if (!playerDone && f.y > g.y && f.t !== Feat.LILY_PAD) { drawPlayer(); playerDone = true; }
             if (stop && r === stop.row && f.y > stop.y) continue;
             const s = bank.get(f.t, f.v, g.picked.has(f.id));
             const W = s.c.width, H = s.c.height;
             const x = f.x - s.ax, y = f.y - f.l * LIFT - s.ay;
-            if (aboveW) { p.tint(s.c, 0, 0, W, H, x, y, ABOVE, 1); continue; }
             if (TREES.has(f.t)) {
               // canopy sways in the wind, trunk stays rooted
               const dx = Math.round(fx.sway(t, f.x, f.y, 1.4));
@@ -1026,7 +1057,12 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
         }
         if (rowAnimals) while (ai < rowAnimals.length) drawAnimal(rowAnimals[ai++]);
-        if (!playerDone) drawPlayer();
+        if (!playerDone && !subNow) drawPlayer();
+        if (rowGame) for (const d of rowGame) {
+          if (d.tint !== undefined) p.tint(d.c, d.sx, d.sy, d.w, d.h, Math.round(d.x - d.ax), Math.round(d.y - d.ay), d.tint, 1);
+          else p.sprite(d.c, d.sx, d.sy, d.w, d.h, Math.round(d.x - d.ax), Math.round(d.y - d.ay));
+        }
+        if (subNow) continue;
         const rowCit = citRows.get(r);
         if (rowCit) for (const c of rowCit) p.sprite(c.sheet.canvas, c.frame * c.sheet.cw, c.row * c.sheet.ch, c.sheet.cw, c.sheet.ch, Math.round(c.x - c.sheet.ax), Math.round(c.y - c.sheet.ay));
         const rowVeh = vehRows.get(r);
@@ -1117,7 +1153,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     const loadDesign = (key: string, plan: CityPlan, b: CityBuilding, prio: number) => {
       spool ??= new StructPool();
       const job = spool.request(key, { culture: plan.meta.culture, type: b.type, size: b.size, era: plan.meta.era, variant: b.variant, night: false }, b.dir, CITY_K, CITY_FRAMES, prio);
-      if (!job) return;
+      if (!job) return null;
       const d: Design = { img: null, tex: null, fw: 0, fh: 0, ax: 0, ay: 0, cols: 1, used: performance.now() };
       designs.set(key, d);
       job.then(sd => {
@@ -1139,6 +1175,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }
         d.fw = sd.w; d.fh = sd.h; d.ax = sd.ax; d.ay = sd.ay; d.cols = cols;
       });
+      return job;
     };
     /** Buildings in view, bucketed by the row that paints them; missing designs are queued nearest first. */
     const collectBuildings = (x0: number, x1: number, y0: number, y1: number, cx: number, cy: number) => {
@@ -1169,14 +1206,53 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }
       for (const l of cityRows.values()) l.sort((a, c) => a.b.x - c.b.x);
       // forget designs nobody looked at for a while (their textures are big)
-      if (now - evictT > 2000 && designs.size > 140) {
+      // (a film keeps the designs it rendered ahead for its later shots)
+      const cap = cine ? 900 : 140;
+      if (now - evictT > 2000 && designs.size > cap) {
         evictT = now;
-        for (const [k, d] of [...designs.entries()].sort((a, c) => a[1].used - c[1].used).slice(0, designs.size - 120)) {
+        for (const [k, d] of [...designs.entries()].sort((a, c) => a[1].used - c[1].used).slice(0, designs.size - (cap - 20))) {
           if (now - d.used < 3000) continue;
           if (d.tex) gl?.deleteTexture(d.tex);
           designs.delete(k);
         }
       }
+    };
+
+    /** a scripted camera's next place: its buildings' designs start rendering before the cut */
+    const warmBuildings = (x0: number, x1: number, y0: number, y1: number, cx: number, cy: number) => {
+      if (!session.cities.size) return;
+      reindex();
+      const now = performance.now(), g = G.current;
+      for (let qy = Math.floor(y0 / CHUNK_PX); qy <= Math.floor(y1 / CHUNK_PX); qy++)
+        for (let qx = Math.floor(x0 / CHUNK_PX); qx <= Math.floor(x1 / CHUNK_PX); qx++) {
+          const list = bIndex.get(`${qx},${qy}`);
+          if (!list || !g.chunks.has(`${qx},${qy}`)) continue;
+          for (const { b, id, plan } of list) {
+            const p = session.cities.get(id)?.p;
+            if (p === undefined || b.stage > p) continue;
+            const key = `${plan.meta.culture.seed}|${plan.meta.era}|${b.type}|${b.size}|${b.variant}|${b.dir}`;
+            const d = designs.get(key);
+            const prio = 4000 + Math.hypot(b.x - cx, b.y - cy);
+            if (!d) loadDesign(key, plan, b, prio); else d.used = now;
+          }
+        }
+    };
+
+    /** a film's city shots: every building in their frames is rendered before it rolls (no chunk needed) */
+    let warmLeft = 0, warmAsked = false;
+    const warmCine = () => {
+      if (warmAsked || !cine?.warm || !session.cities.size) return;
+      warmAsked = true;
+      const rects = cine.warm();
+      rects.forEach((r, i) => {
+        for (const [, c] of session.cities) for (const b of c.plan.buildings) {
+          if (b.stage > c.p || b.x < r.x0 || b.x > r.x1 || b.y < r.y0 || b.y > r.y1) continue;
+          const key = `${c.plan.meta.culture.seed}|${c.plan.meta.era}|${b.type}|${b.size}|${b.variant}|${b.dir}`;
+          if (designs.has(key)) continue;
+          const job = loadDesign(key, c.plan, b, 6000 + i * 1500 + Math.hypot(b.x - (r.x0 + r.x1) / 2, b.y - (r.y0 + r.y1) / 2));
+          if (job) { warmLeft++; job.finally(() => { warmLeft--; }); }
+        }
+      });
     };
 
     const maskCache = new Map<number, HTMLCanvasElement>();
@@ -1331,7 +1407,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
 
     // --- demo reel: the director drives camera, clock and weather ---
     fx.lantern = !cine;
-    let cineFade = cine ? 1 : 0, cineZoom = 3, cineWeather = '';
+    let cineFade = cine ? 1 : 0, cineZoom = 3, cineWeather = '', cineSub = false, cineFauna = true;
     const cineApi: CineApi = {
       loaded: (x, y, zoom) => {
         if (!chunked(lodOf(zoom))) return !!mapImg;
@@ -1349,10 +1425,47 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       },
       animals: () => fauna.all,
       pending: () => G.current.pending.size,
+      warming: () => { warmCine(); return warmLeft; },
       get worldZoom() {
         return Math.min(canvas.clientWidth / WORLD_PX, canvas.clientHeight / (WORLD_PX * (session.height / session.width))) * 0.92;
       },
     };
+
+    // --- play mode: the era's game layer ---
+    const gm = gameRef.current;
+    let gameRows = new Map<number, GameDraw[]>();
+    let sightT = 0;
+    const api: WorldApi = {
+      session, store, fx,
+      tile: (wx, wy) => {
+        const q = cellAt(wx, wy);
+        if (!q) return null;
+        const d = q.c.data, gr = d.ground[q.k] as Ground, info = GROUND_INFO[gr];
+        return { ground: gr, water: !!info.water, deep: gr === Ground.DEEP_WATER, level: d.level[q.k], under: q.c.under ? q.c.under.level[q.k] : null, blocking: !!info.blocking, biome: d.biome[q.k], zone: d.zone ? d.zone[q.k] : 0 };
+      },
+      liftAt: (wx, wy) => liftAt(wx, wy),
+      underLiftAt: (wx, wy) => underLiftAt(wx, wy),
+      groundAt: (sx, sy) => groundAtScreen(sx, sy),
+      camera: () => { const g = G.current; return { x: g.x, y: g.y, zoom: g.zoomView, zoomIdx: g.zoomIdx, sub: subNow, lod: lodOf(g.zoomView) }; },
+      jump: (x, y, zi) => {
+        const g = G.current;
+        g.x = x; g.y = y;
+        if (zi !== undefined) { const was = g.zoomIdx; g.zoomIdx = zi; if ((was < 0) !== (zi < 0)) g.zoomView = zoomTarget(); }
+      },
+      flash: msg => flash(msg),
+      refreshTerrain: () => {
+        const g = G.current;
+        g.cityGen++;
+        for (const key of g.chunks.keys()) g.staleGen.set(key, g.cityGen);
+        regionGen++;
+        for (const b of regions.values()) if (b.slot >= 0) freeSlots.push(b.slot);
+        regions.clear();
+        poolRef.current?.clearRegions();
+        mapImg = null; mapLoading = false;
+      },
+      citiesChanged: () => { markStale(...[...session.cities.values()].map(c => c.plan.meta.bbox)); refreshCities(); },
+    };
+    gm?.attach(api);
 
     let fpsFrames = 0, fpsT = performance.now(), cpuAcc = 0, last0 = 0;
     const frame = (now: number) => {
@@ -1364,7 +1477,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const DW = Math.round(W * dpr), DH = Math.round(H * dpr);
       if (canvas.width !== DW || canvas.height !== DH) { canvas.width = DW; canvas.height = DH; }
       if (overlay.width !== DW || overlay.height !== DH) { overlay.width = DW; overlay.height = DH; }
-      if (!freeRef.current || chunked(lodOf(g.zoomView))) requestChunks();
+      if (!freeRef.current || chunked(lodOf(g.zoomView)) || !g.ready) requestChunks();
       // keep the worker field window under the camera / player
       if (g.ready && Math.floor(now / 1000) !== Math.floor(last0 / 1000)) {
         const mpx = g.x / TILE / (WORLD_TILES_X / session.width), mpy = g.y / TILE / (WORLD_TILES_X / session.width);
@@ -1381,7 +1494,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
 
       if (cine && (g.x || g.y)) {
         const cam = cine.update(dt, cineApi);
-        g.x = cam.x; g.y = cam.y; cineZoom = cam.zoom; cineFade = cam.fade;
+        g.x = cam.x; g.y = cam.y; cineZoom = cam.zoom; cineFade = cam.fade; cineSub = !!cam.sub; cineFauna = cam.fauna !== false;
         preloadRef.current = cam.preload ?? null;
         if (cam.hour !== undefined) g.time = ((((cam.hour / 24) % 1) + 1) % 1) * DAY_SECONDS;
         // hard cuts: the new weather is there at once
@@ -1458,8 +1571,9 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       if (lod !== lodShown || (!cine && zt !== zoomShown)) { lodShown = lod; zoomShown = zt; setLodLabel({ lod, zoom: zt, sub: aquatic && g.zoomIdx < 0 }); }
       const local = chunked(lod), far = lod === 'far', regional = lod === 'regional';
       farNow = far;
-      subNow = aquatic && g.zoomIdx < 0 && !cine;
-      if (aquatic && prevSub !== null && subNow !== prevSub) uw.trans = { up: !subNow, t0: now / 1000 };
+      // a scripted camera picks the layer itself (hard cuts: no dive animation)
+      subNow = aquatic && (cine ? cineSub : g.zoomIdx < 0);
+      if (aquatic && prevSub !== null && subNow !== prevSub) { if (!cine) uw.trans = { up: !subNow, t0: now / 1000 }; if (subNow) subLift = underLiftAt(g.x, g.y) ?? subLift; }
       prevSub = subNow;
       fx.underwater = subNow && seaFrac > 0.5;
       if (standbyRef.current) { raf = requestAnimationFrame(frame); return; }
@@ -1479,7 +1593,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       // --- camera ---
       const S = Z * dpr;
       const [shx, shy] = local ? fx.shake() : [0, 0];
-      let camYw = g.y - g.lift - 8 + shy;
+      if (subNow) { const ul = underLiftAt(g.x, g.y); if (ul !== null) subLift += (ul - subLift) * Math.min(1, dt * 6); }
+      let camYw = g.y - (subNow ? subLift : g.lift) - 8 + shy;
       if (!local) {
         // keep the planet's surface filling the screen vertically (poles stay at the edges)
         const worldH = WORLD_PX * (session.height / session.width), halfH = H / Z / 2;
@@ -1508,6 +1623,21 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       }
       const day = (g.time / DAY_SECONDS) % 1;
       const sun = Math.sin((day - 0.25) * Math.PI * 2);
+
+      subRef.current = subNow;
+      let gf: GameFrame | null = null;
+      gameRows = new Map();
+      if (gm && g.ready) {
+        gf = { dt, t, now, S, tx0, ty0, dpr, DW, DH, toScreen, view: { x0, y0, x1, y1 }, lod, sub: subNow, zoom: Z, cam: { x: camX, y: camY } };
+        gm.update(gf);
+        if (local) for (const d of gm.collect(gf)) {
+          const rr = Math.floor(d.gy / TILE);
+          let l = gameRows.get(rr);
+          if (!l) gameRows.set(rr, l = []);
+          l.push(d);
+        }
+        for (const l of gameRows.values()) l.sort((a, b) => a.gy - b.gy);
+      }
 
       let fxc: FxContext | null = null;
       if (local) {
@@ -1578,8 +1708,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const lensX = g.x, lensY = g.y - g.lift - 10;
       const lensStop = { row: Math.floor(g.y / TILE), y: g.y };
 
-      animalDraws = local && g.ready ? fauna.collect(x0, y0, x1, y1) : [];
+      animalDraws = local && g.ready && cineFauna ? fauna.collect(x0, y0, x1, y1) : [];
       if (local && g.ready) collectBuildings(x0, x1, y0, y1, g.x, g.y); else { cityRows = new Map(); cityRowMax = -1e9; }
+      const pre = preloadRef.current;
+      if (cine && pre && g.ready) { const hw = (x1 - x0) / 2, hh = (y1 - y0) / 2; warmBuildings(pre.x - hw, pre.x + hw, pre.y - hh, pre.y + hh, pre.x, pre.y); }
       citRows = new Map();
       if (local && g.ready && session.cities.size) {
         citizens.update(dt, session.cities, { x0, y0, x1, y1 }, (x, y) => !!chunkAt(x, y), Math.random);
@@ -1662,7 +1794,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       const fogPass = () => {
         if (!discovery || !g.ready || cine) return;
         const cellW = WORLD_PX / session.width;
-        if (chunked(lod)) discovery.fog.reveal(g.x / cellW, g.y / cellW, (discovery.sight * TILE) / cellW);
+        if (gm?.sight) {
+          // the era's creatures (and buildings) see, not the camera
+          if (now - sightT > 200) { sightT = now; for (const c of gm.sight()) discovery.fog.reveal(c.x / cellW, c.y / cellW, c.r / cellW); }
+        } else if (chunked(lod)) discovery.fog.reveal(g.x / cellW, g.y / cellW, (discovery.sight * TILE) / cellW);
         drawFog(octx, discovery.fog, DW, DH, S, tx0, ty0, cellW, dpr);
       };
       if (local && fxc) {
@@ -1709,7 +1844,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         if (subNow) uw.ambience(octx, DW, DH, S, tx0, ty0, t, seaFrac, Math.max(0, Math.min(1, sun + 0.2)), dpr);
         fx.drawScreen(octx, DW, DH, S, fxc, toScreen);
         fogPass();
-        if (spectator && !cine && !avatarRef.current) drawCityLabels(toScreen, dpr, S, false, DW);
+        if (spectator && !cine && !avatarRef.current && cityLabels) drawCityLabels(toScreen, dpr, S, false, DW);
         else cityHits.current = [];
       } else if (g.ready && !cine) {
         if (regional) {
@@ -1740,8 +1875,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           }
           octx.stroke();
         }
-        if (spectator || regional) { drawLinks(toScreen, dpr); drawCityLabels(toScreen, dpr, S, true, DW, regional); }
+        if (spectator || regional) { drawLinks(toScreen, dpr); if (cityLabels) drawCityLabels(toScreen, dpr, S, true, DW, regional); else cityHits.current = []; }
       }
+
+      if (gm && gf) { octx.setTransform(1, 0, 0, 1, 0, 0); gm.overlay(octx, gf); octx.setTransform(1, 0, 0, 1, 0, 0); }
 
       // surfacing / diving between the submerged and the surface zooms
       if (uw.trans) {
@@ -1822,6 +1959,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
     raf = requestAnimationFrame(frame);
     return () => {
       cancelAnimationFrame(raf);
+      gm?.detach?.();
       spool?.dispose();
       for (const d of designs.values()) if (d.tex) gl?.deleteTexture(d.tex);
       designs.clear();
@@ -1832,12 +1970,24 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       glRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bank, player, fx, fauna, store, playerCreature]);
+  }, [bank, player, fx, fauna, store, playerCreature, game]);
 
   // ---------------------------------------------------------------------------
   // Touch joystick
   // ---------------------------------------------------------------------------
   const joyRef = useRef<{ id: number; ox: number; oy: number } | null>(null);
+  /** play mode: pointer events for the era's game (double clicks detected here) */
+  const lastDown = useRef({ t: 0, x: 0, y: 0 });
+  const ptrInfo = (e: React.PointerEvent, down = false): PointerInfo => {
+    const sx = e.nativeEvent.offsetX, sy = e.nativeEvent.offsetY, w = groundAtScreen(sx, sy);
+    let dbl = false;
+    if (down) {
+      const L = lastDown.current, now = performance.now();
+      dbl = now - L.t < 320 && Math.hypot(sx - L.x, sy - L.y) < 8;
+      lastDown.current = { t: dbl ? 0 : now, x: sx, y: sy };
+    }
+    return { sx, sy, wx: w.x, wy: w.y, button: e.button, shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey, dbl };
+  };
   const [joyVis, setJoyVis] = useState<{ ox: number; oy: number; x: number; y: number } | null>(null);
 
   const itemIcon = (it: ItemDef) => <ItemIcon def={it} bank={bank} />;
@@ -1854,8 +2004,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         ref={canvasRef}
         className="absolute inset-0 w-full h-full touch-none"
         style={{ imageRendering: 'pixelated', cursor: free && !cityPick ? (dragRef.current ? 'grabbing' : 'grab') : 'crosshair' }}
+        onContextMenu={e => { if (game) e.preventDefault(); }}
         onPointerMove={e => {
           if (e.pointerType === 'mouse') G.current.mouse = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY };
+          if (game) game.pointerMove?.(ptrInfo(e));
           const d = dragRef.current;
           if (d && d.id === e.pointerId) {
             // drag the terrain under the cursor: one screen pixel = 1/zoom world pixels
@@ -1866,6 +2018,13 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         }}
         onPointerLeave={() => { G.current.mouse = { x: -1, y: -1 }; }}
         onPointerDown={e => {
+          if (game) {
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+            // middle button (or alt + drag) pans; the left / right buttons belong to the game unless it passes
+            const used = e.button !== 1 && !e.altKey && !!game.pointerDown?.(ptrInfo(e, true));
+            if (!used) dragRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
+            return;
+          }
           if (free) {
             const ox = e.nativeEvent.offsetX, oy = e.nativeEvent.offsetY;
             const hit = cityHits.current.find(h => ox >= h.x && ox <= h.x + h.w && oy >= h.y && oy <= h.y + h.h);
@@ -1890,7 +2049,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           const w = screenToWorld(e.nativeEvent.offsetX, e.nativeEvent.offsetY);
           interact(featureUnder(w.x, w.y) ?? G.current.target);
         }}
-        onPointerUp={e => { if (dragRef.current?.id === e.pointerId) dragRef.current = null; if (joyRef.current?.id === e.pointerId) { joyRef.current = null; G.current.joy = { x: 0, y: 0 }; setJoyVis(null); } }}
+        onPointerUp={e => { if (game) game.pointerUp?.(ptrInfo(e)); if (dragRef.current?.id === e.pointerId) dragRef.current = null; if (joyRef.current?.id === e.pointerId) { joyRef.current = null; G.current.joy = { x: 0, y: 0 }; setJoyVis(null); } }}
         onPointerCancel={() => { dragRef.current = null; joyRef.current = null; G.current.joy = { x: 0, y: 0 }; setJoyVis(null); }}
         onPointerMoveCapture={e => {
           const j = joyRef.current;
@@ -1908,7 +2067,10 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-1.5">
           <button onClick={() => zoomStep(-1)} title="Aproximar (roda / +)" className="bg-black/60 border border-white/10 rounded-xl p-2 text-neutral-300 hover:text-white"><ZoomIn className="w-4 h-4" /></button>
           <div className="flex flex-col gap-1 py-1">
-            {aquatic && <div title="Visão aquática (submersa)" className={`w-2 h-2 rounded-full mx-auto ${lodLabel.sub ? 'bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.9)]' : 'bg-cyan-200/25'}`} />}
+            {aquatic && (['local', 'regional'] as Lod[]).map(l => {
+              const on = !!lodLabel.sub && (l === 'regional' ? lodLabel.lod === 'regional' || lodLabel.lod === 'world' : chunked(lodLabel.lod));
+              return <div key={`u${l}`} title={l === 'local' ? 'Gameplay aquático (submerso)' : 'Regional aquático'} className={`w-2 h-2 rounded-full mx-auto ${on ? 'bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.9)]' : 'bg-cyan-200/25'}`} />;
+            })}
             {(['local', 'far', 'regional', 'world'] as Lod[]).map(l => (
               <div key={l} title={LOD_NAME[l]} className={`w-2 h-2 rounded-full mx-auto ${lodLabel.lod === l && !lodLabel.sub ? 'bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]' : 'bg-white/25'}`} />
             ))}
@@ -1918,11 +2080,11 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       )}
       {!loading && aquatic && lodLabel.sub && (
         <div className={`absolute left-1/2 -translate-x-1/2 ${spectator ? 'bottom-[70px]' : 'bottom-[76px]'} pointer-events-none bg-[#031824]/75 border border-cyan-200/20 rounded-lg px-3 py-1.5 text-center`}>
-          <div className="text-cyan-50 font-bold text-sm tracking-wide">Visão aquática · submersa</div>
-          <div className="text-[11px] font-mono text-cyan-200/60">o fundo das águas · afaste o zoom para voltar à superfície</div>
+          <div className="text-cyan-50 font-bold text-sm tracking-wide">{chunked(lodLabel.lod) ? 'Gameplay aquático · submerso' : 'Regional aquático'}</div>
+          <div className="text-[11px] font-mono text-cyan-200/60">{chunked(lodLabel.lod) ? 'o mundo sob as águas · afaste o zoom para o regional aquático' : 'o relevo do fundo · afaste mais para voltar à superfície'}</div>
         </div>
       )}
-      {!loading && (lodLabel.lod === 'regional' || lodLabel.lod === 'world') && (
+      {!loading && !lodLabel.sub && (lodLabel.lod === 'regional' || lodLabel.lod === 'world') && (
         <div className={`absolute left-1/2 -translate-x-1/2 ${spectator ? 'bottom-[70px]' : 'bottom-[76px]'} pointer-events-none bg-black/70 border border-white/15 rounded-lg px-3 py-1.5 text-center`}>
           <div className="text-white font-bold text-sm tracking-wide">{LOD_NAME[lodLabel.lod]}</div>
           <div className="text-[11px] font-mono text-neutral-400">
@@ -1941,8 +2103,8 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           <span title="Workers de terreno em paralelo / tempo médio por chunk" className="hidden sm:inline">{perf.workers}× núcleos · {perf.chunkMs.toFixed(0)} ms/chunk</span>
         </div>
       )}
-      {/* Top-left: location */}
-      <div className="absolute top-3 left-3 pointer-events-none">
+      {/* Top-left: location (the play mode's eras have their own HUD there) */}
+      <div className={`absolute top-3 left-3 pointer-events-none ${game ? 'hidden' : ''}`}>
         <div className="bg-black/60 backdrop-blur-md border border-white/10 rounded-xl px-3 py-2 text-white min-w-[200px]">
           <div className="text-[10px] font-mono tracking-[0.2em] text-emerald-300/80 uppercase">{title}</div>
           <div className="font-bold text-sm">{hud.biome || hud.ground}</div>
@@ -1969,7 +2131,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
       </div>
 
       {/* Prompt */}
-      {prompt && !loading && (
+      {prompt && !loading && !game && (
         <div className="absolute left-1/2 -translate-x-1/2 bottom-[92px] pointer-events-none bg-black/70 border border-white/15 rounded-lg px-3 py-1.5 text-center">
           <div className="text-white font-bold text-sm">{prompt.text}</div>
           {prompt.action && <div className={`text-[11px] font-mono ${prompt.action.startsWith('Requer') ? 'text-amber-300' : 'text-emerald-300'}`}>{prompt.action}</div>}
@@ -1989,7 +2151,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
           <button onClick={() => setAvatar(null)} className="bg-sky-500/20 border border-sky-300/30 text-sky-100 rounded-lg px-2 py-1 text-xs hover:bg-sky-500/30">Voltar ao espectador (Esc)</button>
         </div>
       )}
-      {free && !loading && (
+      {free && !loading && !game && (
         <div className="absolute left-1/2 -translate-x-1/2 bottom-3 pointer-events-none bg-black/65 backdrop-blur-md border border-sky-300/25 rounded-xl px-3 py-2 text-center">
           <div className="text-sky-200 font-bold text-xs tracking-[0.25em]">MODO ESPECTADOR</div>
           <div className="text-[11px] font-mono text-neutral-300">WASD / setas ou arrastar · Shift acelera · roda: zoom (mais afastado = mais rápido)</div>
@@ -2110,6 +2272,7 @@ export function SurvivalView({ session, mapX, mapY, title, onExit, spectator: sp
         className="sm:hidden absolute right-4 bottom-24 w-16 h-16 rounded-full bg-emerald-500/80 border-2 border-white/40 text-black flex items-center justify-center shadow-2xl active:scale-95"
         onPointerDown={e => { e.stopPropagation(); interact(G.current.target); }}
       ><Hand className="w-7 h-7" /></button>}
+      {!loading && gameHud}
       {joyVis && (
         <div className="absolute pointer-events-none" style={{ left: joyVis.ox - 50, top: joyVis.oy - 50 }}>
           <div className="w-[100px] h-[100px] rounded-full border-2 border-white/30 bg-white/5" />

@@ -14,7 +14,7 @@ import { buildAtlas, atlasJobs, Atlas, LAYER } from '../../lib/cell/atlas';
 import { STANCES, GRACE, COLONY_GAP, NODE_GAP } from '../../lib/cell/sim';
 import { CellEngine, HudState } from './engine';
 
-interface Props { species: CellSpecies; onExit: () => void; onRestart: () => void }
+interface Props { species: CellSpecies; onExit: () => void; onRestart: () => void; /** the multicellular body is saved: go on to the aquatic era */ onEvolve?: () => void }
 
 const GOALS: [string, string][] = [
   ['food', 'Acumule 200 nutrientes'],
@@ -49,7 +49,7 @@ const BAR: Kind[] = [Kind.WORKER, Kind.NODE, Kind.PHOTO, Kind.SENTINEL, Kind.SCO
 const PLACE_KINDS: Kind[] = [Kind.NODE, Kind.PHOTO, Kind.SENTINEL];
 const fmt = (v: number) => (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(1));
 
-export function CellGame({ species, onExit, onRestart }: Props) {
+export function CellGame({ species, onExit, onRestart, onEvolve }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const miniRef = useRef<HTMLCanvasElement>(null);
@@ -456,9 +456,10 @@ export function CellGame({ species, onExit, onRestart }: Props) {
               </div>
             )}
             <p className="text-sm text-neutral-300 mb-4">{won
-              ? `As células de ${species.genus} ${species.species} se uniram num só corpo. A composição da sua colônia decidiu o corpo da espécie (mais fagócitas: predadora; mais fotossintéticas: tranquila). A era aquática chega em breve — sua espécie está salva para ela.`
+              ? `As células de ${species.genus} ${species.species} se uniram num só corpo. A composição da sua colônia decidiu o corpo da espécie (mais fagócitas: predadora; mais fotossintéticas: tranquila). Agora ela desce aos oceanos do mundo natal.`
               : 'A última célula-mãe da sua espécie morreu. Sem ela, o biofilme desaparece e as células morrem de fome.'}</p>
             <div className="flex gap-2 justify-center">
+              {won && onEvolve && <button onClick={onEvolve} className="px-4 py-2 rounded-xl font-bold bg-sky-300 text-black">Era aquática →</button>}
               {won && <button onClick={() => { setWonSeen(true); eng?.cmd({ t: 'pause', on: false }); }} className="px-4 py-2 rounded-xl font-bold bg-emerald-400 text-black">Continuar na poça</button>}
               {!won && <button onClick={onRestart} className="px-4 py-2 rounded-xl font-bold bg-teal-300 text-black">Tentar de novo</button>}
               <button onClick={onExit} className="px-4 py-2 rounded-xl font-bold bg-white/10 hover:bg-white/15">Menu</button>
